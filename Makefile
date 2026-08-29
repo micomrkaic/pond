@@ -30,7 +30,7 @@ BIN  := pond
 
 EMCC       ?= emcc
 EMFLAGS    ?= -std=c17 -O3 -msimd128 -sUSE_SDL=2 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 \
-              -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB -sMINIFY_HTML=0
+              -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=128MB -sMINIFY_HTML=0
 WEB_DIR    := build/web
 
 .PHONY: all web test bench clean
