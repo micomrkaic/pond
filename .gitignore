@@ -1,0 +1,12 @@
+# build products
+/pond
+/build/
+*.o
+*.dSYM/
+# screenshots and scratch
+*.bmp
+pond-*.png
+# editors and OS
+*~
+\#*\#
+.DS_Store
