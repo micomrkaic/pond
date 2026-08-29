@@ -30,7 +30,7 @@ BIN  := pond
 
 EMCC       ?= emcc
 EMFLAGS    ?= -std=c17 -O3 -msimd128 -sUSE_SDL=2 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 \
-              -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB
+              -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB -sMINIFY_HTML=0
 WEB_DIR    := build/web
 
 .PHONY: all web test bench clean
@@ -56,7 +56,9 @@ build/test_wave: tests/test_wave.c src/wave.c src/dct.c src/wave.h src/dct.h
 bench: $(BIN)
 	./$(BIN) --bench 300 --preset 3
 
-# browser build: needs emsdk on PATH; serve build/web with any static server
+# browser build: needs emsdk on PATH; serve the output directory with any static
+# server (python3 -m http.server).  For GitHub Pages: make web WEB_DIR=docs,
+# commit docs/, and point Pages at /docs.
 web: $(SRC) $(HDR) web/shell.html
 	@mkdir -p $(WEB_DIR)
 	$(EMCC) $(EMFLAGS) --shell-file web/shell.html -o $(WEB_DIR)/index.html $(SRC)

@@ -191,8 +191,8 @@ static const char *fs_surf = GLSL(
             if (u_walls == 1) c = sky(T);
             else {
                 vec3 Q = P + tw * T;
-                vec2 q = (abs(T.x) * u_L.y > abs(T.z) * u_L.x) ? vec2(Q.z, Q.y) : vec2(Q.x, Q.y);
-                q = (T.x < 0.0 && Q.x < 1e-4 * u_L.x) || (T.x > 0.0 && Q.x > u_L.x - 1e-4 * u_L.x) ? vec2(Q.z, Q.y) : vec2(Q.x, Q.y);
+                bool xwall = (T.x < 0.0 && Q.x < 1e-4 * u_L.x) || (T.x > 0.0 && Q.x > u_L.x - 1e-4 * u_L.x);
+                vec2 q = xwall ? vec2(Q.z, Q.y) : vec2(Q.x, Q.y);
                 c = pattern(q, u_tile, u_style) * 0.55;
             }
         } else {
@@ -953,7 +953,7 @@ static void draw_overlay(view3d *v)
             for (int k = 0; k < v->nhelp; k++)
                 canvas_text(c, bx + pad, by + pad + k * lh, scale, 230, 232, 236, 255, v->help[k]);
         } else {
-            const char *hint = "F1 / h: help";
+            const char *hint = "h / F1: help";
             int scale = base, lh = 10 * scale, pad = 8 * scale;
             int hw = text_width(hint, scale);
             canvas_fill(c, v->W - hw - pad - 4 * scale, v->H - lh - pad - scale, hw + 8 * scale, lh + 2 * scale, 0, 0, 0, 100);

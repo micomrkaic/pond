@@ -52,7 +52,7 @@ static const char *const help_lines[] = {
     "click / shift-click on water   drop / big drop",
     "drag on water                  finger",
     "drag elsewhere, ctrl+drag,     orbit",
-    "  right/middle drag, arrows",
+    "  right/middle drag, arrows, two fingers",
     "wheel, PgUp/PgDn               zoom",
     "o                              reset camera",
     "t         container: opaque, floor only,",
@@ -66,7 +66,7 @@ static const char *const help_lines[] = {
     "- =       time warp        x/X   damping",
     "g/G f     display gain, floor pattern",
     "c space   clear, pause     s     screenshot",
-    "F1 / h    help             q/esc quit",
+    "h / F1    help             q/esc quit",
     "",
     "w^2 = (gk + sk^3/rho) tanh(kh)   gamma = 2nuk^2 + g0",
 };
@@ -97,6 +97,7 @@ typedef struct {
     int preset;
 
     int dragging, orbiting, mx, my;
+    int touch_active; float tx, ty;   /* two-finger gesture (touch screens, browsers) */
     Uint64 prev;
     int shots, shot_pending;
     const char *snap_path;     /* --snap3d: save the last frame here */
@@ -269,8 +270,28 @@ static void handle_events(app *a)
             a->orbiting = 0;
             break;
         case SDL_MOUSEMOTION:
-            if (a->orbiting && a->v3) view3d_orbit(a->v3, 0.3f * (float)e.motion.xrel, -0.3f * (float)e.motion.yrel);
+            if (a->orbiting && a->v3 && !a->touch_active)
+                view3d_orbit(a->v3, 0.3f * (float)e.motion.xrel, -0.3f * (float)e.motion.yrel);
             a->mx = e.motion.x; a->my = e.motion.y;
+            break;
+        case SDL_MULTIGESTURE:
+            /* two fingers: drag orbits, pinch zooms; the single-finger mouse emulation is suppressed */
+            if (a->v3 && e.mgesture.numFingers >= 2) {
+                int ww, wh;
+                SDL_GetWindowSize(a->win, &ww, &wh);
+                if (a->touch_active)
+                    view3d_orbit(a->v3, 0.3f * (e.mgesture.x - a->tx) * (float)ww, -0.3f * (e.mgesture.y - a->ty) * (float)wh);
+                float z = 1.0f - 4.0f * e.mgesture.dDist;
+                if (z < 0.5f) z = 0.5f;
+                if (z > 2.0f) z = 2.0f;
+                view3d_zoom(a->v3, z);
+                a->tx = e.mgesture.x; a->ty = e.mgesture.y;
+                a->touch_active = 1;
+                a->dragging = 0;
+            }
+            break;
+        case SDL_FINGERUP:
+            a->touch_active = 0;
             break;
         case SDL_MOUSEWHEEL:
             if (a->v3) { if (e.wheel.y > 0) view3d_zoom(a->v3, 0.85f); else if (e.wheel.y < 0) view3d_zoom(a->v3, 1.0f / 0.85f); }
@@ -423,13 +444,28 @@ static int bench(app *a, int frames, const char *snap, const char *scene)
     return 0;
 }
 
-int main(int argc, char **argv)
+#ifdef __EMSCRIPTEN__
+/* The browser passes no arguments.  A no-argument main also avoids clang's
+ * __main_argc_argv rename, which Emscripten releases before ~3.1.8 (e.g. the
+ * one Debian/Ubuntu package) do not know how to export. */
+static int pond_main(int argc, char **argv);
+int main(void)
+{
+    char *argv[] = { "pond", NULL };
+    return pond_main(1, argv);
+}
+#define POND_MAIN static int pond_main
+#else
+#define POND_MAIN int main
+#endif
+
+POND_MAIN(int argc, char **argv)
 {
     int grid = 512, winsize = 900, bench_frames = 0, preset0 = 1, mode3d = 1, glass0 = 0;
     const char *snap = NULL, *scene = NULL, *snap3d = NULL, *cam = NULL;
     int a_frames = 0, a_help = 0, msaa = 1;
 #ifdef __EMSCRIPTEN__
-    grid = EM_ASM_INT({ var v = new URLSearchParams(location.search).get('grid'); return v ? (v | 0) : 0; });
+    grid = emscripten_run_script_int("(function(){var v=new URLSearchParams(location.search).get('grid');return v?(v|0):0;})()");
     if (grid <= 0) grid = 256;
     winsize = 768;
 #endif

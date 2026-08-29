@@ -32,7 +32,10 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     ./pond --bench 300 --preset 4 --scene breeze --snap sea.bmp
 
 In the browser the grid defaults to 256^2; append `?grid=512` to the URL for
-the finer mesh (single-threaded WASM, so budget accordingly).
+the finer mesh (single-threaded WASM, so budget accordingly). `make web
+WEB_DIR=docs` puts the build where GitHub Pages can serve it from `/docs`.
+Use `h` for the help there (Firefox keeps F1 for itself); on a touch
+screen, one finger is the finger, two fingers orbit and pinch-zoom.
 
 ## Controls
 
@@ -200,9 +203,16 @@ map with additive blending, which is the same forward map).
     tests/            dct and wave tests (run with `make test`)
     web/shell.html    Emscripten shell
 
-The 3-D path was exercised under Xvfb with Mesa's llvmpipe (OpenGL 4.5 core);
-the WebGL2 build follows the same GLSL with a `#version 300 es` header but has
-not been run here.
+The 3-D path was exercised under Xvfb with Mesa's llvmpipe (OpenGL 4.5 core).
+The web build compiles cleanly with Emscripten 3.1.6 (WebGL2, same GLSL with a
+`#version 300 es` header) but has not been run in a browser here.
+
+Emscripten notes: emsdk is the easy route. The Debian/Ubuntu `emscripten`
+package ships a frozen cache without the SDL2 port, so `-sUSE_SDL=2` fails
+until you copy `/usr/share/emscripten/.emscripten` somewhere writable, set
+`FROZEN_CACHE = False` and `CACHE` to a writable copy of the cache, and point
+`EM_CONFIG` at it. `-sMINIFY_HTML=0` is in the Makefile because that package's
+HTML minifier is broken with current Node.
 
 ## License
 
