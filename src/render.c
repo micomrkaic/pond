@@ -90,11 +90,12 @@ void render_frame(const wave *w, const render_params *rp, uint32_t *pix)
 
     const int nx = w->nx, ny = w->ny;
     const float *e = w->eta;
-    const float dx = (float)w->dx, gain = rp->gain;
-    const float inv2dx = gain / (2.0f * dx), invdx2 = gain / (dx * dx), inv4dx2 = gain / (4.0f * dx * dx);
+    const float dx = (float)w->dx, dy = (float)w->dy, gain = rp->gain;
+    const float inv2dx = gain / (2.0f * dx), inv2dy = gain / (2.0f * dy);
+    const float invdx2 = gain / (dx * dx), invdy2 = gain / (dy * dy), inv4dxdy = gain / (4.0f * dx * dy);
     const float H = (float)w->depth;
     const float a = H * (1.0f - 1.0f / rp->ior);          /* paraxial refraction lever arm */
-    const float tile = (float)w->Lx / 8.0f;
+    const float tile = (float)(w->Lx > w->Ly ? w->Lx : w->Ly) / 8.0f;
     const float grain = 1.5f * dx;
 
     /* absorption over the round trip to the floor: red goes first, then green */
@@ -115,7 +116,7 @@ void render_frame(const wave *w, const render_params *rp, uint32_t *pix)
     for (int j = 0; j < ny; j++) {
         const int jm = j > 0 ? j - 1 : 0, jp = j < ny - 1 ? j + 1 : ny - 1;
         const float *row = e + (size_t)j * nx, *rowm = e + (size_t)jm * nx, *rowp = e + (size_t)jp * nx;
-        const float y = ((float)j + 0.5f) * dx;
+        const float y = ((float)j + 0.5f) * dy;
         const float fy = (jp - jm) == 2 ? 1.0f : 2.0f;   /* one-sided at the wall */
         uint32_t *out = pix + (size_t)j * nx;
         for (int i = 0; i < nx; i++) {
@@ -125,10 +126,10 @@ void render_frame(const wave *w, const render_params *rp, uint32_t *pix)
 
             const float c = row[i];
             const float ex = (row[ip] - row[im]) * inv2dx * fx;
-            const float ey = (rowp[i] - rowm[i]) * inv2dx * fy;
+            const float ey = (rowp[i] - rowm[i]) * inv2dy * fy;
             const float exx = (row[ip] - 2.0f * c + row[im]) * invdx2;
-            const float eyy = (rowp[i] - 2.0f * c + rowm[i]) * invdx2;
-            const float exy = (rowp[ip] - rowp[im] - rowm[ip] + rowm[im]) * inv4dx2 * fx * fy;
+            const float eyy = (rowp[i] - 2.0f * c + rowm[i]) * invdy2;
+            const float exy = (rowp[ip] - rowp[im] - rowm[ip] + rowm[im]) * inv4dxdy * fx * fy;
 
             /* unit normal */
             const float inv = 1.0f / sqrtf(1.0f + ex * ex + ey * ey);

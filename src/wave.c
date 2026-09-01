@@ -96,7 +96,7 @@ static void ensure_rotor_pow(wave *w, int p)
     }
 }
 
-wave *wave_create(int nx, int ny, double L, double depth)
+wave *wave_create(int nx, int ny, double Lx, double Ly, double depth)
 {
     wave *w = calloc(1, sizeof *w);
     if (!w) return NULL;
@@ -128,7 +128,7 @@ wave *wave_create(int nx, int ny, double L, double depth)
         wave_destroy(w);
         return NULL;
     }
-    wave_set_pool(w, L, depth);
+    wave_set_pool(w, Lx, Ly, depth);
     return w;
 }
 
@@ -143,11 +143,11 @@ void wave_destroy(wave *w)
     free(w);
 }
 
-void wave_set_pool(wave *w, double L, double depth)
+void wave_set_pool(wave *w, double Lx, double Ly, double depth)
 {
-    w->Lx = L;
-    w->dx = L / w->nx;
-    w->Ly = w->dx * w->ny;
+    w->Lx = Lx; w->Ly = Ly;
+    w->dx = Lx / w->nx;
+    w->dy = Ly / w->ny;
     w->depth = depth;
     build_dispersion(w);
     w->bz_k0 = -1.0;      /* breeze band cache depends on the pool */
@@ -222,9 +222,9 @@ void wave_realize(wave *w)
 
 void wave_add_drop(wave *w, double x, double y, double s, double amp)
 {
-    const double reach = 5.0 * s, dx = w->dx;
+    const double reach = 5.0 * s, dx = w->dx, dy = w->dy;
     int i0 = (int)floor((x - reach) / dx), i1 = (int)ceil((x + reach) / dx);
-    int j0 = (int)floor((y - reach) / dx), j1 = (int)ceil((y + reach) / dx);
+    int j0 = (int)floor((y - reach) / dy), j1 = (int)ceil((y + reach) / dy);
     if (i0 < 0) i0 = 0;
     if (j0 < 0) j0 = 0;
     if (i1 > w->nx - 1) i1 = w->nx - 1;
@@ -232,7 +232,7 @@ void wave_add_drop(wave *w, double x, double y, double s, double amp)
     if (i0 > i1 || j0 > j1) return;
     const double inv2s2 = 1.0 / (2.0 * s * s);
     for (int j = j0; j <= j1; j++) {
-        const double yy = (j + 0.5) * dx - y;
+        const double yy = (j + 0.5) * dy - y;
         for (int i = i0; i <= i1; i++) {
             const double xx = (i + 0.5) * dx - x;
             const double q = (xx * xx + yy * yy) * inv2s2;
@@ -317,7 +317,7 @@ double wave_rms_slope(const wave *w)
     for (int j = 0; j < ny - 1; j++)
         for (int i = 0; i < nx - 1; i++) {
             const double ex = (e[i + 1 + nx * j] - e[i + nx * j]) / w->dx;
-            const double ey = (e[i + nx * (j + 1)] - e[i + nx * j]) / w->dx;
+            const double ey = (e[i + nx * (j + 1)] - e[i + nx * j]) / w->dy;
             s += ex * ex + ey * ey;
         }
     return sqrt(s / ((double)(nx - 1) * (ny - 1)));

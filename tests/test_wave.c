@@ -31,7 +31,7 @@ int main(void)
 {
     int fails = 0;
     const int nx = 64, ny = 32;
-    wave *w = wave_create(nx, ny, 1.0, 0.1);
+    wave *w = wave_create(nx, ny, 1.0, 0.5, 0.1);
     if (!w) { printf("create failed\n"); return 1; }
     wave_set_damping(w, 0.2);
 
@@ -93,7 +93,7 @@ int main(void)
     free(ref);
 
     /* --- dispersion sanity: deep-water gravity and capillary limits --- */
-    wave_set_pool(w, 10.0, 100.0);
+    wave_set_pool(w, 10.0, 5.0, 100.0);
     double kk = 2 * M_PI / 1.0;   /* 1 m wave, deep */
     double o = wave_omega(w, kk), oref = sqrt(9.81 * kk);
     ok = fabs(o - oref) / oref < 1e-3;

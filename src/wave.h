@@ -39,7 +39,7 @@
 
 typedef struct {
     int nx, ny;
-    double Lx, Ly, dx;         /* basin size [m], cell size [m] (square cells) */
+    double Lx, Ly, dx, dy;     /* basin size [m], cell size [m]; cells need not be square */
     double depth;              /* [m] */
     double g, sigma, rho, nu;  /* 9.81, 0.072, 1000, 1e-6 for water */
     double gamma0;             /* extra uniform damping [1/s] (bottom/wall boundary layers, dirt) */
@@ -67,10 +67,10 @@ typedef struct {
     uint64_t rng;
 } wave;
 
-wave *wave_create(int nx, int ny, double L, double depth);
+wave *wave_create(int nx, int ny, double Lx, double Ly, double depth);
 void  wave_destroy(wave *w);
 
-void  wave_set_pool(wave *w, double L, double depth);   /* rebuilds dispersion tables; state kept */
+void  wave_set_pool(wave *w, double Lx, double Ly, double depth);   /* rebuilds dispersion tables; state kept */
 void  wave_set_damping(wave *w, double gamma0);
 void  wave_clear(wave *w);
 

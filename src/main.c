@@ -59,7 +59,8 @@ static const char *const help_lines[] = {
     "          glass, glass+bottom, none",
     "",
     "1-4       tray 30 cm, pond 3 m, pool 12 m, sea 80 m",
-    "[ ] , .   basin size, depth (live)",
+    "[ ]  { }  width, length (5%; hold to sweep)",
+    ", .  \\    depth;  square it up (same area)",
     "r i/I     rain on/off, rate",
     "b         breeze (wind sea)",
     "p k/K     wavemaker on/off, wavelength",
@@ -108,8 +109,10 @@ static void print_help(void)
 {
     for (int k = 0; k < NHELP; k++) puts(help_lines[k]);
     puts("\n  --grid N      mode grid (power of two, default 512 native / 256 web)\n"
-         "  --window W    window size in pixels (default 900)\n"
+         "  --window WxH  window size in pixels (default 1280x800; a single number means 16:10)\n"
          "  --preset N    start with preset 1..4\n"
+         "  --basin WxL   basin width x length in metres (overrides the preset)\n"
+         "  --depth H     depth in metres\n"
          "  --2d          top-down CPU renderer instead of the 3-D view\n"
          "  --nomsaa      do not ask for a multisampled framebuffer\n"
          "  --cam Y,P,D   camera yaw, pitch (deg) and distance (in basin lengths)\n"
@@ -131,7 +134,7 @@ static void set_preset(app *a, int p)
 {
     if (p < 0 || p >= NPRESETS) return;
     a->preset = p;
-    wave_set_pool(a->w, presets[p].L, presets[p].depth);
+    wave_set_pool(a->w, presets[p].L, presets[p].L, presets[p].depth);
     a->rp.floor_style = a->p3.floor_style = presets[p].floor;
     if (a->v3) view3d_reset_camera(a->v3, a->w);
     a->hud_dirty = 1;
@@ -144,12 +147,12 @@ static void update_hud(app *a)
     snprintf(line2, sizeof line2, "warp %.2gx  gain %.2g  damp %.3g/s %s%s%s%s",
              a->warp, (double)a->p3.gain, a->w->gamma0,
              a->rain ? " rain" : "", a->breeze ? " breeze" : "", a->paddle ? " paddle" : "", a->paused ? "  PAUSED" : "");
-    snprintf(buf, sizeof buf, "%s  L=%.3g m  h=%.3g m  %s\n%s",
-             presets[a->preset].name, a->w->Lx, a->w->depth, glass_names[a->p3.glass], line2);
+    snprintf(buf, sizeof buf, "%s  %.3g x %.3g m  h=%.3g m  %s\n%s",
+             presets[a->preset].name, a->w->Lx, a->w->Ly, a->w->depth, glass_names[a->p3.glass], line2);
     if (a->v3) view3d_set_overlay(a->v3, buf, help_lines, NHELP, a->show_help);
     char title[300];
-    snprintf(title, sizeof title, "pond  |  %s  L=%.3g m  h=%.3g m  |  %s",
-             presets[a->preset].name, a->w->Lx, a->w->depth, line2);
+    snprintf(title, sizeof title, "pond  |  %s  %.3g x %.3g m  h=%.3g m  |  %s",
+             presets[a->preset].name, a->w->Lx, a->w->Ly, a->w->depth, line2);
     SDL_SetWindowTitle(a->win, title);
     a->hud_dirty = 0;
 }
@@ -173,7 +176,7 @@ static void drop_at(app *a, int mx, int my, double rel_size)
 {
     double x, y;
     if (!to_basin(a, mx, my, &x, &y)) return;
-    double s = rel_size * a->w->Lx;
+    double s = rel_size * sqrt(a->w->Lx * a->w->Ly);
     wave_add_drop(a->w, x, y, s, -0.15 * s);
 }
 
@@ -219,10 +222,20 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
     case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: set_preset(a, k - SDLK_1); break;
     case SDLK_i: a->rain_rate *= shift ? 1.5 : 1.0 / 1.5; break;
     case SDLK_k: a->paddle_div *= shift ? 1.0 / 1.25 : 1.25; break;
-    case SDLK_LEFTBRACKET:  wave_set_pool(w, w->Lx / 1.5, w->depth); pool_changed(a); break;
-    case SDLK_RIGHTBRACKET: wave_set_pool(w, w->Lx * 1.5, w->depth); pool_changed(a); break;
-    case SDLK_COMMA:  wave_set_pool(w, w->Lx, w->depth / 1.5); pool_changed(a); break;
-    case SDLK_PERIOD: wave_set_pool(w, w->Lx, w->depth * 1.5); pool_changed(a); break;
+    /* basin dimensions, 5 % per press; keys auto-repeat, so holding one sweeps smoothly.
+     * The grid stays put, so the cells stretch; the aspect ratio is kept within 4:1. */
+    case SDLK_LEFTBRACKET: case SDLK_RIGHTBRACKET: {
+        double f = (k == SDLK_RIGHTBRACKET) ? 1.05 : 1.0 / 1.05;
+        double Lx = shift ? w->Lx : w->Lx * f, Ly = shift ? w->Ly * f : w->Ly;
+        if (Lx / Ly <= 4.0 && Ly / Lx <= 4.0) { wave_set_pool(w, Lx, Ly, w->depth); pool_changed(a); }
+        break;
+    }
+    case SDLK_COMMA:  wave_set_pool(w, w->Lx, w->Ly, w->depth / 1.1); pool_changed(a); break;
+    case SDLK_PERIOD: wave_set_pool(w, w->Lx, w->Ly, w->depth * 1.1); pool_changed(a); break;
+    case SDLK_BACKSLASH: {   /* make it square again, keeping the area */
+        double L = sqrt(w->Lx * w->Ly);
+        wave_set_pool(w, L, L, w->depth); pool_changed(a); break;
+    }
     case SDLK_MINUS: case SDLK_KP_MINUS: a->warp /= 1.5; break;
     case SDLK_EQUALS: case SDLK_PLUS: case SDLK_KP_PLUS: a->warp *= 1.5; break;
     case SDLK_x: wave_set_damping(w, shift ? w->gamma0 * 2.0 : w->gamma0 / 2.0); break;
@@ -254,7 +267,7 @@ static void handle_events(app *a)
             a->mx = e.button.x; a->my = e.button.y;
             if (e.button.button == SDL_BUTTON_LEFT && !modifier && to_basin(a, e.button.x, e.button.y, &x, &y)) {
                 /* on the water: drop, or a finger if the button stays down */
-                double sz = (shift ? 0.06 : 0.03) * a->w->Lx;
+                double sz = (shift ? 0.06 : 0.03) * sqrt(a->w->Lx * a->w->Ly);
                 wave_add_drop(a->w, x, y, sz, -0.15 * sz);
                 a->dragging = !shift;
             } else if (a->mode3d) {
@@ -306,7 +319,7 @@ static void handle_events(app *a)
 static void apply_sources(app *a, double dts)
 {
     wave *w = a->w;
-    const double L = w->Lx;
+    const double L = sqrt(w->Lx * w->Ly);     /* size scale for drops, paddle, breeze */
 
     if (a->dragging) {
         double x, y;
@@ -321,7 +334,7 @@ static void apply_sources(app *a, double dts)
         int n = 0;
         while (u > p && n < 50) { u -= p; n++; p *= lam / n; }
         for (int i = 0; i < n; i++) {
-            double x = rand() / (RAND_MAX + 1.0) * L, y = rand() / (RAND_MAX + 1.0) * w->Ly;
+            double x = rand() / (RAND_MAX + 1.0) * w->Lx, y = rand() / (RAND_MAX + 1.0) * w->Ly;
             double s = 0.02 * L * (0.5 + rand() / (RAND_MAX + 1.0));
             wave_add_drop(w, x, y, s, -0.15 * s);
         }
@@ -392,9 +405,9 @@ static void frame(void *ud)
     } else {
         int ow, oh;
         SDL_GetRendererOutputSize(a->ren, &ow, &oh);
-        int side = ow < oh ? ow : oh;
-        int dw = side, dh = (int)((double)side * a->ny / a->nx);
-        if (dh > oh) { dh = oh; dw = (int)((double)oh * a->nx / a->ny); }
+        double ar = a->w->Ly / a->w->Lx;
+        int dw = ow, dh = (int)(ow * ar);
+        if (dh > oh) { dh = oh; dw = (int)(oh / ar); }
         a->dst.x = (ow - dw) / 2; a->dst.y = (oh - dh) / 2; a->dst.w = dw; a->dst.h = dh;
         render_frame(a->w, &a->rp, a->pix);
         SDL_UpdateTexture(a->tex, NULL, a->pix, a->nx * (int)sizeof(uint32_t));
@@ -461,17 +474,23 @@ int main(void)
 
 POND_MAIN(int argc, char **argv)
 {
-    int grid = 512, winsize = 900, bench_frames = 0, preset0 = 1, mode3d = 1, glass0 = 0;
-    const char *snap = NULL, *scene = NULL, *snap3d = NULL, *cam = NULL;
+    int grid = 512, winw = 1280, winh = 800, bench_frames = 0, preset0 = 1, mode3d = 1, glass0 = 0;
+    const char *snap = NULL, *scene = NULL, *snap3d = NULL, *cam = NULL, *basin = NULL;
+    double depth_arg = 0;
     int a_frames = 0, a_help = 0, msaa = 1;
 #ifdef __EMSCRIPTEN__
     grid = emscripten_run_script_int("(function(){var v=new URLSearchParams(location.search).get('grid');return v?(v|0):0;})()");
     if (grid <= 0) grid = 256;
-    winsize = 768;
+    if (grid > 512) grid = 512;      /* fixed 128 MB heap in the browser */
+    winw = 1280; winh = 800;         /* the shell's CSS keeps this 16:10 shape */
 #endif
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--grid") && i + 1 < argc) grid = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--window") && i + 1 < argc) winsize = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--window") && i + 1 < argc) {
+            const char *g = argv[++i], *x = strchr(g, 'x');
+            winw = atoi(g);
+            winh = x ? atoi(x + 1) : winw * 10 / 16;
+        }
         else if (!strcmp(argv[i], "--preset") && i + 1 < argc) preset0 = atoi(argv[++i]) - 1;
         else if (!strcmp(argv[i], "--bench") && i + 1 < argc) bench_frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--snap") && i + 1 < argc) snap = argv[++i];
@@ -479,6 +498,8 @@ POND_MAIN(int argc, char **argv)
         else if (!strcmp(argv[i], "--scene") && i + 1 < argc) scene = argv[++i];
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) a_frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--cam") && i + 1 < argc) cam = argv[++i];
+        else if (!strcmp(argv[i], "--basin") && i + 1 < argc) basin = argv[++i];
+        else if (!strcmp(argv[i], "--depth") && i + 1 < argc) depth_arg = atof(argv[++i]);
         else if (!strcmp(argv[i], "--glass") && i + 1 < argc) glass0 = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--2d")) mode3d = 0;
         else if (!strcmp(argv[i], "--overlay")) a_help = 1;
@@ -508,10 +529,15 @@ POND_MAIN(int argc, char **argv)
     { float s[3] = { 0.30f, 0.90f, -0.25f }; float n = 1.0f / sqrtf(s[0]*s[0] + s[1]*s[1] + s[2]*s[2]);
       a.p3.sun[0] = s[0] * n; a.p3.sun[1] = s[1] * n; a.p3.sun[2] = s[2] * n; }
     a.pix = malloc((size_t)grid * grid * sizeof(uint32_t));
-    a.w = wave_create(grid, grid, presets[preset0].L, presets[preset0].depth);
+    a.w = wave_create(grid, grid, presets[preset0].L, presets[preset0].L, presets[preset0].depth);
     if (!a.pix || !a.w) { fprintf(stderr, "out of memory\n"); return 1; }
     a.preset = preset0;
     a.rp.floor_style = a.p3.floor_style = presets[preset0].floor;
+    if (basin || depth_arg > 0) {
+        double Lx = a.w->Lx, Ly = a.w->Ly, h = depth_arg > 0 ? depth_arg : a.w->depth;
+        if (basin) { const char *x = strchr(basin, 'x'); Lx = atof(basin); Ly = x ? atof(x + 1) : Lx; }
+        if (Lx > 0 && Ly > 0) wave_set_pool(a.w, Lx, Ly, h);
+    }
 
     if (scene && bench_frames == 0) {
         a.rain = !!strstr(scene, "rain"); a.paddle = !!strstr(scene, "paddle"); a.breeze = !!strstr(scene, "breeze");
@@ -527,13 +553,13 @@ POND_MAIN(int argc, char **argv)
     if (SDL_Init(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
     Uint32 wflags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | (mode3d ? SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI : 0);
     if (mode3d) view3d_gl_attributes(msaa);
-    a.win = SDL_CreateWindow("pond", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, winsize, winsize, wflags);
+    a.win = SDL_CreateWindow("pond", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, winw, winh, wflags);
     if (!a.win && mode3d && msaa) {
         /* no multisampled visual on this display: try again without */
         fprintf(stderr, "no multisampled GL visual (%s); retrying without\n", SDL_GetError());
         SDL_GL_ResetAttributes();
         view3d_gl_attributes(0);
-        a.win = SDL_CreateWindow("pond", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, winsize, winsize, wflags);
+        a.win = SDL_CreateWindow("pond", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, winw, winh, wflags);
     }
     if (!a.win) { fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return 1; }
 

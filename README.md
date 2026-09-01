@@ -21,7 +21,8 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     make bench      # headless timings of the CPU path on a 512^2 grid
     make web        # needs emsdk on PATH; output in build/web/, serve it statically
 
-    ./pond                                 # 512^2 grid, 900 px window, "pond" preset
+    ./pond                                 # 512^2 grid, 1280x800 window, "pond" preset
+    ./pond --basin 25x12 --depth 1.8       # any rectangle, in metres
     ./pond --preset 3 --scene rain,breeze  # pool, with sources already on
     ./pond --glass 1 --preset 3 --scene breeze   # floor only: bright water, caustics, no walls
     ./pond --glass 3 --cam 40,-20,1.3      # start looking up through a glass bottom
@@ -32,7 +33,8 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     ./pond --bench 300 --preset 4 --scene breeze --snap sea.bmp
 
 In the browser the grid defaults to 256^2; append `?grid=512` to the URL for
-the finer mesh (single-threaded WASM, so budget accordingly). `make web
+the finer mesh (single-threaded WASM, so budget accordingly; 512 is the cap,
+the heap is fixed at 128 MB). `make web
 WEB_DIR=docs` puts the build where GitHub Pages can serve it from `/docs`.
 Use `h` for the help there (Firefox keeps F1 for itself); on a touch
 screen, one finger is the finger, two fingers orbit and pinch-zoom.
@@ -49,7 +51,8 @@ screen, one finger is the finger, two fingers orbit and pinch-zoom.
 | wheel, PgUp/PgDn, `o` | zoom, reset camera |
 | `t` | container: opaque → floor only → glass walls → glass walls + bottom → none |
 | `1` `2` `3` `4` | presets: tray 30 cm · pond 3 m · pool 12 m · sea 80 m |
-| `[` `]` / `,` `.` | basin size / depth (live: the physics changes, the field is kept) |
+| `[` `]` / `{` `}` | width / length, 5 % per press, hold to sweep (live: the physics changes, the field is kept; aspect kept within 4:1) |
+| `,` `.` / `\` | depth / make it square again at the same area |
 | `r` `i`/`I` | rain on/off, rate |
 | `b` | breeze (directional wind sea) on/off |
 | `p` `k`/`K` | plane wavemaker on/off, wavelength |
@@ -135,6 +138,10 @@ Container modes (`t`):
 
 ![floor only](doc/floor-only.png)
 ![no walls, from above and below](doc/no-walls.png)
+
+The basin can be any rectangle. The mode grid is fixed (nx = ny), so a
+non-square basin has non-square cells; the solver doesn't care (it uses the
+true wavenumber of each mode) and the renderer takes dx and dy separately.
 
 Whenever walls are not drawn, the water body's vertical faces at the wall
 planes (top edge on the surface mesh) are drawn as a translucent volume with

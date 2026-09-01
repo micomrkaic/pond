@@ -121,7 +121,7 @@ static const char *vs_surf = GLSL(
     uniform sampler2D u_height;
     uniform ivec2 u_n;
     uniform vec2 u_L;
-    uniform float u_dx;
+    uniform vec2 u_d;      /* cell size dx, dy */
     uniform float u_gain;
     uniform mat4 u_vp;
     out vec3 v_pos;
@@ -135,8 +135,8 @@ static const char *vs_surf = GLSL(
         float fx = (i == 0 || i == u_n.x - 1) ? 2.0 : 1.0;
         float fz = (j == 0 || j == u_n.y - 1) ? 2.0 : 1.0;
         float h  = H(i, j);
-        float hx = (H(i + 1, j) - H(i - 1, j)) * fx / (2.0 * u_dx);
-        float hz = (H(i, j + 1) - H(i, j - 1)) * fz / (2.0 * u_dx);
+        float hx = (H(i + 1, j) - H(i - 1, j)) * fx / (2.0 * u_d.x);
+        float hz = (H(i, j + 1) - H(i, j - 1)) * fz / (2.0 * u_d.y);
         /* cell centres stretched by half a cell so the mesh meets the wall planes exactly */
         v_pos = vec3(float(i) * u_L.x / float(u_n.x - 1), h, float(j) * u_L.y / float(u_n.y - 1));
         v_nrm = normalize(vec3(-hx, 1.0, -hz));
@@ -371,7 +371,7 @@ struct view3d {
     SDL_Window *win;
     SDL_GLContext ctx;
     int nx, ny, W, H;
-    float Lx, Ly, depth, dx;
+    float Lx, Ly, depth, dx, dy;
     float yaw, pitch, dist, cx, cz;
 
     GLuint p_bg, p_surf, p_solid, p_sides, p_glass, p_ovl;
@@ -723,7 +723,7 @@ void view3d_destroy(view3d *v)
 
 void view3d_set_pool(view3d *v, const wave *w)
 {
-    v->Lx = (float)w->Lx; v->Ly = (float)w->Ly; v->depth = (float)w->depth; v->dx = (float)w->dx;
+    v->Lx = (float)w->Lx; v->Ly = (float)w->Ly; v->depth = (float)w->depth; v->dx = (float)w->dx; v->dy = (float)w->dy;
     v->cx = 0.5f * v->Lx; v->cz = 0.5f * v->Ly;
     build_solid(v);
 }
@@ -801,7 +801,7 @@ static inline int mirror_idx(int i, int n) { return i < 0 ? -1 - i : (i >= n ? 2
 static void compute_caustics(view3d *v, const wave *w, const view3d_params *p, int edge)
 {
     const int nx = v->nx, ny = v->ny;
-    const float dx = v->dx, gain = p->gain, depth = v->depth;
+    const float dx = v->dx, dy = v->dy, gain = p->gain, depth = v->depth;
     const float *e = w->eta;
     float *acc = v->lm_acc;
     memset(acc, 0, sizeof(float) * (size_t)nx * ny);
@@ -821,13 +821,13 @@ static void compute_caustics(view3d *v, const wave *w, const view3d_params *p, i
     int px = 0, pz = 0;
     if (edge == 1) {
         px = (int)(fabsf(ox) / dx) + 3;
-        pz = (int)(fabsf(oz) / dx) + 3;
+        pz = (int)(fabsf(oz) / dy) + 3;
         if (px > nx - 1) px = nx - 1;
         if (pz > ny - 1) pz = ny - 1;
     } else if (edge == 2) {
         for (int j = 0; j < ny; j++)
             for (int i = 0; i < nx; i++) {
-                const float sx = ((float)i + 0.5f) * dx - ox, sz = ((float)j + 0.5f) * dx - oz;
+                const float sx = ((float)i + 0.5f) * dx - ox, sz = ((float)j + 0.5f) * dy - oz;
                 if (sx < 0.0f || sx > v->Lx || sz < 0.0f || sz > v->Ly) acc[i + nx * j] = 1.0f;
             }
     }
@@ -838,7 +838,7 @@ static void compute_caustics(view3d *v, const wave *w, const view3d_params *p, i
             const int im = mirror_idx(i - 1, nx), ic = mirror_idx(i, nx), ip = mirror_idx(i + 1, nx);
             const float h  = e[ic + nx * jc] * gain;
             const float hx = (e[ip + nx * jc] - e[im + nx * jc]) * gain / (2.0f * dx);
-            const float hz = (e[ic + nx * jp] - e[ic + nx * jm]) * gain / (2.0f * dx);
+            const float hz = (e[ic + nx * jp] - e[ic + nx * jm]) * gain / (2.0f * dy);
             float N[3] = { -hx, 1.0f, -hz };
             v3norm(N);
             /* refract */
@@ -850,9 +850,9 @@ static void compute_caustics(view3d *v, const wave *w, const view3d_params *p, i
             if (T[1] >= -1e-4f) continue;
             const float s = (-depth - h) / T[1];
             const float qx = ((float)i + 0.5f) * dx + s * T[0];
-            const float qz = ((float)j + 0.5f) * dx + s * T[2];
+            const float qz = ((float)j + 0.5f) * dy + s * T[2];
             /* bilinear splat into cell space */
-            const float gx = qx / dx - 0.5f, gz = qz / dx - 0.5f;
+            const float gx = qx / dx - 0.5f, gz = qz / dy - 0.5f;
             const int ix = (int)floorf(gx), iz = (int)floorf(gz);
             const float ax = gx - (float)ix, az = gz - (float)iz;
             const float wgt[4] = { (1 - ax) * (1 - az), ax * (1 - az), (1 - ax) * az, ax * az };
@@ -986,7 +986,7 @@ static void set_common(view3d *v, GLuint p, const view3d_params *prm, const floa
     if ((l = U(p, "u_cam")) >= 0) glUniform3f(l, v->cam[0], v->cam[1], v->cam[2]);
     if ((l = U(p, "u_L")) >= 0) glUniform2f(l, v->Lx, v->Ly);
     if ((l = U(p, "u_depth")) >= 0) glUniform1f(l, v->depth);
-    if ((l = U(p, "u_dx")) >= 0) glUniform1f(l, v->dx);
+    if ((l = U(p, "u_d")) >= 0) glUniform2f(l, v->dx, v->dy);
     if ((l = U(p, "u_gain")) >= 0) glUniform1f(l, prm->gain);
     if ((l = U(p, "u_n")) >= 0) glUniform2i(l, v->nx, v->ny);
     if ((l = U(p, "u_tile")) >= 0) glUniform1f(l, (v->Lx > v->Ly ? v->Lx : v->Ly) / 8.0f);

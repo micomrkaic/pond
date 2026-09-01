@@ -29,6 +29,9 @@ HDR  := src/wave.h src/dct.h src/render.h src/view3d.h src/text.h src/gl.h src/f
 BIN  := pond
 
 EMCC       ?= emcc
+# Fixed heap, no growth: growable memory gives the runtime a resizable
+# ArrayBuffer, which current Chrome refuses in TextDecoder (and elsewhere).
+# 128 MB is enough for a 512^2 grid; the browser build clamps the grid there.
 EMFLAGS    ?= -std=c17 -O3 -msimd128 -sUSE_SDL=2 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 \
               -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=128MB -sMINIFY_HTML=0
 WEB_DIR    := build/web
