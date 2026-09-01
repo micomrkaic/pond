@@ -12,7 +12,8 @@
 <style>
   html, body { margin: 0; height: 100%; background: #08080a; overflow: hidden; }
   body { display: flex; align-items: center; justify-content: center; }
-  canvas { display: block; max-width: 100vmin; max-height: 100vmin; width: 100vmin; height: 100vmin; outline: none; }
+  /* 16:10, as large as the viewport allows */
+  canvas { display: block; width: min(100vw, 160vh); height: min(62.5vw, 100vh); outline: none; }
   #status { position: fixed; left: 12px; bottom: 10px; color: #667; font: 12px/1.4 monospace; pointer-events: none; }
 </style>
 </head>
