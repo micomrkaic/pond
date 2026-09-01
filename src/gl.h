@@ -90,6 +90,8 @@ typedef void          GLvoid;
 #define GL_RGBA8 0x8058
 #define GL_CLAMP_TO_EDGE 0x812F
 #define GL_MULTISAMPLE 0x809D
+#define GL_POINTS 0x0000
+#define GL_PROGRAM_POINT_SIZE 0x8642
 #define GL_TEXTURE0 0x84C0
 #define GL_TEXTURE1 0x84C1
 #define GL_ARRAY_BUFFER 0x8892
@@ -102,7 +104,12 @@ typedef void          GLvoid;
 #define GL_LINK_STATUS 0x8B82
 #define GL_INFO_LOG_LENGTH 0x8B84
 #define GL_R8 0x8229
+#define GL_R16F 0x822D
 #define GL_R32F 0x822E
+#define GL_HALF_FLOAT 0x140B
+#define GL_FRAMEBUFFER 0x8D40
+#define GL_COLOR_ATTACHMENT0 0x8CE0
+#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
 
 #define GL_FUNCTIONS(X) \
     X(void,          glClear,                   (GLbitfield)) \
@@ -158,7 +165,12 @@ typedef void          GLvoid;
     X(void,          glActiveTexture,           (GLenum)) \
     X(void,          glTexImage2D,              (GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*)) \
     X(void,          glTexSubImage2D,           (GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void*)) \
-    X(void,          glTexParameteri,           (GLenum, GLenum, GLint))
+    X(void,          glTexParameteri,           (GLenum, GLenum, GLint)) \
+    X(void,          glGenFramebuffers,         (GLsizei, GLuint*)) \
+    X(void,          glDeleteFramebuffers,      (GLsizei, const GLuint*)) \
+    X(void,          glBindFramebuffer,         (GLenum, GLuint)) \
+    X(void,          glFramebufferTexture2D,    (GLenum, GLenum, GLenum, GLuint, GLint)) \
+    X(GLenum,        glCheckFramebufferStatus,  (GLenum))
 
 #define GL_DECL(ret, name, args) extern ret (*name) args;
 GL_FUNCTIONS(GL_DECL)

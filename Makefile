@@ -24,8 +24,8 @@ LDLIBS  ?= -lm
 SDL_CFLAGS := $(shell sdl2-config --cflags 2>/dev/null)
 SDL_LIBS   := $(shell sdl2-config --libs 2>/dev/null)
 
-SRC  := src/main.c src/wave.c src/disk.c src/dct.c src/render.c src/view3d.c src/text.c
-HDR  := src/wave.h src/dct.h src/render.h src/view3d.h src/text.h src/gl.h src/font8x8.h
+SRC  := src/main.c src/wave.c src/disk.c src/hos.c src/dct.c src/render.c src/view3d.c src/text.c
+HDR  := src/wave.h src/dct.h src/hos.h src/render.h src/view3d.h src/text.h src/gl.h src/font8x8.h
 BIN  := pond
 
 EMCC       ?= emcc
@@ -43,10 +43,15 @@ all: $(BIN)
 $(BIN): $(SRC) $(HDR)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -o $@ $(SRC) $(SDL_LIBS) $(LDLIBS)
 
-test: build/test_dct build/test_wave build/test_disk
+test: build/test_dct build/test_wave build/test_disk build/test_hos
 	./build/test_dct
 	./build/test_wave
 	./build/test_disk
+	./build/test_hos
+
+build/test_hos: tests/test_hos.c src/hos.c src/wave.c src/disk.c src/dct.c src/hos.h src/wave.h src/dct.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ tests/test_hos.c src/hos.c src/wave.c src/disk.c src/dct.c $(LDLIBS)
 
 build/test_disk: tests/test_disk.c src/wave.c src/disk.c src/dct.c src/wave.h src/dct.h
 	@mkdir -p build

@@ -24,6 +24,8 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     ./pond                                 # 512^2 grid, 1280x800 window, "pond" preset
     ./pond --basin 25x12 --depth 1.8       # any rectangle, in metres
     ./pond --shape disk --basin 10         # a round basin, 10 m across
+    ./pond --hos --preset 3 --scene paddle # nonlinear, order 3 on the lowest 64x64 modes
+    ./pond --cpu-caustics                  # if the GPU pass is unavailable or suspect
     ./pond --preset 3 --scene rain,breeze  # pool, with sources already on
     ./pond --glass 1 --preset 3 --scene breeze   # floor only: bright water, caustics, no walls
     ./pond --glass 3 --cam 40,-20,1.3      # start looking up through a glass bottom
@@ -52,6 +54,7 @@ screen, one finger is the finger, two fingers orbit and pinch-zoom.
 | wheel, PgUp/PgDn, `o` | zoom, reset camera |
 | `t` | container: opaque → floor only → glass walls → glass walls + bottom → none |
 | `n` | basin shape: rectangle ↔ disk (the field starts over) |
+| `y` | nonlinear (HOS) correction on/off (rectangle only) |
 | `1` `2` `3` `4` | presets: tray 30 cm · pond 3 m · pool 12 m · sea 80 m |
 | `[` `]` / `{` `}` | width / length (disk: diameter), 5 % per press, hold to sweep (live: the physics changes, the field is kept; aspect kept within 4:1) |
 | `,` `.` / `\` | depth / make it square again at the same area |
@@ -226,11 +229,75 @@ Beer–Lambert, $e^{-\mu s}$ per channel.
 
 ### Validity
 
-The model is linear: it is exact for the linearised problem and an
-approximation to real water for steepness $ka \ll 1$. The default drops have
-slopes up to ~0.15, which is already where Stokes corrections would be a few
-percent; the display gain multiplies slopes for the eye only, not in the
-physics. What nonlinearity would add is discussed under "Where it could go".
+The linear model is exact for the linearised problem and an approximation
+to real water for steepness $ka \ll 1$. The default drops have slopes up to
+~0.15, where Stokes corrections are a few percent; the display gain
+multiplies slopes for the eye only, not in the physics. The nonlinear
+correction below (`y`) takes the model to third order in steepness.
+
+### Nonlinearity (`src/hos.c`, optional)
+
+Keep potential flow, drop the linearisation. In Zakharov's variables — the
+elevation $\eta$ and the surface potential $\psi(\mathbf x) = \phi(\mathbf x, \eta)$ —
+the exact free-surface equations are
+
+$$
+\eta_t = W\,(1+|\nabla\eta|^2) - \nabla\psi\cdot\nabla\eta,
+\qquad
+\psi_t = -g\eta - \tfrac12|\nabla\psi|^2 + \tfrac12 W^2 (1+|\nabla\eta|^2) + \tfrac{\sigma}{\rho}\,\kappa(\eta),
+$$
+
+where $W = \phi_z$ at the surface. The High-Order Spectral method (West et
+al. 1987, Dommermuth & Yue 1987) gets $W$ from $\psi$ by expanding the
+Dirichlet-to-Neumann map in powers of $\eta$:
+
+$$
+\phi^{(1)} = \psi,\qquad
+\phi^{(m)} = -\sum_{j=1}^{m-1}\frac{\eta^j}{j!}\,\partial_z^j\phi^{(m-j)},\qquad
+W = \sum_{m=1}^{M}\sum_{j=0}^{M-m}\frac{\eta^j}{j!}\,\partial_z^{j+1}\phi^{(m)},
+$$
+
+all evaluated at $z=0$, where for a mode with vertical profile
+$\cosh k(z+h)/\cosh kh$ the derivative $\partial_z^j$ is $k^j\tanh kh$ for odd
+$j$ and $k^j$ for even $j$ — diagonal in mode space. Products are formed in
+real space, derivatives in mode space; that is the pseudo-spectral part.
+
+The program uses it as a correction: the linear parts of both equations are
+exactly what the rotor integrates, so each frame does half its linear
+sub-steps, then a Heun step of the *remainder*
+
+$$
+N_\eta = W(1+|\nabla\eta|^2) - \nabla\psi\cdot\nabla\eta - \partial_z\phi^{(1)},\qquad
+N_\psi = -\tfrac12|\nabla\psi|^2 + \tfrac12 W^2(1+|\nabla\eta|^2),
+$$
+
+then the other half (Strang splitting). Only the lowest $n_c\times n_c$ modes
+take part — the long, energetic waves, where nonlinearity shows — and the
+products are formed on a $2n_c\times 2n_c$ grid, which dealiases the quadratic
+terms exactly; a smooth cutoff over the top quarter of the band takes the
+rest. The state conversion is diagonal: $\hat\psi = \hat B\,\omega/(k\tanh kh)$.
+Gradients of a cosine series are sine series, and on this grid
+$\sin\frac{\pi m(2i+1)}{2N} = (-1)^i\cos\frac{\pi(N-m)(2i+1)}{2N}$, so a
+derivative is a DCT-III of the reversed, $k$-weighted coefficients with an
+alternating sign — no separate DST. A rigid wall is a mirror symmetry of the
+full equations, so the even-extended field the cosine basis represents stays
+consistent under the products; the test checks that symmetry survives.
+
+What it changes: crests sharpen and troughs flatten (the surface skewness
+goes from 0 to about +0.1 in a driven pool), the frequency depends on
+amplitude, driven standing waves detune from the wavemaker as they grow,
+and the modes interact — energy moves across the spectrum, groups form. It
+cannot break: past steepness 0.45 the step is skipped (the HUD says so).
+The capillary term stays linear, and the disk stays linear — its radial
+derivatives are not diagonal in that basis. Cost at $n_c = 64$: about 30
+transforms of $128^2$ per frame, a few milliseconds; $n_c = 128$ is four
+times that (`--hos-nc`, `--hos-order`).
+
+Checks in `tests/test_hos.c`: the correction scales as amplitude squared
+(ratio 4.00 for a doubling), a standing wave of steepness 0.1 grows a bound
+second harmonic of Stokes size and keeps its energy to $4\times10^{-4}$ over
+30 periods, a random sea keeps its energy to $10^{-3}$ over 10 s, and the
+wall symmetry is exact.
 
 ### The disk (`src/disk.c`)
 
@@ -311,11 +378,21 @@ float filtering (WebGL2-safe). Per fragment:
   you get total internal reflection of the floor, and Snell's window inside
   it.
 
-Caustics are computed on the CPU every frame by refracting the sun through
-each surface cell and splatting where the ray lands on the floor (bilinear,
-then a 3×3 binomial blur). That is the forward ray map, so folds and the
-wall's shadow on the floor come out on their own; the light map is an R8
-texture the floor and the surface shader both read.
+Caustics are the forward ray map, done by the GPU: the surface mesh is drawn
+into a half-float light-map framebuffer by a vertex shader that refracts the
+sun at each vertex and emits the landing point on the floor as the position;
+each triangle then covers the floor it lights, the fragment shader writes
+$|\partial\mathbf p/\partial\mathbf q|$ from `dFdx`/`dFdy` of the original
+surface coordinates, and additive blending sums the sheets, so folds come out
+exactly. On the disk, where every polar cell is smaller than a texel, each
+cell is splatted as a point carrying its own area instead. A padded mesh
+that reaches past the walls with the mirrored field provides the no-wall
+mode; a fill pass handles light through glass. One 3×3 blur pass follows.
+Needs a framebuffer object, an R16F colour attachment and screen-space
+derivatives — core in OpenGL 3.0 and WebGL2 with `EXT_color_buffer_float`;
+if the framebuffer is not complete, or with `--cpu-caustics`, the CPU splat
+(bilinear, then the same blur, into an R8 texture) takes over. Either way
+the floor and the surface shader read the same light map.
 
 Container modes (`t`):
 
@@ -376,11 +453,11 @@ preset is deep enough that only the surface shading survives.
 
 ## Budget
 
-On a 512^2 grid the CPU does, per frame: one inverse DCT (~25 Mflop), one
-pass over 262k modes, and the caustic splat (262k refractions). That is
-~15 ms on a slow Xeon and well under 10 on a recent laptop; the GPU side
-(262k-vertex mesh, a few full-screen passes) is trivial for anything with a
-real GPU. WASM is single-threaded here on purpose (pthreads need COOP/COEP
+On a 512^2 grid the CPU does, per frame: one inverse DCT (~25 Mflop) and one
+pass over 262k modes, ~7 ms on a slow Xeon and a few on a recent laptop; the
+disk costs about the same. The GPU does the caustic map, the surface mesh
+and a few full-screen passes — trivial for anything with a real GPU. HOS
+adds a few milliseconds at $n_c = 64$. WASM is single-threaded here on purpose (pthreads need COOP/COEP
 headers, which static hosts rarely serve), so 256^2 is the sensible browser
 default.
 
@@ -390,67 +467,29 @@ map with additive blending, which is the same forward map).
 
 ## Where it could go
 
-**Nonlinearity (HOS).** Keep the potential-flow problem but not the
-linearisation. In Zakharov's form the state is $\eta(\mathbf x)$ and the
-surface potential $\psi(\mathbf x) = \phi(\mathbf x, \eta)$, and the exact
-free-surface equations are
-
-$$
-\eta_t = (1+|\nabla\eta|^2)\,\phi_z - \nabla\psi\cdot\nabla\eta,
-\qquad
-\psi_t = -g\eta - \tfrac12|\nabla\psi|^2 + \tfrac12(1+|\nabla\eta|^2)\phi_z^2 + \tfrac{\sigma}{\rho}\kappa(\eta),
-$$
-
-where $\phi_z$ at the surface is the Dirichlet-to-Neumann operator applied to
-$\psi$. The High-Order Spectral method (West et al. 1987, Dommermuth & Yue
-1987) expands that operator in powers of $\eta$ to order $M$ and evaluates
-each term pseudo-spectrally — products in real space, derivatives in mode
-space — so a step costs $O(M^2)$ transforms and needs a real time integrator
-(RK4, with the linear part handled by the same exact rotor as now as an
-integrating factor). $M = 1$ is exactly this program. What $M = 3$ adds:
-Stokes' crests — sharper peaks, flatter troughs, the bound harmonics that
-ride on a wave; an amplitude-dependent frequency, $\omega \approx \omega_0(1+\tfrac12 k^2a^2)$
-in deep water; and genuine wave–wave interaction — resonant quartets that
-move energy across the spectrum, the Benjamin–Feir instability that turns a
-regular wave train into groups, and the focusing that makes freak waves. A
-wind sea stops being a frozen superposition and evolves. It cannot break: as
-steepness approaches ~0.3 the expansion diverges and one has to filter or
-dissipate. The walls survive the change of model because a rigid wall is a
-mirror symmetry of the full equations too, so the even-extended field the
-DCT represents stays consistent under the nonlinear products. The cost is the
-transforms: on the CPU a 512² step is tens of milliseconds, so HOS at 60 fps
-means the FFTs move to the GPU, which is the larger project.
-
-**Caustics on the GPU.** The forward map is exactly what rasterisation does.
-Render the surface mesh into the light-map framebuffer with a vertex shader
-that refracts the sun at each vertex and outputs the landing point on the
-floor as the vertex position; each triangle then covers the floor area it
-illuminates, and a fragment shader writes its irradiance,
-$|\det\,\partial\mathbf p/\partial\mathbf q|$, which is `dFdx`/`dFdy` of the
-original surface coordinates. Additive blending sums the sheets, so folds and
-overlaps come out right by construction — better than the CPU splat, which
-is single-sheet with a clamp. Requirements: a framebuffer object, a float or
-half-float colour attachment, additive blending and screen-space derivatives,
-all core in OpenGL 3.0/3.3 and in WebGL2 (with `EXT_color_buffer_float`,
-which every current browser exposes). Any GPU that runs the program at all,
-including a 2011-era Intel HD under Mesa, has these. The light map never
-comes back to the CPU, and the whole caustic pass — ~5 ms of CPU per frame
-now — disappears. The transforms themselves could follow the same road later.
-
-**Arbitrary basin shapes**, ellipses included, mean numerically computed
-Neumann eigenmodes and a dense transform; see the discussion of the disk
-above for why the circle is special.
+- Moving the transforms themselves to the GPU (the DCT as ping-pong FFT
+  passes) would free the CPU almost entirely and make HOS at $n_c = 256$
+  affordable.
+- HOS on the disk needs radial derivatives of the eigenbasis, which are not
+  diagonal there; a finite-difference gradient on the polar grid would do.
+- Breaking cannot come from HOS; a dissipation model that mimics it
+  (locally increasing damping where steepness exceeds ~0.3) is the usual
+  stand-in.
+- **Arbitrary basin shapes**, ellipses included, mean numerically computed
+  Neumann eigenmodes and a dense transform; see the discussion of the disk
+  for why the circle is special.
 
 ## Layout
 
     src/dct.[ch]      radix-2 FFT, DCT-II/III, 2-D row–column
     src/wave.[ch]     dispersion tables, rotor propagation, sources
-    src/view3d.[ch]   GL scene: shaders, meshes, caustics, camera, overlay
+    src/hos.[ch]      nonlinear (HOS) correction on the coarse modes
+    src/view3d.[ch]   GL scene: shaders, meshes, caustic pass, camera, overlay
     src/gl.h          the GL 3.3 / GLES 3.0 subset used, loaded via SDL
     src/text.[ch]     8x8 bitmap text into an RGBA canvas (src/font8x8.h)
     src/render.[ch]   top-down CPU shading (--2d)
     src/main.c        SDL2 window, input, timing, bench, Emscripten loop
-    tests/            dct and wave tests (run with `make test`)
+    tests/            dct, wave, disk and hos tests (run with `make test`)
     web/shell.html    Emscripten shell
 
 The 3-D path was exercised under Xvfb with Mesa's llvmpipe (OpenGL 4.5 core).

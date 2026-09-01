@@ -193,6 +193,7 @@ static const char *fs_surf = GLSL(
     uniform int u_shape;      /* 0 box, 1 cylinder */
     uniform vec3 u_mu;
     uniform sampler2D u_light;
+    uniform float u_lscale;
     out vec4 o;
 
     bool in_basin(vec2 q) {
@@ -230,7 +231,7 @@ static const char *fs_surf = GLSL(
                 vec3 Q = P + tv * T;
                 vec3 col = pattern(Q.xz, u_tile, u_style);
                 if (in_basin(Q.xz)) {
-                    float lm = texture(u_light, Q.xz / u_L).r * 4.0;
+                    float lm = texture(u_light, Q.xz / u_L).r * u_lscale;
                     c = col * (0.30 + 0.70 * lm);
                 } else {
                     c = col * (0.35 + 0.65 * max(u_sun.y, 0.0));
@@ -254,7 +255,7 @@ static const char *fs_surf = GLSL(
             if (T.y >= 0.0 || u_floor == 1) c = sky(T);
             else {
                 vec3 Q = P + tv * T;
-                float lm = texture(u_light, Q.xz / u_L).r * 4.0;
+                float lm = texture(u_light, Q.xz / u_L).r * u_lscale;
                 c = pattern(Q.xz, u_tile, u_style) * (0.30 + 0.70 * lm);
             }
         }
@@ -286,6 +287,117 @@ static const char *fs_surf = GLSL(
     }
 );
 
+/* --- caustic pass: the surface mesh rasterised onto the floor after refracting the sun.
+ * Vertices sit at the true cell centres; a padded mesh reaches past the walls with the
+ * even (mirror) extension of the height field, for the no-wall mode. --- */
+static const char *vs_caus = GLSL(
+    in vec2 a_uv;
+    uniform sampler2D u_height;
+    uniform ivec2 u_n;
+    uniform vec2 u_L;
+    uniform vec2 u_d;
+    uniform float u_gain;
+    uniform float u_depth;
+    uniform int u_shape;
+    uniform vec3 u_incident;      /* unit sunlight direction, downwards */
+    uniform vec2 u_lcell;         /* light-map texel size in metres */
+    out vec2 v_src;
+    out float v_w;                /* disk: cell area / texel area, for point splats */
+    int mir(int i, int n) { return i < 0 ? -1 - i : (i >= n ? 2 * n - 1 - i : i); }
+    float Hr(int i, int j) { return texelFetch(u_height, ivec2(mir(i, u_n.x), mir(j, u_n.y)), 0).r * u_gain; }
+    float Hd(int j, int i) {
+        j = (j + u_n.x) % u_n.x;
+        if (i < 0) { i = -1 - i; j = (j + u_n.x / 2) % u_n.x; }     /* through the centre */
+        i = mir(i, u_n.y);
+        return texelFetch(u_height, ivec2(j, i), 0).r * u_gain;
+    }
+    void main() {
+        vec3 P, N;
+        v_w = 1.0;
+        if (u_shape == 0) {
+            int i = int(a_uv.x), j = int(a_uv.y);
+            float h  = Hr(i, j);
+            float hx = (Hr(i + 1, j) - Hr(i - 1, j)) / (2.0 * u_d.x);
+            float hz = (Hr(i, j + 1) - Hr(i, j - 1)) / (2.0 * u_d.y);
+            P = vec3((float(i) + 0.5) * u_d.x, h, (float(j) + 0.5) * u_d.y);
+            N = normalize(vec3(-hx, 1.0, -hz));
+        } else {
+            int j = int(a_uv.x), i = int(a_uv.y);
+            int nt = u_n.x, nr = u_n.y;
+            float R = 0.5 * u_L.x, dr = R / float(nr), dth = 6.28318530718 / float(nt);
+            float rs = (float(i) + 0.5) * dr, th = dth * float(j), ct = cos(th), st = sin(th);
+            float h  = Hd(j, i);
+            float hr = (Hd(j, i + 1) - Hd(j, i - 1)) / (2.0 * dr);
+            float ht = (Hd(j + 1, i) - Hd(j - 1, i)) / (2.0 * dth * rs);
+            P = vec3(R + rs * ct, h, R + rs * st);
+            N = normalize(vec3(-(hr * ct - ht * st), 1.0, -(hr * st + ht * ct)));
+            v_w = rs * dr * dth / (u_lcell.x * u_lcell.y);
+        }
+        vec3 T = refract(u_incident, N, 1.0 / 1.333);
+        vec2 q = vec2(-1.0e4);
+        if (dot(T, T) > 1.0e-6 && T.y < -1.0e-4) q = P.xz + T.xz * (-(u_depth + P.y) / T.y);
+        v_src = P.xz;
+        gl_PointSize = 1.0;
+        gl_Position = vec4(2.0 * q / u_L - 1.0, 0.0, 1.0);
+    }
+);
+static const char *fs_caus = GLSL(
+    in vec2 v_src;
+    in float v_w;
+    uniform vec2 u_lcell;         /* light-map texel size in metres */
+    uniform int u_points;         /* 1: each cell is a point carrying its own area */
+    out vec4 o;
+    void main() {
+        if (u_points == 1) { o = vec4(v_w, 0.0, 0.0, 1.0); return; }
+        /* irradiance relative to flat water = |d(source)/d(floor)|, summed over sheets by blending */
+        vec2 dx = dFdx(v_src), dy = dFdy(v_src);
+        float det = abs(dx.x * dy.y - dx.y * dy.x) / (u_lcell.x * u_lcell.y);
+        o = vec4(min(det, 4.0), 0.0, 0.0, 1.0);
+    }
+);
+/* light through glass walls: the strip a wall would shadow is lit flat */
+static const char *fs_fill = GLSL(
+    in vec2 v_uv;
+    uniform vec2 u_L;
+    uniform vec2 u_offset;        /* floor point = surface point + offset, flat water */
+    uniform int u_shape;
+    out vec4 o;
+    void main() {
+        vec2 q = v_uv * u_L;      /* v_uv: 0..1 over the light map, y up here */
+        vec2 sp = q - u_offset;
+        bool inb;
+        if (u_shape == 1) inb = length(sp - 0.5 * u_L) <= 0.5 * u_L.x;
+        else inb = sp.x >= 0.0 && sp.x <= u_L.x && sp.y >= 0.0 && sp.y <= u_L.y;
+        o = vec4(inb ? 0.0 : 1.0, 0.0, 0.0, 1.0);
+    }
+);
+/* 3x3 binomial blur of the light map (same softening the CPU splat applies) */
+static const char *fs_blur = GLSL(
+    in vec2 v_uv;
+    uniform sampler2D u_tex;
+    out vec4 o;
+    void main() {
+        ivec2 c = ivec2(gl_FragCoord.xy);
+        ivec2 n = textureSize(u_tex, 0);
+        float s = 0.0;
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++) {
+                ivec2 q = clamp(c + ivec2(dx, dy), ivec2(0), n - 1);
+                float w = float((2 - abs(dx)) * (2 - abs(dy)));
+                s += w * texelFetch(u_tex, q, 0).r;
+            }
+        o = vec4(s / 16.0, 0.0, 0.0, 1.0);
+    }
+);
+static const char *vs_fill = GLSL(
+    out vec2 v_uv;
+    void main() {
+        vec2 p = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0);
+        v_uv = p * 0.5 + 0.5;
+        gl_Position = vec4(p, 0.0, 1.0);
+    }
+);
+
 /* --- solid floor slab and walls --- */
 static const char *vs_solid = GLSL(
     in vec3 a_pos;
@@ -312,6 +424,7 @@ static const char *fs_solid = GLSL(
     uniform vec3 u_mu;
     uniform int u_shape;
     uniform sampler2D u_light;
+    uniform float u_lscale;
     out vec4 o;
     void main() {
         vec3 N = normalize(v_nrm);
@@ -319,7 +432,7 @@ static const char *fs_solid = GLSL(
         if (v_kind < 0.5) {
             /* interior floor: lit by the caustic map, seen through water along the
              * path from here towards the camera until it leaves the basin box */
-            float lm = texture(u_light, v_pos.xz / u_L).r * 4.0;
+            float lm = texture(u_light, v_pos.xz / u_L).r * u_lscale;
             c = pattern(v_pos.xz, u_tile, u_style) * (0.30 + 0.70 * lm);
             vec3 D = u_cam - v_pos;
             float dist = length(D); D /= dist;
@@ -441,7 +554,10 @@ struct view3d {
     int slab_off, slab_n, walls_off, walls_n, table_off, table_n, inner_off, inner_n;
     float yaw, pitch, dist, cx, cz;
 
-    GLuint p_bg, p_surf, p_solid, p_sides, p_glass, p_ovl;
+    GLuint p_bg, p_surf, p_solid, p_sides, p_glass, p_ovl, p_caus, p_fill;
+    GLuint vao_caus, vbo_caus, ebo_caus; int n_caus_int, n_caus_all;   /* padded caustic mesh */
+    int n_caus_pts_int, n_caus_pts_all;
+    GLuint fbo_lm, tex_lm2, fbo_lm2, p_blur; int gpu_caustics;
     GLuint vao_empty;
     GLuint vao_surf, vbo_surf, ebo_surf; int n_surf_idx;
     GLuint vao_solid, vbo_solid;                  /* slab 36 verts, then 4 walls x 36 */
@@ -724,6 +840,47 @@ static void build_surface(view3d *v)
     free(verts); free(idx);
 }
 
+/* Padded mesh for the caustic pass: cell centres, extended past the walls by `pad`
+ * cells (mirrored fetch in the shader).  Interior quads come first in the index
+ * buffer so the no-pad case is a shorter draw. */
+static void build_caustic_mesh(view3d *v)
+{
+    const int nx = v->nx, ny = v->ny;
+    const int disk = (v->shape != 0);
+    int px = disk ? 0 : nx / 6, py = ny / 6;
+    const int W = nx + 2 * px, Hh = disk ? ny + py : ny + 2 * py;   /* disk: pad outward only */
+    const int j0 = disk ? 0 : -py;
+    float *verts = malloc(sizeof(float) * 2 * (size_t)W * Hh);
+    for (int j = 0; j < Hh; j++)
+        for (int i = 0; i < W; i++) { verts[2 * (i + W * j)] = (float)(i - px); verts[2 * (i + W * j) + 1] = (float)(j + j0); }
+    v->n_caus_pts_int = nx * ny; v->n_caus_pts_all = W * Hh;
+    GLuint *idx = malloc(sizeof(GLuint) * 6 * (size_t)W * Hh);
+    int n = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        for (int j = 0; j < Hh - 1; j++)
+            for (int i = 0; i < (v->shape == 0 ? W - 1 : W); i++) {
+                int ii = i - px, jj = j + j0;
+                int interior = (v->shape == 0) ? (ii >= 0 && ii < nx - 1 && jj >= 0 && jj < ny - 1) : (jj < ny - 1);
+                if ((pass == 0) != interior) continue;
+                int i1 = (v->shape == 0) ? i + 1 : (i + 1) % W;
+                GLuint a = (GLuint)(i + W * j), b = (GLuint)(i1 + W * j), c = (GLuint)(i + W * (j + 1)), d = (GLuint)(i1 + W * (j + 1));
+                idx[n++] = a; idx[n++] = c; idx[n++] = b;
+                idx[n++] = b; idx[n++] = c; idx[n++] = d;
+            }
+        if (pass == 0) v->n_caus_int = n;
+    }
+    v->n_caus_all = n;
+    glBindVertexArray(v->vao_caus);
+    glBindBuffer(GL_ARRAY_BUFFER, v->vbo_caus);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(float) * 2 * W * Hh), verts, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, (void *)0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, v->ebo_caus);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)(sizeof(GLuint) * n), idx, GL_STATIC_DRAW);
+    glBindVertexArray(0);
+    free(verts); free(idx);
+}
+
 static void build_sides(view3d *v)
 {
     /* vertex = uv(2) frac(2) bottom(1) nrm(3).  Rectangle: four strips, one column per
@@ -838,7 +995,7 @@ void view3d_gl_attributes(int msaa)
     }
 }
 
-view3d *view3d_create(SDL_Window *win, const wave *w)
+view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
 {
     view3d *v = calloc(1, sizeof *v);
     if (!v) return NULL;
@@ -866,12 +1023,16 @@ view3d *view3d_create(SDL_Window *win, const wave *w)
     v->p_sides = program(vs_sides, fs_sides, 1);
     v->p_glass = program(vs_solid, fs_glass, 0);
     v->p_ovl   = program(vs_ovl, fs_ovl, 0);
-    if (!v->p_bg || !v->p_surf || !v->p_solid || !v->p_sides || !v->p_glass || !v->p_ovl) { free(v); return NULL; }
+    v->p_caus  = program(vs_caus, fs_caus, 0);
+    v->p_fill  = program(vs_fill, fs_fill, 0);
+    v->p_blur  = program(vs_fill, fs_blur, 0);
+    if (!v->p_blur || !v->p_bg || !v->p_surf || !v->p_solid || !v->p_sides || !v->p_glass || !v->p_ovl || !v->p_caus || !v->p_fill) { free(v); return NULL; }
 
     glGenVertexArrays(1, &v->vao_empty);
     glGenVertexArrays(1, &v->vao_surf); glGenBuffers(1, &v->vbo_surf); glGenBuffers(1, &v->ebo_surf);
     glGenVertexArrays(1, &v->vao_solid); glGenBuffers(1, &v->vbo_solid);
     glGenVertexArrays(1, &v->vao_sides); glGenBuffers(1, &v->vbo_sides); glGenBuffers(1, &v->ebo_sides);
+    glGenVertexArrays(1, &v->vao_caus); glGenBuffers(1, &v->vbo_caus); glGenBuffers(1, &v->ebo_caus);
 
     glBindVertexArray(v->vao_solid);
     glBindBuffer(GL_ARRAY_BUFFER, v->vbo_solid);
@@ -885,6 +1046,7 @@ view3d *view3d_create(SDL_Window *win, const wave *w)
 
     build_surface(v);
     build_sides(v);
+    build_caustic_mesh(v);
 
     glGenTextures(1, &v->tex_h);
     glBindTexture(GL_TEXTURE_2D, v->tex_h);
@@ -901,7 +1063,38 @@ view3d *view3d_create(SDL_Window *win, const wave *w)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, v->lm_w, v->lm_h, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+    /* try a half-float render target for the GPU caustic pass; fall back to R8 + CPU splat */
+    v->gpu_caustics = 0;
+    if (!cpu_caustics) {
+        while (glGetError() != GL_NO_ERROR) {}
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, v->lm_w, v->lm_h, 0, GL_RED, GL_HALF_FLOAT, NULL);
+        glGenFramebuffers(1, &v->fbo_lm);
+        glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_lm);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, v->tex_lm, 0);
+        GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if (st == GL_FRAMEBUFFER_COMPLETE && glGetError() == GL_NO_ERROR) v->gpu_caustics = 1;
+        else { glDeleteFramebuffers(1, &v->fbo_lm); v->fbo_lm = 0; fprintf(stderr, "no half-float render target; caustics on the CPU\n"); }
+    }
+    if (v->gpu_caustics) {
+        /* blurred copy, the one the lighting reads */
+        glGenTextures(1, &v->tex_lm2);
+        glBindTexture(GL_TEXTURE_2D, v->tex_lm2);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, v->lm_w, v->lm_h, 0, GL_RED, GL_HALF_FLOAT, NULL);
+        glGenFramebuffers(1, &v->fbo_lm2);
+        glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_lm2);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, v->tex_lm2, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+    if (!v->gpu_caustics) {
+        glBindTexture(GL_TEXTURE_2D, v->tex_lm);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, v->lm_w, v->lm_h, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+    }
+    printf("caustics: %s\n", v->gpu_caustics ? "GPU" : "CPU");
 
     glGenTextures(1, &v->tex_ovl);
     glBindTexture(GL_TEXTURE_2D, v->tex_ovl);
@@ -928,6 +1121,8 @@ void view3d_destroy(view3d *v)
 {
     if (!v) return;
     free(v->lm_acc); free(v->lm_tmp); free(v->lm8); free(v->cs_tab); free(v->ovl.rgba); free(v->capture);
+    if (v->fbo_lm) glDeleteFramebuffers(1, &v->fbo_lm);
+    if (v->fbo_lm2) glDeleteFramebuffers(1, &v->fbo_lm2);
     if (v->ctx) SDL_GL_DeleteContext(v->ctx);
     free(v);
 }
@@ -1139,6 +1334,84 @@ static void compute_caustics(view3d *v, const wave *w, const view3d_params *p, i
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, lw, lh, GL_RED, GL_UNSIGNED_BYTE, v->lm8);
 }
 
+static void set_common(view3d *v, GLuint p, const view3d_params *prm, const float *vp);
+
+/* GPU caustics: rasterise the refracted surface mesh into the light map (see vs_caus) */
+static void gpu_caustics(view3d *v, const view3d_params *p, int edge)
+{
+    float I[3] = { -p->sun[0], -p->sun[1], -p->sun[2] };
+    v3norm(I);
+    glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_lm);
+    glViewport(0, 0, v->lm_w, v->lm_h);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    if (edge == 2) {
+        /* flat-surface refraction offset: floor = surface + (ox, oz) */
+        const float eta = 1.0f / 1.333f, c0 = -I[1];
+        const float k0 = 1.0f - eta * eta * (1.0f - c0 * c0);
+        const float m0 = eta * c0 - sqrtf(k0 > 0 ? k0 : 0);
+        const float Tx = eta * I[0], Ty = eta * I[1] + m0, Tz = eta * I[2];
+        glUseProgram(v->p_fill);
+        glUniform2f(U(v->p_fill, "u_L"), v->Lx, v->Ly);
+        glUniform2f(U(v->p_fill, "u_offset"), -v->depth * Tx / Ty, -v->depth * Tz / Ty);
+        glUniform1i(U(v->p_fill, "u_shape"), v->shape);
+        glBindVertexArray(v->vao_empty);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    set_common(v, v->p_caus, p, NULL);
+    glUniform3f(U(v->p_caus, "u_incident"), I[0], I[1], I[2]);
+    glUniform2f(U(v->p_caus, "u_lcell"), v->Lx / (float)v->lm_w, v->Ly / (float)v->lm_h);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, v->tex_h);
+    glBindVertexArray(v->vao_caus);
+    glUniform1i(U(v->p_caus, "u_points"), v->shape == 1);
+    if (v->shape == 0) {
+        /* triangles: exact sheet sums with folds; cells and texels are the same size */
+        glDrawElements(GL_TRIANGLES, edge == 1 ? v->n_caus_all : v->n_caus_int, GL_UNSIGNED_INT, (void *)0);
+    } else {
+        /* polar cells are all smaller than a texel, so a triangle would be hit-or-miss;
+         * splat each cell as a point carrying its own area instead */
+#ifndef __EMSCRIPTEN__
+        glEnable(GL_PROGRAM_POINT_SIZE);
+#endif
+        glDrawArrays(GL_POINTS, 0, edge == 1 ? v->n_caus_pts_all : v->n_caus_pts_int);
+    }
+    glDisable(GL_BLEND);
+    glBindVertexArray(0);
+    if (getenv("POND_DEBUG")) {
+        float *buf = malloc(sizeof(float) * (size_t)v->lm_w * v->lm_h);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, v->lm_w, v->lm_h, GL_RED, GL_FLOAT, buf);
+        double mean = 0; float mx = 0; int nz = 0;
+        for (int i = 0; i < v->lm_w * v->lm_h; i++) { mean += buf[i]; if (buf[i] > mx) mx = buf[i]; if (buf[i] > 0) nz++; }
+        printf("gpu lightmap: mean %.3f max %.3f nonzero %.2f%% (edge %d, %d idx)\n", mean / (v->lm_w * v->lm_h), mx, 100.0 * nz / (v->lm_w * v->lm_h), edge, edge == 1 ? v->n_caus_all : v->n_caus_int);
+        free(buf);
+    }
+    /* blur into the texture the lighting reads */
+    glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_lm2);
+    glUseProgram(v->p_blur);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, v->tex_lm);
+    glUniform1i(U(v->p_blur, "u_tex"), 0);
+    glBindVertexArray(v->vao_empty);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glBindVertexArray(0);
+    if (getenv("POND_DEBUG")) {
+        float *buf = malloc(sizeof(float) * (size_t)v->lm_w * v->lm_h);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, v->lm_w, v->lm_h, GL_RED, GL_FLOAT, buf);
+        double mean = 0; float mx = 0;
+        for (int i = 0; i < v->lm_w * v->lm_h; i++) { mean += buf[i]; if (buf[i] > mx) mx = buf[i]; }
+        printf("blurred: mean %.3f max %.3f\n", mean / (v->lm_w * v->lm_h), mx);
+        free(buf);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 /* ------------------------------------------------------------------ overlay */
 void view3d_set_overlay(view3d *v, const char *hud, const char *const *help, int nhelp, int show_help)
 {
@@ -1233,7 +1506,8 @@ static void set_common(view3d *v, GLuint p, const view3d_params *prm, const floa
 {
     glUseProgram(p);
     GLint l;
-    if ((l = U(p, "u_vp")) >= 0) glUniformMatrix4fv(l, 1, GL_FALSE, vp);
+    if (vp && (l = U(p, "u_vp")) >= 0) glUniformMatrix4fv(l, 1, GL_FALSE, vp);
+    if ((l = U(p, "u_lscale")) >= 0) glUniform1f(l, v->gpu_caustics ? 1.0f : 4.0f);
     if ((l = U(p, "u_sun")) >= 0) glUniform3f(l, prm->sun[0], prm->sun[1], prm->sun[2]);
     if ((l = U(p, "u_cam")) >= 0) glUniform3f(l, v->cam[0], v->cam[1], v->cam[2]);
     if ((l = U(p, "u_L")) >= 0) glUniform2f(l, v->Lx, v->Ly);
@@ -1270,8 +1544,11 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
     glBindTexture(GL_TEXTURE_2D, v->tex_h);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, v->nx, v->ny, GL_RED, GL_FLOAT, w->eta);
     glActiveTexture(GL_TEXTURE1);
-    if (m <= 2) compute_caustics(v, w, p, m);           /* 0 shadow, 1 mirror-extend, 2 flat fill; no floor, no caustics */
-    glBindTexture(GL_TEXTURE_2D, v->tex_lm);
+    if (m <= 2) {                                        /* 0 shadow, 1 mirror-extend, 2 flat fill; no floor, no caustics */
+        if (v->gpu_caustics) gpu_caustics(v, p, m); else compute_caustics(v, w, p, m);
+        glActiveTexture(GL_TEXTURE1);
+    }
+    glBindTexture(GL_TEXTURE_2D, v->gpu_caustics ? v->tex_lm2 : v->tex_lm);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, v->tex_h);
 

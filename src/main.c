@@ -20,6 +20,7 @@
 #include "wave.h"
 #include "render.h"
 #include "view3d.h"
+#include "hos.h"
 
 #include <SDL.h>
 #include <math.h>
@@ -59,6 +60,7 @@ static const char *const help_lines[] = {
     "          glass, glass+bottom, none",
     "",
     "n         basin shape: rectangle / disk",
+    "y         nonlinear (HOS) on / off",
     "1-4       tray 30 cm, pond 3 m, pool 12 m, sea 80 m",
     "[ ]  { }  width, length (5%; hold to sweep)",
     ", .  \\    depth;  square it up (same area)",
@@ -90,6 +92,8 @@ typedef struct {
     wave *w;
     int nx, ny;                /* grid parameter (nx = ny = --grid) */
     int shape;                 /* WAVE_RECT or WAVE_DISK */
+    hos *hs;                   /* nonlinear correction (rectangle only) */
+    int hos_on, hos_nc, hos_order, hos_skipped;
     int running, paused, hud_dirty;
     int rain, breeze, paddle;
     double rain_rate;          /* drops per simulated second */
@@ -114,10 +118,14 @@ static void print_help(void)
          "  --window WxH  window size in pixels (default 1280x800; a single number means 16:10)\n"
          "  --preset N    start with preset 1..4\n"
          "  --shape S     rect (default) or disk\n"
+         "  --hos         start with the nonlinear (HOS) correction on (rectangle only)\n"
+         "  --hos-nc N    modes per axis that take part (power of two, default 64)\n"
+         "  --hos-order M 2 or 3 (default 3)\n"
          "  --basin WxL   basin width x length in metres (overrides the preset; disk: diameter)\n"
          "  --depth H     depth in metres\n"
          "  --2d          top-down CPU renderer instead of the 3-D view\n"
          "  --nomsaa      do not ask for a multisampled framebuffer\n"
+         "  --cpu-caustics  compute the caustic light map on the CPU (default: GPU when possible)\n"
          "  --cam Y,P,D   camera yaw, pitch (deg) and distance (in basin lengths)\n"
          "  --glass N     0 opaque, 1 floor only, 2 glass walls, 3 glass walls + bottom, 4 no walls\n"
          "  --frames N    quit after N displayed frames\n"
@@ -148,9 +156,10 @@ static int set_shape(app *a, int shape)
     wave_destroy(a->w);
     a->w = nw;
     a->shape = shape;
+    if (a->hs) { hos_destroy(a->hs); a->hs = NULL; }
     if (a->v3) {
         view3d_destroy(a->v3);
-        a->v3 = view3d_create(a->win, a->w);
+        a->v3 = view3d_create(a->win, a->w, a->p3.cpu_caustics);
         if (!a->v3) { fprintf(stderr, "3-D view unavailable\n"); a->running = 0; return -1; }
         view3d_reset_camera(a->v3, a->w);
     }
@@ -179,9 +188,13 @@ static void update_hud(app *a)
 {
     static const char *glass_names[] = { "opaque", "floor only", "glass walls", "glass walls + bottom", "no walls" };
     char buf[256], line2[128];
-    snprintf(line2, sizeof line2, "warp %.2gx  gain %.2g  damp %.3g/s %s%s%s%s",
-             a->warp, (double)a->p3.gain, a->w->gamma0,
-             a->rain ? " rain" : "", a->breeze ? " breeze" : "", a->paddle ? " paddle" : "", a->paused ? "  PAUSED" : "");
+    char nl[48];
+    if (a->hos_on && a->hs) snprintf(nl, sizeof nl, "  HOS M=%d nc=%d%s", hos_order(a->hs), hos_nc(a->hs), a->hos_skipped ? " (too steep)" : "");
+    else if (a->hos_on) snprintf(nl, sizeof nl, "  HOS: rectangle only");
+    else snprintf(nl, sizeof nl, "  linear");
+    snprintf(line2, sizeof line2, "warp %.2gx  gain %.2g  damp %.3g/s%s%s%s%s%s",
+             a->warp, (double)a->p3.gain, a->w->gamma0, nl,
+             a->rain ? "  rain" : "", a->breeze ? " breeze" : "", a->paddle ? " paddle" : "", a->paused ? "  PAUSED" : "");
     char dims[64];
     if (a->shape == WAVE_DISK) snprintf(dims, sizeof dims, "disk D=%.3g m", a->w->Lx);
     else snprintf(dims, sizeof dims, "%.3g x %.3g m", a->w->Lx, a->w->Ly);
@@ -255,6 +268,7 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
     case SDLK_t: a->p3.glass = (a->p3.glass + 1) % 5; break;
     case SDLK_o: if (a->v3) view3d_reset_camera(a->v3, w); break;
     case SDLK_n: set_shape(a, a->shape == WAVE_DISK ? WAVE_RECT : WAVE_DISK); break;
+    case SDLK_y: a->hos_on = !a->hos_on; break;
     case SDLK_s:
         if (a->mode3d) a->shot_pending = 1; else save_screenshot_2d(a);
         break;
@@ -404,6 +418,22 @@ static void advance(app *a, double dt_real)
     double sub = a->warp / SUBSTEPS_PER_SEC;
     int n = (int)(a->acc / sub);
     if (n > 240) { n = 240; a->acc = 0.0; } else a->acc -= n * sub;
+    if (a->hos_on && a->shape == WAVE_RECT && n > 0) {
+        /* Strang split: half the linear sub-steps, the nonlinear correction, the other half */
+        if (!a->hs) {
+            a->hs = hos_create(a->w, a->hos_nc, a->hos_order);
+            if (!a->hs) { fprintf(stderr, "HOS: could not create (nc=%d)\n", a->hos_nc); a->hos_on = 0; a->hud_dirty = 1; }
+            else a->hud_dirty = 1;
+        }
+        if (a->hs) {
+            int n1 = n / 2;
+            wave_step(a->w, sub, n1);
+            int applied = hos_step(a->hs, a->w, n * sub);
+            if (applied == a->hos_skipped) { a->hos_skipped = !applied; a->hud_dirty = 1; }
+            wave_step(a->w, sub, n - n1);
+            return;
+        }
+    }
     wave_step(a->w, sub, n);       /* also injects pending sources when n == 0 */
 }
 
@@ -482,7 +512,12 @@ static int bench(app *a, int frames, const char *snap, const char *scene)
         a->acc += dt;
         double sub = 1.0 / SUBSTEPS_PER_SEC;
         int n = (int)(a->acc / sub); a->acc -= n * sub;
-        wave_step(a->w, sub, n);
+        if (a->hos_on && a->shape == WAVE_RECT) {
+            if (!a->hs) a->hs = hos_create(a->w, a->hos_nc, a->hos_order);
+            wave_step(a->w, sub, n / 2);
+            if (a->hs) hos_step(a->hs, a->w, n * sub);
+            wave_step(a->w, sub, n - n / 2);
+        } else wave_step(a->w, sub, n);
         Uint64 t2 = SDL_GetPerformanceCounter();
         wave_realize(a->w);
         Uint64 t3 = SDL_GetPerformanceCounter();
@@ -493,8 +528,8 @@ static int bench(app *a, int frames, const char *snap, const char *scene)
     }
     double tot = t_src + t_step + t_real + t_rend;
     printf("grid %dx%d, %d frames (%.1f s simulated), preset %s\n", a->nx, a->ny, frames, frames * dt, presets[a->preset].name);
-    printf("  sources %.2f ms   inject+step %.2f ms   inverse DCT %.2f ms   2-D render %.2f ms   total %.2f ms/frame (%.0f fps)\n",
-           1e3 * t_src / frames, 1e3 * t_step / frames, 1e3 * t_real / frames, 1e3 * t_rend / frames,
+    printf("  sources %.2f ms   inject+step%s %.2f ms   inverse DCT %.2f ms   2-D render %.2f ms   total %.2f ms/frame (%.0f fps)\n",
+           1e3 * t_src / frames, a->hos_on ? "+HOS" : "", 1e3 * t_step / frames, 1e3 * t_real / frames, 1e3 * t_rend / frames,
            1e3 * tot / frames, frames / tot);
     printf("  rms slope %.4f   mode norm %.3e\n", wave_rms_slope(a->w), wave_norm(a->w));
     if (snap) {
@@ -524,9 +559,9 @@ POND_MAIN(int argc, char **argv)
 {
     int grid = 512, winw = 1280, winh = 800, bench_frames = 0, preset0 = 1, mode3d = 1, glass0 = 0;
     const char *snap = NULL, *scene = NULL, *snap3d = NULL, *cam = NULL, *basin = NULL;
-    int shape0 = WAVE_RECT;
+    int shape0 = WAVE_RECT, hos0 = 0, hos_nc = 64, hos_order = 3;
     double depth_arg = 0;
-    int a_frames = 0, a_help = 0, msaa = 1;
+    int a_frames = 0, a_help = 0, msaa = 1, cpu_caustics = 0;
 #ifdef __EMSCRIPTEN__
     grid = emscripten_run_script_int("(function(){var v=new URLSearchParams(location.search).get('grid');return v?(v|0):0;})()");
     if (grid <= 0) grid = 256;
@@ -549,11 +584,15 @@ POND_MAIN(int argc, char **argv)
         else if (!strcmp(argv[i], "--cam") && i + 1 < argc) cam = argv[++i];
         else if (!strcmp(argv[i], "--basin") && i + 1 < argc) basin = argv[++i];
         else if (!strcmp(argv[i], "--shape") && i + 1 < argc) shape0 = !strcmp(argv[++i], "disk") ? WAVE_DISK : WAVE_RECT;
+        else if (!strcmp(argv[i], "--hos")) hos0 = 1;
+        else if (!strcmp(argv[i], "--hos-nc") && i + 1 < argc) hos_nc = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--hos-order") && i + 1 < argc) hos_order = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--depth") && i + 1 < argc) depth_arg = atof(argv[++i]);
         else if (!strcmp(argv[i], "--glass") && i + 1 < argc) glass0 = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--2d")) mode3d = 0;
         else if (!strcmp(argv[i], "--overlay")) a_help = 1;
         else if (!strcmp(argv[i], "--nomsaa")) msaa = 0;
+        else if (!strcmp(argv[i], "--cpu-caustics")) cpu_caustics = 1;
         else { print_help(); return !strcmp(argv[i], "--help") ? 0 : 1; }
     }
     if (grid < 16 || (grid & (grid - 1))) { fprintf(stderr, "grid must be a power of two >= 16\n"); return 1; }
@@ -576,10 +615,12 @@ POND_MAIN(int argc, char **argv)
     render_defaults(&a.rp);
     a.p3.gain = 1.0f;
     a.p3.glass = glass0;
+    a.p3.cpu_caustics = cpu_caustics;
     { float s[3] = { 0.30f, 0.90f, -0.25f }; float n = 1.0f / sqrtf(s[0]*s[0] + s[1]*s[1] + s[2]*s[2]);
       a.p3.sun[0] = s[0] * n; a.p3.sun[1] = s[1] * n; a.p3.sun[2] = s[2] * n; }
     a.pix = malloc((size_t)grid * grid * sizeof(uint32_t));
     a.shape = shape0;
+    a.hos_on = hos0; a.hos_nc = hos_nc; a.hos_order = hos_order;
     if (shape0 == WAVE_DISK && !mode3d) { fprintf(stderr, "the disk basin needs the 3-D view\n"); return 1; }
     a.w = make_wave(shape0, grid, presets[preset0].L, presets[preset0].L, presets[preset0].depth);
     if (!a.pix || !a.w) { fprintf(stderr, "out of memory\n"); return 1; }
@@ -616,7 +657,7 @@ POND_MAIN(int argc, char **argv)
     if (!a.win) { fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return 1; }
 
     if (mode3d) {
-        a.v3 = view3d_create(a.win, a.w);
+        a.v3 = view3d_create(a.win, a.w, a.p3.cpu_caustics);
         if (!a.v3) { fprintf(stderr, "3-D view unavailable; try --2d\n"); return 1; }
         view3d_reset_camera(a.v3, a.w);
         if (cam) {
@@ -644,6 +685,7 @@ POND_MAIN(int argc, char **argv)
     emscripten_set_main_loop_arg(frame, &a, 0, 1);
 #else
     while (a.running) frame(&a);
+    if (a.hs) hos_destroy(a.hs);
     if (a.v3) view3d_destroy(a.v3);
     if (a.tex) SDL_DestroyTexture(a.tex);
     if (a.ren) SDL_DestroyRenderer(a.ren);
