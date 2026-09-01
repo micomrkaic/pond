@@ -445,17 +445,29 @@ core, vendored unchanged as `dsp.c`/`dsp.h` (libm only, per-layer state, a
 stereo mixer). Pond runs it in SDL's audio thread and drives it from the
 simulation rather than alongside it:
 
-- **Every drop is heard where it lands.** A drop into water makes a "plink"
-  because it entrains an air bubble, and the bubble rings at its Minnaert
-  frequency, f ≈ 3.26 m/s ÷ radius. Each drop the simulation makes — rain,
-  a click, the finger — spawns a bubble voice at that frequency (radius
-  taken as a third of the crater's), with the decay and the rising chirp
-  scaled by the size, plus a short noise burst for the splash, panned to
-  the drop's position relative to the camera and attenuated by distance.
-  Drops are drawn at a size relative to the basin so they can be seen; for
-  the ear they are taken at the size they would have in the 30 cm tray, so
-  rain plinks like rain on every preset, a click is a small stone, a
-  shift-click a bigger one.
+- **Every drop is heard where it lands, the way a drop sounds.** A drop
+  into water makes a "plink" because it entrains an air bubble, which rings
+  at its Minnaert frequency, f ≈ 3.26 m/s ÷ radius (radius taken as a third
+  of the crater's). Its ring time is set by its Q, 20–40 for millimetre
+  bubbles, τ = Q/(πf): a 3 kHz plink lasts a few milliseconds, a 500 Hz
+  "plonk" twenty. The bubble pinches off just under the free surface and
+  moves away from it, so the pitch glides up a little — 8 % for a raindrop,
+  up to 25 % for a big drop — and it does so only after the crater has
+  retracted: a short broadband tick at impact, a pause of 15–50 ms, then the
+  plink (Pumphrey & Crum's sequence; the pause grows with the drop). Big
+  drops add a lower splash burst. Everything is panned to the drop's
+  position relative to the camera and attenuated by distance. Drops are
+  drawn at a size relative to the basin so they can be seen; for the ear
+  they are taken at the size they would have in the 30 cm tray, so rain
+  plinks like rain on every preset, a click is a small stone, a shift-click
+  a bigger one.
+- **The rain bed is grains, not hiss.** What you hear under rain on water
+  is thousands of drops too small to see, and by Campbell's theorem shot
+  noise only turns Gaussian when many events overlap; at a few hundred a
+  second with millisecond grains it doesn't, it crackles. So the bed is a
+  second Poisson process, ~200 grains per visible drop, each 0.5–2 ms of
+  2–8 kHz noise or, one in six, a tiny 4–8 kHz plink, randomly panned, with
+  only a faint continuous hiss left underneath for downpours.
 - **The breeze plays the wind layer and listens to it.** The wind's gust
   envelope comes back from the audio thread and multiplies the breeze
   forcing, so the gusts you hear roughen the water you see.
@@ -463,7 +475,8 @@ simulation rather than alongside it:
   layer follows the surface's rms slope, both in level and in how hard the
   surf breaks.
 
-Latency is one audio buffer, ~23 ms. In the browser, SDL's audio is Web
+`POND_WAV=take.wav` records what is played; `doc/drop.png` is one drop's
+spectrogram, tick–gap–plink. Latency is one audio buffer, ~23 ms. In the browser, SDL's audio is Web
 Audio; nothing plays until the first click, by the browser's rules, which
 here makes the first drop start the sound.
 

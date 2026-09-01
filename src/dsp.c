@@ -1,6 +1,6 @@
 /* dsp.c — noise-suite synthesis core.  See dsp.h and README.md.
- * Vendored into pond unchanged from noise-suite ("dsp.c as a library",
- * September 2026): https://github.com/micomrkaic/noise-suite
+ * Vendored into pond unchanged from noise-suite ("dsp: delayed onsets, glide,
+ * grains", September 2026): https://github.com/micomrkaic/noise-suite
  *
  * Copyright (C) 2026 Mico <https://github.com/micomrkaic>
  *
@@ -89,38 +89,89 @@ void dsp_rain_init(dsp_rain *s, double rate)
 {
     seed(&s->rng, 5); s->rate = rate;
     s->spawn_rate = 60.0; s->tone = 600.0; s->drop_level = 1.6; s->bed_level = 0.15;
+    s->grain_rate = 0.0; s->grain_level = 1.0;
     for (int i = 0; i < DSP_MAX_DROPS; i++) s->d[i].alive = 0;
     s->hiss_hp.y = s->bed_lp.y = s->bed_lp2.y = s->wob_lp.y = 0;
 }
 
-void dsp_rain_spawn(dsp_rain *s, double amp, double tone, double pan, double decay_ms)
+static dsp_drop *free_drop(dsp_rain *s)
 {
-    for (int i = 0; i < DSP_MAX_DROPS; i++)
-        if (!s->d[i].alive) {
-            dsp_drop *d = &s->d[i];
-            double dec_ms = decay_ms > 0 ? decay_ms : 8.0 + dsp_rng_uniform(&s->rng) * 22.0;
-            double atk_ms = 1.0 + dsp_rng_uniform(&s->rng) * 2.0;
-            double T = tone > 0 ? tone : s->tone;
-            d->alive = 1;
-            d->f.y = 0.0;
-            d->dd = exp(-1.0 / (dec_ms * 0.001 * s->rate));
-            d->da = exp(-1.0 / (atk_ms * 0.001 * s->rate));
-            d->ed = d->ea = 1.0;
-            d->coef = dsp_lp_coef(T * 0.5 + dsp_rng_uniform(&s->rng) * T * 2.0, s->rate);
-            d->amp = amp > 0 ? amp : 0.20 + dsp_rng_uniform(&s->rng) * dsp_rng_uniform(&s->rng) * 0.60;
-            d->pan = clamp(pan, -1.0, 1.0);
-            return;
-        }
+    for (int i = 0; i < DSP_MAX_DROPS; i++) if (!s->d[i].alive) return &s->d[i];
+    return 0;
+}
+
+void dsp_rain_spawn(dsp_rain *s, double amp, double tone, double pan, double decay_ms, double delay_ms)
+{
+    dsp_drop *d = free_drop(s);
+    if (!d) return;
+    double dec_ms = decay_ms > 0 ? decay_ms : 8.0 + dsp_rng_uniform(&s->rng) * 22.0;
+    double atk_ms = 1.0 + dsp_rng_uniform(&s->rng) * 2.0;
+    if (atk_ms > 0.5 * dec_ms) atk_ms = 0.5 * dec_ms;
+    double T = tone > 0 ? tone : s->tone;
+    d->alive = 1;
+    d->wait = (int)(delay_ms * 0.001 * s->rate);
+    d->f.y = d->h.y = 0.0;
+    d->dd = exp(-1.0 / (dec_ms * 0.001 * s->rate));
+    d->da = exp(-1.0 / (atk_ms * 0.001 * s->rate));
+    d->ed = d->ea = 1.0;
+    d->coef = dsp_lp_coef(T * 0.5 + dsp_rng_uniform(&s->rng) * T * 2.0, s->rate);
+    d->hcoef = 0.0;
+    d->fq = 0.0; d->ph = 0.0;
+    d->amp = amp > 0 ? amp : 0.20 + dsp_rng_uniform(&s->rng) * dsp_rng_uniform(&s->rng) * 0.60;
+    d->pan = clamp(pan, -1.0, 1.0);
+}
+
+/* a grain: a 0.5..2 ms burst of 2..8 kHz noise, or, one time in six, a 4..8 kHz plink of
+ * the same length; random pan; amplitude skewed to the quiet */
+static void spawn_grain(dsp_rain *s)
+{
+    dsp_drop *d = free_drop(s);
+    if (!d) return;
+    double u = dsp_rng_uniform(&s->rng);
+    double dec_ms = 0.5 + 1.5 * u * u;
+    d->alive = 1; d->wait = 0;
+    d->f.y = d->h.y = 0.0;
+    d->dd = exp(-1.0 / (dec_ms * 0.001 * s->rate));
+    d->da = exp(-1.0 / (0.15 * 0.001 * s->rate));
+    d->ed = d->ea = 1.0;
+    if (dsp_rng_uniform(&s->rng) < 1.0 / 6.0) {
+        d->fq = 4000.0 + 4000.0 * dsp_rng_uniform(&s->rng); d->ph = 0.0;
+        d->coef = d->hcoef = 0.0;
+    } else {
+        d->fq = 0.0;
+        d->coef = dsp_lp_coef(2000.0 + 6000.0 * dsp_rng_uniform(&s->rng), s->rate);
+        d->hcoef = dsp_lp_coef(1500.0, s->rate);
+    }
+    double a = dsp_rng_uniform(&s->rng);
+    d->amp = s->grain_level * (0.05 + 0.25 * a * a);
+    d->pan = 2.0 * dsp_rng_uniform(&s->rng) - 1.0;
 }
 
 void dsp_rain_run(dsp_rain *s, double *l, double *r)
 {
-    if (s->spawn_rate > 0 && dsp_rng_uniform(&s->rng) < s->spawn_rate / s->rate) dsp_rain_spawn(s, 0, 0, 0, 0);
+    if (s->spawn_rate > 0 && dsp_rng_uniform(&s->rng) < s->spawn_rate / s->rate) dsp_rain_spawn(s, 0, 0, 0, 0, 0);
+    if (s->grain_rate > 0) {
+        /* a Poisson process at a rate that may exceed one per sample */
+        double lam = s->grain_rate / s->rate;
+        while (lam > 0) {
+            if (lam >= 1.0 || dsp_rng_uniform(&s->rng) < lam) spawn_grain(s);
+            lam -= 1.0;
+        }
+    }
     double sl = 0, sr = 0;
     for (int i = 0; i < DSP_MAX_DROPS; i++) {
         dsp_drop *d = &s->d[i];
         if (!d->alive) continue;
-        double v = d->amp * (d->ed - d->ea) * dsp_lp1_run(&d->f, dsp_rng_white(&s->rng), d->coef);
+        if (d->wait > 0) { d->wait--; continue; }
+        double env = d->ed - d->ea, v;
+        if (d->fq > 0) {
+            v = d->amp * env * sin(d->ph);
+            d->ph += DSP_TWO_PI * d->fq / s->rate;
+        } else {
+            double x = dsp_rng_white(&s->rng);
+            if (d->hcoef > 0) x -= dsp_lp1_run(&d->h, x, d->hcoef);
+            v = d->amp * env * dsp_lp1_run(&d->f, x, d->coef);
+        }
         pan2(v, d->pan, &sl, &sr);
         d->ed *= d->dd; d->ea *= d->da;
         if (d->ed < 1e-4) d->alive = 0;
@@ -188,17 +239,20 @@ void dsp_stream_init(dsp_stream *s, double rate)
     for (int i = 0; i < DSP_MAX_BUBBLES; i++) s->b[i].alive = 0;
     s->hp.y = s->lp.y = s->wob.y = 0;
 }
-void dsp_stream_spawn(dsp_stream *s, double f0, double amp, double pan, double decay_ms, double chirp)
+void dsp_stream_spawn(dsp_stream *s, double f0, double amp, double pan, double decay_ms, double glide, double delay_ms)
 {
     for (int i = 0; i < DSP_MAX_BUBBLES; i++)
         if (!s->b[i].alive) {
             dsp_bubble *b = &s->b[i];
             double dec_ms = decay_ms > 0 ? decay_ms : 10.0 + dsp_rng_uniform(&s->rng) * 30.0;
-            double atk_ms = 1.0 + dsp_rng_uniform(&s->rng) * 2.0;
+            double atk_ms = glide > 0 ? 0.4 : 1.0 + dsp_rng_uniform(&s->rng) * 2.0;
+            if (atk_ms > 0.5 * dec_ms) atk_ms = 0.5 * dec_ms;
             b->alive = 1;
+            b->wait = (int)(delay_ms * 0.001 * s->rate);
             b->ph = 0.0;
             b->f = f0 > 0 ? f0 : s->pitch * (0.6 + 1.2 * dsp_rng_uniform(&s->rng));
-            b->c = 1.0 + (chirp > 0 ? chirp : (0.3 + dsp_rng_uniform(&s->rng)) * 0.00045);
+            if (glide > 0) b->c = pow(glide, 1.0 / (dec_ms * 0.001 * s->rate));    /* reach `glide` after one decay time */
+            else b->c = 1.0 + (0.3 + dsp_rng_uniform(&s->rng)) * 0.00045;
             b->dd = exp(-1.0 / (dec_ms * 0.001 * s->rate));
             b->da = exp(-1.0 / (atk_ms * 0.001 * s->rate));
             b->ed = b->ea = 1.0;
@@ -209,11 +263,12 @@ void dsp_stream_spawn(dsp_stream *s, double f0, double amp, double pan, double d
 }
 void dsp_stream_run(dsp_stream *s, double *l, double *r)
 {
-    if (s->spawn_rate > 0 && dsp_rng_uniform(&s->rng) < s->spawn_rate / s->rate) dsp_stream_spawn(s, 0, 0, 0, 0, 0);
+    if (s->spawn_rate > 0 && dsp_rng_uniform(&s->rng) < s->spawn_rate / s->rate) dsp_stream_spawn(s, 0, 0, 0, 0, 0, 0);
     double sl = 0, sr = 0;
     for (int i = 0; i < DSP_MAX_BUBBLES; i++) {
         dsp_bubble *b = &s->b[i];
         if (!b->alive) continue;
+        if (b->wait > 0) { b->wait--; continue; }
         pan2(b->amp * (b->ed - b->ea) * sin(b->ph), b->pan, &sl, &sr);
         b->ph += DSP_TWO_PI * b->f / s->rate;
         b->f *= b->c;

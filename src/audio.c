@@ -52,7 +52,9 @@ static void callback(void *ud, Uint8 *stream, int len)
 {
     audio *a = ud;
     const int frames = len / (int)(2 * sizeof(float));
-    dsp_mixer_render(&a->mix, (float *)stream, frames, a->mute ? 0.0 : a->volume * 0.35);
+    /* pond's sources are sparse point events; the suite's 0.35 headroom is for its loud
+     * continuous generators and would leave this too quiet */
+    dsp_mixer_render(&a->mix, (float *)stream, frames, a->mute ? 0.0 : a->volume * 0.8);
     a->gust = a->mix.wind.gust;
     if (a->wav) { fwrite(stream, 1, (size_t)len, a->wav); a->wav_frames += frames; }
 }
@@ -61,7 +63,11 @@ static void apply_levels(audio *a)
 {
     dsp_mixer *m = &a->mix;
     m->gain[DSP_RAIN]   = 1.0;                         /* always on: it carries the splashes */
-    m->rain.bed_level   = 0.15 * a->rain_level;        /* the hiss follows the rain switch */
+    /* the bed: the crackle of drops too small to see, ~100 per visible drop, and only a
+     * faint continuous hiss underneath for the heaviest rain */
+    m->rain.grain_rate  = 400.0 * a->rain_level;
+    m->rain.grain_level = 0.9;
+    m->rain.bed_level   = 0.04 * a->rain_level * a->rain_level;
     m->gain[DSP_STREAM] = 1.0;                         /* bubbles only; no flow bed */
     m->gain[DSP_WIND]   = 0.8 * a->wind_level;
     m->gain[DSP_SEA]    = 0.6 * a->sea_level;
@@ -133,22 +139,32 @@ void audio_set_sea(audio *a, double level, double env)
 void audio_splash(audio *a, double size_m, double pan, double att)
 {
     if (!a) return;
-    /* the entrained bubble: radius roughly a third of the crater's, Minnaert f = 3.26 m/s / R,
-     * kept within the audible-and-sensible band; bigger bubbles ring longer and rise slower */
+    dsp_rng *rg = &a->mix.stream.rng;
+    /* The bubble a drop entrains: radius about a third of the crater's, Minnaert
+     * f = 3.26 m/s / R, within the band that makes sense.  Its ring time is set by
+     * its Q (20..40 for millimetre bubbles): tau = Q / (pi f), so a 3 kHz plink rings
+     * a few milliseconds and a 500 Hz plonk twenty.  It pinches off under the free
+     * surface and moves away from it, so the pitch glides up a little - more for a
+     * big drop - and it does so only after the crater has retracted: a tick at
+     * impact, a pause, then the plink (Pumphrey & Crum). */
     double Rb = 0.3 * size_m;
     double f = 3.26 / (Rb > 1e-4 ? Rb : 1e-4);
     if (f < 80.0) f = 80.0;
     if (f > 4000.0) f = 4000.0;
     double big = size_m / 0.005;                       /* 1 = a 5 mm crater, a fat raindrop */
     if (big > 20.0) big = 20.0;
-    double decay = 20.0 + 8.0 * big;                   /* ms: bigger bubbles ring longer */
-    double chirp = 4.0e-4 / (1.0 + 0.5 * big);
-    double amp = att * (0.30 + 0.12 * sqrt(big));
+    double Q = 20.0 + 20.0 * dsp_rng_uniform(rg);
+    double decay_ms = 1000.0 * Q / (3.14159265 * f);
+    double glide = 1.08 + 0.17 * (big / 20.0);
+    double delay_ms = (15.0 + 10.0 * sqrt(big)) * (0.7 + 0.6 * dsp_rng_uniform(rg));
+    double amp = att * (0.35 + 0.12 * sqrt(big));
     if (amp > 0.9) amp = 0.9;
     SDL_LockAudioDevice(a->dev);
-    dsp_stream_spawn(&a->mix.stream, f, amp, pan, decay, chirp);
-    /* the splash: a noise burst, deeper and louder for a bigger drop */
-    double tone = 600.0 / sqrt(big > 0.25 ? big : 0.25);
-    dsp_rain_spawn(&a->mix.rain, att * (0.15 + 0.10 * sqrt(big)), tone, pan, 8.0 + 6.0 * sqrt(big));
+    /* the impact: a short, bright tick */
+    dsp_rain_spawn(&a->mix.rain, att * (0.10 + 0.06 * sqrt(big)), 3000.0 + 1000.0 * dsp_rng_uniform(rg), pan, 1.5, 0.0);
+    /* the bubble */
+    dsp_stream_spawn(&a->mix.stream, f, amp, pan, decay_ms, glide, delay_ms);
+    /* a big drop also throws water: a lower, longer splash right after the tick */
+    if (big > 2.0) dsp_rain_spawn(&a->mix.rain, att * 0.06 * sqrt(big), 600.0 / sqrt(big), pan, 6.0 + 3.0 * sqrt(big), 2.0);
     SDL_UnlockAudioDevice(a->dev);
 }

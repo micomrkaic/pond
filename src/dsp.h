@@ -13,8 +13,8 @@
  * Copyright (C) 2026 Mico <https://github.com/micomrkaic>
  * GNU General Public License v3 or later; see LICENSE.
  *
- * Vendored into pond unchanged from noise-suite ("dsp.c as a library",
- * September 2026): https://github.com/micomrkaic/noise-suite
+ * Vendored into pond unchanged from noise-suite ("dsp: delayed onsets, glide,
+ * grains", September 2026): https://github.com/micomrkaic/noise-suite
  */
 #ifndef NOISE_DSP_H
 #define NOISE_DSP_H
@@ -49,20 +49,28 @@ double dsp_brown_run(dsp_brown *s);
 void   dsp_deep_init(dsp_deep *s, double rate);
 double dsp_deep_run(dsp_deep *s);
 
-/* ---- rain: Poisson shot noise of enveloped noise bursts over a hiss bed ---- */
-typedef struct { double ed, dd, ea, da, coef, amp, pan; dsp_lp1 f; int alive; } dsp_drop;
+/* ---- rain: Poisson shot noise of enveloped noise bursts over a hiss bed, plus an
+ * optional second, much faster process of tiny grains - the crackle of the many
+ * drops too small to hear individually ---- */
+typedef struct {
+    double ed, dd, ea, da, coef, hcoef, amp, pan, ph, fq;   /* fq > 0: a damped sine instead of noise */
+    dsp_lp1 f, h;
+    int alive, wait;                                        /* wait: samples until onset */
+} dsp_drop;
 typedef struct {
     dsp_rng rng; double rate;
     double spawn_rate;      /* internal Poisson rate, drops/s (0 = drops only from dsp_rain_spawn) */
     double tone;            /* drop tone, Hz */
     double drop_level, bed_level;
+    double grain_rate;      /* grains/s (0 = none); each 0.5..2 ms of 2..8 kHz noise, one in six a tiny plink */
+    double grain_level;
     dsp_drop d[DSP_MAX_DROPS];
     dsp_lp1 hiss_hp, bed_lp, bed_lp2, wob_lp;
 } dsp_rain;
 void dsp_rain_init(dsp_rain *s, double rate);
 /* amp: 0 = draw as the internal process does; tone: 0 = the layer's tone; pan -1..1;
- * decay_ms: 0 = draw (8..30 ms) */
-void dsp_rain_spawn(dsp_rain *s, double amp, double tone, double pan, double decay_ms);
+ * decay_ms: 0 = draw (8..30 ms); delay_ms: onset after this long */
+void dsp_rain_spawn(dsp_rain *s, double amp, double tone, double pan, double decay_ms, double delay_ms);
 void dsp_rain_run(dsp_rain *s, double *l, double *r);
 
 /* ---- sea: co-modulated surf and rumble ---- */
@@ -87,7 +95,7 @@ void   dsp_wind_init(dsp_wind *s, double rate);
 double dsp_wind_run(dsp_wind *s);
 
 /* ---- stream: rising-chirp bubbles over a flow bed ---- */
-typedef struct { double ph, f, c, ed, dd, ea, da, amp, pan; int alive; } dsp_bubble;
+typedef struct { double ph, f, c, ed, dd, ea, da, amp, pan; int alive, wait; } dsp_bubble;
 typedef struct {
     dsp_rng rng; double rate;
     double spawn_rate;      /* internal Poisson rate, bubbles/s (0 = only from dsp_stream_spawn) */
@@ -97,8 +105,10 @@ typedef struct {
 } dsp_stream;
 void dsp_stream_init(dsp_stream *s, double rate);
 /* f0: 0 = draw around the layer's pitch; amp: 0 = draw; decay_ms: 0 = draw (10..40 ms);
- * chirp: per-sample frequency ratio - 1 (0 = draw), e.g. 0.0003 rises audibly */
-void dsp_stream_spawn(dsp_stream *s, double f0, double amp, double pan, double decay_ms, double chirp);
+ * glide: frequency ratio reached after one decay time (1 = none, 1.1 = up a tenth); 0 = the
+ * stream's own rising chirp and 1..3 ms attack, otherwise a 0.4 ms attack (a drop's bubble);
+ * delay_ms: onset after this long */
+void dsp_stream_spawn(dsp_stream *s, double f0, double amp, double pan, double decay_ms, double glide, double delay_ms);
 void dsp_stream_run(dsp_stream *s, double *l, double *r);
 
 /* ---- birds: a two-level point process of gliding, trilling chirps ---- */
