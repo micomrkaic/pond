@@ -22,6 +22,7 @@
 #include "view3d.h"
 #include "hos.h"
 #include "audio.h"
+#include "config.h"
 
 #include <SDL.h>
 #include <math.h>
@@ -31,6 +32,7 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#include <emscripten/html5.h>
 #endif
 
 #ifndef M_PI
@@ -54,9 +56,12 @@ static const char *const help_lines[] = {
     "click / shift-click on water   drop / big drop",
     "drag on water                  finger",
     "drag elsewhere, ctrl+drag,     orbit",
-    "  right/middle drag, arrows, two fingers",
-    "wheel, PgUp/PgDn               zoom",
-    "o                              reset camera",
+    "  right/middle drag, two fingers",
+    "arrows (or keypad 4/6/8/2)     orbit",
+    "PgUp/PgDn                      zoom",
+    "  hold to sweep; shift 3x faster, ctrl finer",
+    "wheel                          zoom",
+    "o / Home                       reset camera",
     "t         container: opaque, floor only,",
     "          glass, glass+bottom, none",
     "",
@@ -74,6 +79,8 @@ static const char *const help_lines[] = {
     "p k/K     wavemaker on/off, wavelength",
     "- =       time warp        x/X   damping",
     "g/G f     display gain, floor pattern",
+    "d         hide / show this settings box",
+    "F11 / alt+enter                full screen",
     "c space   clear, pause     s     screenshot",
     "h / F1    help             q/esc quit",
     "",
@@ -92,7 +99,7 @@ typedef struct {
     /* 3-D path */
     view3d *v3;
     view3d_params p3;
-    int mode3d, show_help;
+    int mode3d, show_help, show_hud, fullscreen;
 
     wave *w;
     int nx, ny;                /* grid parameter (nx = ny = --grid) */
@@ -134,7 +141,8 @@ static void print_help(void)
          "  --2d          top-down CPU renderer instead of the 3-D view\n"
          "  --nomsaa      do not ask for a multisampled framebuffer\n"
          "  --cpu-caustics  compute the caustic light map on the CPU (default: GPU when possible)\n"
-         "  --mute        no sound          --volume V   0..1 (default 0.7)\n"
+         "  --mute        start muted (m unmutes)   --no-audio  do not open a device\n"
+         "  --volume V    0..1 (default 0.7)\n"
          "  --sound K=V,... sound knobs: drops, bed, brown, breeze, harsh (1 = as designed; e.g. bed=0.5,brown=0.3)\n"
          "  --cam Y,P,D   camera yaw, pitch (deg) and distance (in basin lengths)\n"
          "  --glass N     0 opaque, 1 floor only, 2 glass walls, 3 glass walls + bottom, 4 no walls\n"
@@ -142,7 +150,22 @@ static void print_help(void)
          "  --snap3d F    with --frames: save the last 3-D frame to F (bmp)\n"
          "  --bench N     run N headless frames of the CPU path, print timings, exit\n"
          "  --snap F      with --bench: save the last frame to F (bmp)\n"
-         "  --scene S     sources to start with: any of rain,paddle,breeze\n");
+         "  --scene S     sources to start with: any of rain,paddle,breeze\n"
+         "  --rain-rate R drops per simulated second (default 2)\n"
+         "  --warp W      simulated seconds per real second (default 1)\n"
+         "  --floor N     floor pattern: 0 tiles, 1 checkerboard, 2 sand (default: the preset's)\n"
+         "  --fullscreen  start full screen (F11 or alt+enter toggles it)\n"
+         "  --no-hud      start with the settings box hidden (d toggles it)\n"
+         "  --config F    read F instead of the default config file\n"
+         "  --no-config   ignore the config file\n"
+         "  --write-config [F]  write the settings as a config file and exit\n"
+         "\n"
+         "Settings come from built-in defaults, then the config file, then these\n"
+         "options.  The file is the first of $POND_CONFIG,\n"
+         "$XDG_CONFIG_HOME/pond/pond.conf, ~/.config/pond/pond.conf, ~/.pondrc,\n"
+         "./pond.conf that exists.  --write-config makes one from the current\n"
+         "settings, so \"pond --volume 0.3 --glass 1 --write-config\" saves that as\n"
+         "the way pond starts from now on.\n");
 }
 
 static wave *make_wave(int shape, int grid, double Lx, double Ly, double depth)
@@ -219,7 +242,7 @@ static void update_hud(app *a)
                  100 * audio_knob(a->au, SND_BREEZE), 100 * audio_knob(a->au, SND_HARSH));
     snprintf(buf, sizeof buf, "%s  %s  h=%.3g m  %s\n%s%s",
              presets[a->preset].name, dims, a->w->depth, glass_names[a->p3.glass], line2, line3);
-    if (a->v3) view3d_set_overlay(a->v3, buf, help_lines, NHELP, a->show_help);
+    if (a->v3) view3d_set_overlay(a->v3, buf, help_lines, NHELP, a->show_help, a->show_hud);
     char title[300];
     snprintf(title, sizeof title, "pond  |  %s  %s  h=%.3g m  |  %s",
              presets[a->preset].name, dims, a->w->depth, line2);
@@ -281,11 +304,56 @@ static void save_screenshot_2d(app *a)
 #endif
 }
 
+static void set_fullscreen(app *a, int on)
+{
+    if (!a->win) return;
+    a->fullscreen = !!on;
+#ifdef __EMSCRIPTEN__
+    /* The browser grants full screen only from inside a user gesture, and SDL
+     * events are polled from the animation frame, so defer the request to the
+     * next one Emscripten sees. */
+    if (on) emscripten_request_fullscreen("#canvas", 1);
+    else    emscripten_exit_fullscreen();
+#else
+    if (SDL_SetWindowFullscreen(a->win, on ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) != 0)
+        fprintf(stderr, "full screen: %s\n", SDL_GetError());
+#endif
+    a->hud_dirty = 1;
+}
+
+/* Held keys steer the camera every frame, so holding one sweeps smoothly
+ * instead of stuttering along with the keyboard auto-repeat. */
+static void camera_keys(app *a, double dt)
+{
+    if (!a->v3 || !(SDL_GetWindowFlags(a->win) & SDL_WINDOW_INPUT_FOCUS)) return;
+    const Uint8 *ks = SDL_GetKeyboardState(NULL);
+    SDL_Keymod m = SDL_GetModState();
+    float sp = (m & KMOD_SHIFT) ? 3.0f : ((m & (KMOD_CTRL | KMOD_ALT | KMOD_GUI)) ? 0.25f : 1.0f);
+    float deg = sp * 75.0f * (float)dt;                /* degrees per second */
+    float yaw = 0.0f, pitch = 0.0f;
+    if (ks[SDL_SCANCODE_LEFT]  || ks[SDL_SCANCODE_KP_4]) yaw   -= deg;
+    if (ks[SDL_SCANCODE_RIGHT] || ks[SDL_SCANCODE_KP_6]) yaw   += deg;
+    if (ks[SDL_SCANCODE_UP]    || ks[SDL_SCANCODE_KP_8]) pitch += 0.6f * deg;
+    if (ks[SDL_SCANCODE_DOWN]  || ks[SDL_SCANCODE_KP_2]) pitch -= 0.6f * deg;
+    if (yaw != 0.0f || pitch != 0.0f) view3d_orbit(a->v3, yaw, pitch);
+    int in = ks[SDL_SCANCODE_PAGEUP] != 0, out = ks[SDL_SCANCODE_PAGEDOWN] != 0;
+    if (in != out) view3d_zoom(a->v3, powf(2.0f, (out ? 1.0f : -1.0f) * sp * (float)dt));
+}
+
 static void handle_key(app *a, SDL_Keycode k, int shift)
 {
     wave *w = a->w;
+    int alt = (SDL_GetModState() & KMOD_ALT) != 0;
     switch (k) {
-    case SDLK_q: case SDLK_ESCAPE: a->running = 0; break;
+    case SDLK_q: a->running = 0; break;
+    case SDLK_ESCAPE:                       /* leave full screen first, then quit */
+        if (a->fullscreen) set_fullscreen(a, 0); else a->running = 0;
+        break;
+    case SDLK_F11: set_fullscreen(a, !a->fullscreen); break;
+    case SDLK_RETURN: case SDLK_KP_ENTER:
+        if (alt) set_fullscreen(a, !a->fullscreen);
+        break;
+    case SDLK_d: a->show_hud = !a->show_hud; break;
     case SDLK_h: case SDLK_F1:
         a->show_help = !a->show_help;
         if (!a->mode3d) print_help();
@@ -298,7 +366,7 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
     case SDLK_v: a->rp.view = !a->rp.view; break;
     case SDLK_f: a->rp.floor_style = a->p3.floor_style = (a->p3.floor_style + 1) % 3; break;
     case SDLK_t: a->p3.glass = (a->p3.glass + 1) % 5; break;
-    case SDLK_o: if (a->v3) view3d_reset_camera(a->v3, w); break;
+    case SDLK_o: case SDLK_HOME: if (a->v3) view3d_reset_camera(a->v3, w); break;
     case SDLK_n: set_shape(a, a->shape == WAVE_DISK ? WAVE_RECT : WAVE_DISK); break;
     case SDLK_y: a->hos_on = !a->hos_on; break;
     case SDLK_m: if (a->au) audio_set_mute(a->au, !audio_muted(a->au)); break;
@@ -336,12 +404,7 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
     case SDLK_EQUALS: case SDLK_PLUS: case SDLK_KP_PLUS: a->warp *= 1.5; break;
     case SDLK_x: wave_set_damping(w, shift ? w->gamma0 * 2.0 : w->gamma0 / 2.0); break;
     case SDLK_g: a->rp.gain = a->p3.gain = a->p3.gain * (shift ? 1.5f : 1.0f / 1.5f); break;
-    case SDLK_LEFT:  if (a->v3) view3d_orbit(a->v3, -5.0f, 0.0f); return;
-    case SDLK_RIGHT: if (a->v3) view3d_orbit(a->v3,  5.0f, 0.0f); return;
-    case SDLK_UP:    if (a->v3) view3d_orbit(a->v3, 0.0f,  3.0f); return;
-    case SDLK_DOWN:  if (a->v3) view3d_orbit(a->v3, 0.0f, -3.0f); return;
-    case SDLK_PAGEUP:   if (a->v3) view3d_zoom(a->v3, 0.8f); return;
-    case SDLK_PAGEDOWN: if (a->v3) view3d_zoom(a->v3, 1.25f); return;
+    /* the arrows and PgUp/PgDn are read as held keys in camera_keys() */
     default: return;
     }
     a->hud_dirty = 1;
@@ -515,6 +578,7 @@ static void frame(void *ud)
         return;
     }
 
+    camera_keys(a, dt);
     advance(a, dt);
     wave_realize(a->w);
     if (a->hud_dirty) update_hud(a);
@@ -618,139 +682,167 @@ int main(void)
 
 POND_MAIN(int argc, char **argv)
 {
-    int grid = 512, winw = 1280, winh = 800, bench_frames = 0, preset0 = 1, mode3d = 1, glass0 = 0;
-    const char *snap = NULL, *scene = NULL, *snap3d = NULL, *cam = NULL, *basin = NULL;
-    int shape0 = WAVE_RECT, hos0 = 0, hos_nc = 64, hos_order = 3;
-    double depth_arg = 0;
-    int a_frames = 0, a_help = 0, msaa = 1, cpu_caustics = 0, mute = 0;
-    double volume = 0.7;
-    const char *sound = NULL;
-#ifdef __EMSCRIPTEN__
-    grid = emscripten_run_script_int("(function(){var v=new URLSearchParams(location.search).get('grid');return v?(v|0):0;})()");
-    if (grid <= 0) grid = 256;
-    if (grid > 512) grid = 512;      /* fixed 160 MB heap in the browser */
-    winw = 1280; winh = 800;         /* the shell's CSS keeps this 16:10 shape */
-#endif
+    pond_config cfg;
+    config_defaults(&cfg);
+
+    /* the config file, first: the command line below overrides it */
+    const char *cfg_path = NULL, *write_cfg = NULL;
+    int no_config = 0;
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--grid") && i + 1 < argc) grid = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--window") && i + 1 < argc) {
-            const char *g = argv[++i], *x = strchr(g, 'x');
-            winw = atoi(g);
-            winh = x ? atoi(x + 1) : winw * 10 / 16;
+        if (!strcmp(argv[i], "--config") && i + 1 < argc) cfg_path = argv[i + 1];
+        else if (!strcmp(argv[i], "--no-config")) no_config = 1;
+    }
+    if (!no_config) {
+        int asked = cfg_path != NULL;
+        if (!cfg_path) cfg_path = config_path(0);
+        if (cfg_path && config_load(&cfg, cfg_path) != 0 && asked)
+            fprintf(stderr, "cannot read %s\n", cfg_path);
+    }
+
+    /* argv-only: these are per-run, not preferences */
+    int bench_frames = 0, a_frames = 0;
+    const char *snap = NULL, *snap3d = NULL;
+
+#ifdef __EMSCRIPTEN__
+    cfg.grid = emscripten_run_script_int("(function(){var v=new URLSearchParams(location.search).get('grid');return v?(v|0):0;})()");
+    if (cfg.grid <= 0) cfg.grid = 256;
+    if (cfg.grid > 512) cfg.grid = 512;      /* fixed 160 MB heap in the browser */
+    cfg.winw = 1280; cfg.winh = 800;         /* the shell's CSS keeps this 16:10 shape */
+#endif
+
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--config") && i + 1 < argc) i++;                 /* handled above */
+        else if (!strcmp(argv[i], "--no-config")) ;                            /* handled above */
+        else if (!strcmp(argv[i], "--write-config")) {
+            write_cfg = (i + 1 < argc && argv[i + 1][0] != '-') ? argv[++i] : config_path(1);
         }
-        else if (!strcmp(argv[i], "--preset") && i + 1 < argc) preset0 = atoi(argv[++i]) - 1;
+        else if (!strcmp(argv[i], "--grid") && i + 1 < argc) cfg.grid = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--window") && i + 1 < argc) config_set(&cfg, "window", argv[++i]);
+        else if (!strcmp(argv[i], "--preset") && i + 1 < argc) config_set(&cfg, "preset", argv[++i]);
         else if (!strcmp(argv[i], "--bench") && i + 1 < argc) bench_frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--snap") && i + 1 < argc) snap = argv[++i];
         else if (!strcmp(argv[i], "--snap3d") && i + 1 < argc) snap3d = argv[++i];
-        else if (!strcmp(argv[i], "--scene") && i + 1 < argc) scene = argv[++i];
+        else if (!strcmp(argv[i], "--scene") && i + 1 < argc) config_set(&cfg, "scene", argv[++i]);
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) a_frames = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--cam") && i + 1 < argc) cam = argv[++i];
-        else if (!strcmp(argv[i], "--basin") && i + 1 < argc) basin = argv[++i];
-        else if (!strcmp(argv[i], "--shape") && i + 1 < argc) shape0 = !strcmp(argv[++i], "disk") ? WAVE_DISK : WAVE_RECT;
-        else if (!strcmp(argv[i], "--hos")) hos0 = 1;
-        else if (!strcmp(argv[i], "--hos-nc") && i + 1 < argc) hos_nc = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--hos-order") && i + 1 < argc) hos_order = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--depth") && i + 1 < argc) depth_arg = atof(argv[++i]);
-        else if (!strcmp(argv[i], "--glass") && i + 1 < argc) glass0 = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--2d")) mode3d = 0;
-        else if (!strcmp(argv[i], "--overlay")) a_help = 1;
-        else if (!strcmp(argv[i], "--nomsaa")) msaa = 0;
-        else if (!strcmp(argv[i], "--cpu-caustics")) cpu_caustics = 1;
-        else if (!strcmp(argv[i], "--mute")) mute = 1;
-        else if (!strcmp(argv[i], "--volume") && i + 1 < argc) volume = atof(argv[++i]);
-        else if (!strcmp(argv[i], "--sound") && i + 1 < argc) sound = argv[++i];
+        else if (!strcmp(argv[i], "--cam") && i + 1 < argc) config_set(&cfg, "camera", argv[++i]);
+        else if (!strcmp(argv[i], "--basin") && i + 1 < argc) config_set(&cfg, "basin", argv[++i]);
+        else if (!strcmp(argv[i], "--shape") && i + 1 < argc) config_set(&cfg, "shape", argv[++i]);
+        else if (!strcmp(argv[i], "--hos")) cfg.hos_on = 1;
+        else if (!strcmp(argv[i], "--hos-nc") && i + 1 < argc) cfg.hos_nc = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--hos-order") && i + 1 < argc) cfg.hos_order = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--depth") && i + 1 < argc) cfg.depth = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--glass") && i + 1 < argc) config_set(&cfg, "glass", argv[++i]);
+        else if (!strcmp(argv[i], "--floor") && i + 1 < argc) config_set(&cfg, "floor", argv[++i]);
+        else if (!strcmp(argv[i], "--2d")) cfg.mode3d = 0;
+        else if (!strcmp(argv[i], "--fullscreen")) cfg.fullscreen = 1;
+        else if (!strcmp(argv[i], "--overlay")) cfg.show_help = 1;
+        else if (!strcmp(argv[i], "--no-hud")) cfg.show_hud = 0;
+        else if (!strcmp(argv[i], "--nomsaa")) cfg.msaa = 0;
+        else if (!strcmp(argv[i], "--cpu-caustics")) cfg.cpu_caustics = 1;
+        else if (!strcmp(argv[i], "--no-audio")) cfg.no_audio = 1;
+        else if (!strcmp(argv[i], "--mute")) cfg.mute = 1;
+        else if (!strcmp(argv[i], "--volume") && i + 1 < argc) config_set(&cfg, "volume", argv[++i]);
+        else if (!strcmp(argv[i], "--warp") && i + 1 < argc) config_set(&cfg, "warp", argv[++i]);
+        else if (!strcmp(argv[i], "--rain-rate") && i + 1 < argc) config_set(&cfg, "rain-rate", argv[++i]);
+        else if (!strcmp(argv[i], "--sound") && i + 1 < argc) {
+            char tmp[256]; snprintf(tmp, sizeof tmp, "%s", argv[++i]);
+            for (char *tok = strtok(tmp, ","); tok; tok = strtok(NULL, ",")) {
+                char *eq = strchr(tok, '=');
+                if (!eq) continue;
+                *eq = 0;
+                char key[64]; snprintf(key, sizeof key, "sound.%s", tok);
+                if (config_set(&cfg, key, eq + 1) != 0) fprintf(stderr, "unknown sound knob '%s'\n", tok);
+            }
+        }
         else { print_help(); return !strcmp(argv[i], "--help") ? 0 : 1; }
     }
-    if (grid < 16 || (grid & (grid - 1))) { fprintf(stderr, "grid must be a power of two >= 16\n"); return 1; }
-    if (preset0 < 0 || preset0 >= NPRESETS) preset0 = 1;
-    if (glass0 < 0 || glass0 > 4) glass0 = 0;
+
+    if (write_cfg) {
+        if (config_write(&cfg, write_cfg) != 0) { fprintf(stderr, "cannot write %s\n", write_cfg); return 1; }
+        printf("wrote %s\n", write_cfg);
+        return 0;
+    }
+    if (cfg.grid < 16 || (cfg.grid & (cfg.grid - 1))) { fprintf(stderr, "grid must be a power of two >= 16\n"); return 1; }
 
     /* static: with Emscripten the main-loop call unwinds main's stack frame */
     static app a;
     memset(&a, 0, sizeof a);
-    a.nx = a.ny = grid;
+    a.nx = a.ny = cfg.grid;
     a.running = 1;
-    a.warp = 1.0;
-    a.rain_rate = 2.0;
+    a.warp = cfg.warp;
+    a.rain_rate = cfg.rain_rate;
     a.paddle_div = 8.0;
     a.paddle_gain = a.breeze_gain = a.finger_gain = 1.0;
     a.frames_left = a_frames;
     a.snap_path = snap3d;
-    a.mode3d = mode3d;
-    a.show_help = a_help;
+    a.mode3d = cfg.mode3d;
+    a.show_help = cfg.show_help;
+    a.show_hud = cfg.show_hud;
     render_defaults(&a.rp);
     a.p3.gain = 1.0f;
-    a.p3.glass = glass0;
-    a.p3.cpu_caustics = cpu_caustics;
-    { float s[3] = { 0.30f, 0.90f, -0.25f }; float n = 1.0f / sqrtf(s[0]*s[0] + s[1]*s[1] + s[2]*s[2]);
-      a.p3.sun[0] = s[0] * n; a.p3.sun[1] = s[1] * n; a.p3.sun[2] = s[2] * n; }
-    a.pix = malloc((size_t)grid * grid * sizeof(uint32_t));
-    a.shape = shape0;
-    a.hos_on = hos0; a.hos_nc = hos_nc; a.hos_order = hos_order;
-    if (shape0 == WAVE_DISK && !mode3d) { fprintf(stderr, "the disk basin needs the 3-D view\n"); return 1; }
-    a.w = make_wave(shape0, grid, presets[preset0].L, presets[preset0].L, presets[preset0].depth);
+    a.p3.glass = cfg.glass;
+    a.p3.cpu_caustics = cfg.cpu_caustics;
+    { float sv[3] = { 0.30f, 0.90f, -0.25f }; float n = 1.0f / sqrtf(sv[0]*sv[0] + sv[1]*sv[1] + sv[2]*sv[2]);
+      a.p3.sun[0] = sv[0] * n; a.p3.sun[1] = sv[1] * n; a.p3.sun[2] = sv[2] * n; }
+    a.pix = malloc((size_t)cfg.grid * cfg.grid * sizeof(uint32_t));
+    a.shape = cfg.shape;
+    a.hos_on = cfg.hos_on; a.hos_nc = cfg.hos_nc; a.hos_order = cfg.hos_order;
+    if (cfg.shape == WAVE_DISK && !cfg.mode3d) { fprintf(stderr, "the disk basin needs the 3-D view\n"); return 1; }
+    a.w = make_wave(cfg.shape, cfg.grid, presets[cfg.preset].L, presets[cfg.preset].L, presets[cfg.preset].depth);
     if (!a.pix || !a.w) { fprintf(stderr, "out of memory\n"); return 1; }
-    a.preset = preset0;
-    a.rp.floor_style = a.p3.floor_style = presets[preset0].floor;
-    if (basin || depth_arg > 0) {
-        double Lx = a.w->Lx, Ly = a.w->Ly, h = depth_arg > 0 ? depth_arg : a.w->depth;
-        if (basin) { const char *x = strchr(basin, 'x'); Lx = atof(basin); Ly = x ? atof(x + 1) : Lx; }
-        if (Lx > 0 && Ly > 0) wave_set_pool(a.w, Lx, Ly, h);
+    a.preset = cfg.preset;
+    a.rp.floor_style = a.p3.floor_style = cfg.floor_style >= 0 ? cfg.floor_style : presets[cfg.preset].floor;
+    if (cfg.Lx > 0 || cfg.depth > 0) {
+        double Lx = cfg.Lx > 0 ? cfg.Lx : a.w->Lx, Ly = cfg.Ly > 0 ? cfg.Ly : a.w->Ly;
+        double h = cfg.depth > 0 ? cfg.depth : a.w->depth;
+        wave_set_pool(a.w, Lx, Ly, h);
     }
 
-    if (scene && bench_frames == 0) {
-        a.rain = !!strstr(scene, "rain"); a.paddle = !!strstr(scene, "paddle"); a.breeze = !!strstr(scene, "breeze");
-    }
+    if (bench_frames == 0) { a.rain = cfg.rain; a.paddle = cfg.paddle; a.breeze = cfg.breeze; }
     if (bench_frames > 0) {
         SDL_Init(0);
-        int rc = bench(&a, bench_frames, snap, scene);
+        char sc[32];
+        snprintf(sc, sizeof sc, "%s%s%s", cfg.rain ? "rain," : "", cfg.paddle ? "paddle," : "", cfg.breeze ? "breeze" : "");
+        int rc = bench(&a, bench_frames, snap, *sc ? sc : NULL);
         wave_destroy(a.w); free(a.pix);
         SDL_Quit();
         return rc;
     }
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
-    if (!mute) {
+    if (!cfg.no_audio) {
         a.au = audio_open();
-        if (a.au) audio_set_volume(a.au, volume);
-        else fprintf(stderr, "no audio device; running silent\n");
-        if (a.au && sound) {
-            char tmp[256]; snprintf(tmp, sizeof tmp, "%s", sound);
-            for (char *tok = strtok(tmp, ","); tok; tok = strtok(NULL, ",")) {
-                char *eq = strchr(tok, '=');
-                if (!eq) continue;
-                *eq = 0;
-                for (int k = 0; k < SND_NUM; k++) if (!strcmp(tok, snd_knob_names[k])) audio_set_knob(a.au, (snd_knob)k, atof(eq + 1));
-            }
+        if (!a.au) fprintf(stderr, "no audio device; running silent\n");
+        else {
+            audio_set_volume(a.au, cfg.volume);
+            audio_set_mute(a.au, cfg.mute);
+            for (int k = 0; k < SND_NUM; k++) audio_set_knob(a.au, (snd_knob)k, cfg.knob[k]);
         }
     }
-    Uint32 wflags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | (mode3d ? SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI : 0);
-    if (mode3d) view3d_gl_attributes(msaa);
-    a.win = SDL_CreateWindow("pond", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, winw, winh, wflags);
-    if (!a.win && mode3d && msaa) {
+    Uint32 wflags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | (cfg.mode3d ? SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI : 0);
+    if (cfg.mode3d) view3d_gl_attributes(cfg.msaa);
+    a.win = SDL_CreateWindow("pond", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, cfg.winw, cfg.winh, wflags);
+    if (!a.win && cfg.mode3d && cfg.msaa) {
         /* no multisampled visual on this display: try again without */
         fprintf(stderr, "no multisampled GL visual (%s); retrying without\n", SDL_GetError());
         SDL_GL_ResetAttributes();
         view3d_gl_attributes(0);
-        a.win = SDL_CreateWindow("pond", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, winw, winh, wflags);
+        a.win = SDL_CreateWindow("pond", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, cfg.winw, cfg.winh, wflags);
     }
     if (!a.win) { fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return 1; }
+    if (cfg.fullscreen) set_fullscreen(&a, 1);
 
-    if (mode3d) {
+    if (cfg.mode3d) {
         a.v3 = view3d_create(a.win, a.w, a.p3.cpu_caustics);
         if (!a.v3) { fprintf(stderr, "3-D view unavailable; try --2d\n"); return 1; }
         view3d_reset_camera(a.v3, a.w);
-        if (cam) {
-            float yaw = 35, pitch = 42, dist = 1.5f;
-            sscanf(cam, "%f,%f,%f", &yaw, &pitch, &dist);
-            view3d_set_camera(a.v3, yaw, pitch, dist);
-        }
+        if (cfg.cam_set) view3d_set_camera(a.v3, cfg.cam_yaw, cfg.cam_pitch, cfg.cam_dist);
     } else {
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
         a.ren = SDL_CreateRenderer(a.win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
         if (!a.ren) a.ren = SDL_CreateRenderer(a.win, -1, 0);
         if (!a.ren) { fprintf(stderr, "SDL_CreateRenderer: %s\n", SDL_GetError()); return 1; }
-        a.tex = SDL_CreateTexture(a.ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, grid, grid);
+        a.tex = SDL_CreateTexture(a.ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, cfg.grid, cfg.grid);
         if (!a.tex) { fprintf(stderr, "SDL_CreateTexture: %s\n", SDL_GetError()); return 1; }
         print_help();
     }

@@ -26,13 +26,16 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     ./pond --shape disk --basin 10         # a round basin, 10 m across
     ./pond --hos --preset 3 --scene paddle # nonlinear, order 3 on the lowest 64x64 modes
     ./pond --cpu-caustics                  # if the GPU pass is unavailable or suspect
-    ./pond --mute                          # or --volume 0.3; POND_WAV=take.wav records what you hear
+    ./pond --mute                          # starts silent; --no-audio opens no device at all
+                                           # POND_WAV=take.wav records what you hear
     ./pond --sound bed=0.5,brown=0.3       # knobs: drops, bed, brown, breeze, harsh (1 = as designed)
     ./pond --preset 3 --scene rain,breeze  # pool, with sources already on
     ./pond --glass 1 --preset 3 --scene breeze   # floor only: bright water, caustics, no walls
     ./pond --glass 3 --cam 40,-20,1.3      # start looking up through a glass bottom
     ./pond --glass 4 --preset 4 --scene breeze   # a block of sea with no container
     ./pond --2d                            # top-down CPU renderer (no GL needed)
+    ./pond --fullscreen --no-hud           # screen candy with nothing written on it
+    ./pond --volume 0.3 --glass 1 --write-config   # save that as how pond starts from now on
     ./pond --nomsaa                        # if window creation fails on an odd display
     ./pond --frames 120 --snap3d shot.bmp  # scripted screenshot
     ./pond --bench 300 --preset 4 --scene breeze --snap sea.bmp
@@ -52,8 +55,10 @@ screen, one finger is the finger, two fingers orbit and pinch-zoom.
 |---|---|
 | click / shift-click on the water | drop / big drop |
 | drag on the water | finger |
-| drag off the water, ctrl/alt + drag, right or middle drag, arrow keys | orbit the camera |
-| wheel, PgUp/PgDn, `o` | zoom, reset camera |
+| drag off the water, ctrl/alt + drag, right or middle drag | orbit the camera |
+| arrow keys, or keypad `4` `6` `8` `2` | orbit the camera; held, not tapped — 75 deg/s, `shift` 3x faster, `ctrl` finer |
+| `PgUp` `PgDn` | zoom, same held behaviour (a factor of 2 per second) |
+| wheel, `o` / `Home` | zoom, reset camera |
 | `t` | container: opaque → floor only → glass walls → glass walls + bottom → none |
 | `n` | basin shape: rectangle ↔ disk (the field starts over) |
 | `y` | nonlinear (HOS) correction on/off (rectangle only) |
@@ -69,10 +74,78 @@ screen, one finger is the finger, two fingers orbit and pinch-zoom.
 | `-` `=` | time warp |
 | `x`/`X` | extra uniform damping |
 | `g`/`G` `f` | display gain, floor pattern |
+| `d` | hide / show the settings box (the help hint goes with it: a clean frame for screenshots) |
+| `F11`, `alt`+`enter` | full screen; `esc` leaves it before it quits |
 | `c` `space` `s` `q` | clear, pause, screenshot (bmp), quit |
 
 In `--2d` mode the wheel is the time warp, `v` toggles a height-map view and
 `h` prints the help to the terminal.
+
+## Configuration file
+
+Settings are read three times over: built-in defaults, then a config file,
+then the command line, each overriding the one before. The file is the first
+of `$POND_CONFIG`, `$XDG_CONFIG_HOME/pond/pond.conf`,
+`~/.config/pond/pond.conf`, `~/.pondrc`, `./pond.conf` that exists;
+`--config FILE` names another and `--no-config` ignores all of them.
+
+You do not have to write one by hand. `--write-config` dumps the settings as
+they stand, so the command line is also the editor:
+
+    ./pond --volume 0.3 --sound brown=0.4,harsh=0.6 --glass 1 --write-config
+    wrote /home/you/.config/pond/pond.conf
+
+The format is `key = value`, one per line; `key: value` and `key value` also
+work, `#` and `;` start a comment, booleans are any of on/off, yes/no,
+true/false, 1/0, and `-` and `_` are the same character in a key. Unknown
+keys are reported with their line number and skipped, so an old file still
+starts the program.
+
+    # ---- window and view ----
+    window        = 1280x800    # pixels, or one number for 16:10
+    fullscreen    = off         # F11 or alt+enter toggles it
+    grid          = 512         # modes per axis, a power of two
+    mode          = 3d          # 3d, or 2d for the CPU renderer
+    glass         = 0           # 0 opaque, 1 floor only, 2 glass,
+                                # 3 glass+bottom, 4 no container
+    floor         = auto        # auto, or 0 tiles, 1 checker, 2 sand
+    msaa          = on
+    cpu-caustics  = off
+    hud           = on          # the settings box, top left (key: d)
+    help          = off         # start with the help panel up (h/F1)
+    camera        = 35,42,1.5   # yaw, pitch (deg), distance in lengths
+
+    # ---- basin ----
+    preset        = 2           # 1 tray 30 cm, 2 pond 3 m,
+                                # 3 pool 12 m, 4 sea 80 m
+    shape         = rect        # rect or disk
+    basin         =             # width x length in metres; empty = preset
+    depth         = 0           # metres; 0 = the preset's
+    nonlinear     = off         # the HOS correction (rectangle only)
+    hos-nc        = 64
+    hos-order     = 3
+
+    # ---- sources at start ----
+    rain          = off
+    breeze        = off
+    paddle        = off
+    rain-rate     = 2           # drops per simulated second
+    warp          = 1           # simulated seconds per real second
+
+    # ---- sound ----
+    no-audio      = off         # do not open a device at all
+    mute          = off         # device open but silent; m unmutes
+    volume        = 0.7         # 0..1
+    # multipliers on the designed levels: 1 = as designed, 0 = off
+    sound.drops   = 1
+    sound.bed     = 1
+    sound.brown   = 0
+    sound.breeze  = 1
+    sound.harsh   = 0.15
+
+The sound block is the same five knobs as the keys and `--sound`, and the
+same numbers the HUD's third line shows as percentages. The browser build has
+no file to read: there `?grid=N` in the URL is the only setting.
 
 ## What it computes
 
@@ -478,7 +551,7 @@ simulation rather than alongside it:
   and the water shows a sea breeze, so by default it is tuned down to a
   steady, soft, mid-high hiss; the `harsh` knob moves it back towards the
   gale.
-- **Five knobs**, on keys and `--sound`, all multipliers on the designed
+- **Five knobs**, on keys, `--sound` and the config file's `sound.*`, all multipliers on the designed
   levels shown on the HUD's third line: `drops` (ticks, splashes and
   plinks of the drops you see), `bed` (the grain crackle and hiss of the
   ones you don't), `brown` (a little room tone, off by default), `breeze`
@@ -543,6 +616,7 @@ map with additive blending, which is the same forward map).
 
 ## Layout
 
+    src/config.[ch]   defaults, the config file, --write-config
     src/dct.[ch]      radix-2 FFT, DCT-II/III, 2-D row–column
     src/wave.[ch]     dispersion tables, rotor propagation, sources
     src/hos.[ch]      nonlinear (HOS) correction on the coarse modes

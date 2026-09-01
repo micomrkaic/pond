@@ -578,7 +578,7 @@ struct view3d {
     float *lm_acc; float *lm_tmp; uint8_t *lm8;
     float *cs_tab;                 /* disk: cos, sin per angle */
     canvas ovl; int ovl_dirty, ovl_w, ovl_h;
-    char hud[256]; const char *const *help; int nhelp, show_help;
+    char hud[256]; const char *const *help; int nhelp, show_help, show_hud;
 
     float cam[3], fwd[3], right[3], up[3], tanhalf, aspect;
     int want_capture; uint8_t *capture; int cap_w, cap_h;
@@ -1519,10 +1519,11 @@ static void gpu_caustics(view3d *v, const view3d_params *p, int edge)
 }
 
 /* ------------------------------------------------------------------ overlay */
-void view3d_set_overlay(view3d *v, const char *hud, const char *const *help, int nhelp, int show_help)
+void view3d_set_overlay(view3d *v, const char *hud, const char *const *help, int nhelp,
+                        int show_help, int show_hud)
 {
     if (hud) { strncpy(v->hud, hud, sizeof v->hud - 1); v->hud[sizeof v->hud - 1] = 0; }
-    v->help = help; v->nhelp = nhelp; v->show_help = show_help;
+    v->help = help; v->nhelp = nhelp; v->show_help = show_help; v->show_hud = show_hud;
     v->ovl_dirty = 1;
 }
 
@@ -1545,8 +1546,8 @@ static void draw_overlay(view3d *v)
         if (base < 1) base = 1;
         if (base > 4) base = 4;
 
-        /* HUD: one or more lines separated by newlines */
-        {
+        /* HUD: one or more lines separated by newlines; d hides it */
+        if (v->show_hud) {
             char tmp[256];
             strncpy(tmp, v->hud, sizeof tmp - 1); tmp[sizeof tmp - 1] = 0;
             int nl = 1, maxlen = 0;
@@ -1583,7 +1584,7 @@ static void draw_overlay(view3d *v)
             canvas_fill(c, bx, by, bw, scale, 120, 160, 200, 255);
             for (int k = 0; k < v->nhelp; k++)
                 canvas_text(c, bx + pad, by + pad + k * lh, scale, 230, 232, 236, 255, v->help[k]);
-        } else {
+        } else if (v->show_hud) {
             const char *hint = "h / F1: help";
             int scale = base, lh = 10 * scale, pad = 8 * scale;
             int hw = text_width(hint, scale);

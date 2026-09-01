@@ -52,7 +52,8 @@ void     view3d_listen(const view3d *v, double x, double z, double *pan, double 
 /* window pixel -> basin metres on the mean surface; 0 if the ray misses the water */
 int      view3d_pick(const view3d *v, int mx, int my, double *x, double *y);
 
-void     view3d_set_overlay(view3d *v, const char *hud, const char *const *help, int nhelp, int show_help);
+void     view3d_set_overlay(view3d *v, const char *hud, const char *const *help, int nhelp,
+                            int show_help, int show_hud);
 void     view3d_render(view3d *v, const wave *w, const view3d_params *p);
 
 /* screenshots: request before a render, collect after it (RGBA8, top row first; caller frees) */
