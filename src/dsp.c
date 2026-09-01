@@ -1,6 +1,6 @@
 /* dsp.c — noise-suite synthesis core.  See dsp.h and README.md.
- * Vendored into pond unchanged from noise-suite ("dsp: delayed onsets, glide,
- * grains", September 2026): https://github.com/micomrkaic/noise-suite
+ * Vendored into pond unchanged from noise-suite ("dsp: wind flutter depth",
+ * September 2026): https://github.com/micomrkaic/noise-suite
  *
  * Copyright (C) 2026 Mico <https://github.com/micomrkaic>
  *
@@ -214,14 +214,14 @@ double dsp_sea_run(dsp_sea *s)
 void dsp_wind_init(dsp_wind *s, double rate)
 {
     seed(&s->rng, 7); s->rate = rate;
-    s->gustiness = 0.6; s->rustle = 0.6; s->tone = 250.0; s->gust = 0.5;
+    s->gustiness = 0.6; s->rustle = 0.6; s->tone = 250.0; s->flutter = 1.0; s->gust = 0.5;
     s->wg.y = s->wf.y = s->wb1.y = s->wb2.y = s->wr_hp.y = s->wr_lp.y = 0;
 }
 double dsp_wind_run(dsp_wind *s)
 {
     double g = clamp(0.5 + 400.0 * s->gustiness * dsp_lp1_run(&s->wg, dsp_rng_white(&s->rng), dsp_lp_coef(0.12, s->rate)), 0.05, 1.0);
     s->gust = g;
-    double fl = clamp(1.0 + 30.0 * dsp_lp1_run(&s->wf, dsp_rng_white(&s->rng), dsp_lp_coef(1.5, s->rate)), 0.7, 1.3);
+    double fl = clamp(1.0 + 30.0 * s->flutter * dsp_lp1_run(&s->wf, dsp_rng_white(&s->rng), dsp_lp_coef(1.5, s->rate)), 1.0 - 0.3 * s->flutter, 1.0 + 0.3 * s->flutter);
     double fc = s->tone * (0.6 + 1.8 * g);
     double body = dsp_lp1_run(&s->wb2, dsp_lp1_run(&s->wb1, dsp_rng_white(&s->rng), dsp_lp_coef(fc, s->rate)), dsp_lp_coef(fc, s->rate));
     double w = dsp_rng_white(&s->rng);

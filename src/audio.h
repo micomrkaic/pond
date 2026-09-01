@@ -37,6 +37,12 @@ double audio_volume(const audio *a);
 void   audio_set_mute(audio *a, int mute);
 int    audio_muted(const audio *a);
 
+/* the mix, tunable at run time: multipliers on the built-in levels (1 = as designed) */
+typedef enum { SND_DROPS, SND_BED, SND_BROWN, SND_BREEZE, SND_HARSH, SND_NUM } snd_knob;
+extern const char *const snd_knob_names[SND_NUM];
+void   audio_set_knob(audio *a, snd_knob k, double v);
+double audio_knob(const audio *a, snd_knob k);
+
 /* continuous layers, levels 0..1; set each frame */
 void   audio_set_rain(audio *a, double level);
 void   audio_set_wind(audio *a, double level);

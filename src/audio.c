@@ -32,6 +32,7 @@ struct audio {
     double rate, volume;
     int mute;
     double rain_level, wind_level, sea_level;
+    double knob[SND_NUM];
     double gust;
     FILE *wav; long wav_frames;     /* POND_WAV=file: record what is played (float32 stereo WAV) */
 };
@@ -59,19 +60,44 @@ static void callback(void *ud, Uint8 *stream, int len)
     if (a->wav) { fwrite(stream, 1, (size_t)len, a->wav); a->wav_frames += frames; }
 }
 
+const char *const snd_knob_names[SND_NUM] = { "drops", "bed", "brown", "breeze", "harsh" };
+
 static void apply_levels(audio *a)
 {
     dsp_mixer *m = &a->mix;
+    const double *k = a->knob;
     m->gain[DSP_RAIN]   = 1.0;                         /* always on: it carries the splashes */
-    /* the bed: the crackle of drops too small to see, ~100 per visible drop, and only a
+    m->rain.drop_level  = 1.6 * k[SND_DROPS];          /* the ticks and splashes of visible drops */
+    m->stream.bubble_level = 0.9 * k[SND_DROPS];       /* their plinks */
+    /* the bed: the crackle of drops too small to see, ~200 per visible drop, and only a
      * faint continuous hiss underneath for the heaviest rain */
     m->rain.grain_rate  = 400.0 * a->rain_level;
-    m->rain.grain_level = 0.9;
-    m->rain.bed_level   = 0.04 * a->rain_level * a->rain_level;
+    m->rain.grain_level = 0.9 * k[SND_BED];
+    m->rain.bed_level   = 0.04 * a->rain_level * a->rain_level * k[SND_BED];
     m->gain[DSP_STREAM] = 1.0;                         /* bubbles only; no flow bed */
-    m->gain[DSP_WIND]   = 0.8 * a->wind_level;
+    m->gain[DSP_BROWN]  = 0.25 * k[SND_BROWN];         /* a little room tone, off by default */
+    /* the breeze: a sea breeze, not a forest gale.  At harsh = 0: a steady, soft,
+     * mid-high hiss with no leaf rustle and no tremor; harsh = 1 is the suite's wind -
+     * gusty, fluttering, low-bodied, leaves rustling */
+    double h = k[SND_HARSH];
+    m->wind.gustiness   = 0.05 + 0.55 * h;
+    m->wind.rustle      = 0.60 * h;
+    m->wind.tone        = 550.0 - 300.0 * h;
+    m->wind.flutter     = 0.15 + 0.85 * h;
+    m->gain[DSP_WIND]   = 0.45 * k[SND_BREEZE] * a->wind_level;
     m->gain[DSP_SEA]    = 0.6 * a->sea_level;
 }
+
+void audio_set_knob(audio *a, snd_knob k, double v)
+{
+    if (!a || k < 0 || k >= SND_NUM) return;
+    if (v < 0) v = 0;
+    if (v > 4) v = 4;
+    SDL_LockAudioDevice(a->dev);
+    a->knob[k] = v; apply_levels(a);
+    SDL_UnlockAudioDevice(a->dev);
+}
+double audio_knob(const audio *a, snd_knob k) { return (a && k >= 0 && k < SND_NUM) ? a->knob[k] : 0.0; }
 
 audio *audio_open(void)
 {
@@ -94,6 +120,8 @@ audio *audio_open(void)
     a->mix.stream.flow_level = 0.0;
     a->mix.stream.bubble_level = 0.9;
     a->mix.sea.ext_env = 0.0;
+    a->knob[SND_DROPS] = 1.0; a->knob[SND_BED] = 1.0; a->knob[SND_BROWN] = 0.0;
+    a->knob[SND_BREEZE] = 1.0; a->knob[SND_HARSH] = 0.15;
     apply_levels(a);
     if (getenv("POND_WAV")) { a->wav = fopen(getenv("POND_WAV"), "wb"); if (a->wav) wav_header(a->wav, (int)a->rate, 0); }
     SDL_PauseAudioDevice(a->dev, 0);

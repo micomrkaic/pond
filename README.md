@@ -27,6 +27,7 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     ./pond --hos --preset 3 --scene paddle # nonlinear, order 3 on the lowest 64x64 modes
     ./pond --cpu-caustics                  # if the GPU pass is unavailable or suspect
     ./pond --mute                          # or --volume 0.3; POND_WAV=take.wav records what you hear
+    ./pond --sound bed=0.5,brown=0.3       # knobs: drops, bed, brown, breeze, harsh (1 = as designed)
     ./pond --preset 3 --scene rain,breeze  # pool, with sources already on
     ./pond --glass 1 --preset 3 --scene breeze   # floor only: bright water, caustics, no walls
     ./pond --glass 3 --cam 40,-20,1.3      # start looking up through a glass bottom
@@ -57,6 +58,8 @@ screen, one finger is the finger, two fingers orbit and pinch-zoom.
 | `n` | basin shape: rectangle ↔ disk (the field starts over) |
 | `y` | nonlinear (HOS) correction on/off (rectangle only) |
 | `m` `a`/`A` | sound on/off, volume down/up |
+| `j`/`J` `u`/`U` | drop level, rain-bed level |
+| `z`/`Z` `w`/`W` `e`/`E` | brown noise, breeze level, breeze harshness |
 | `1` `2` `3` `4` | presets: tray 30 cm · pond 3 m · pool 12 m · sea 80 m |
 | `[` `]` / `{` `}` | width / length (disk: diameter), 5 % per press, hold to sweep (live: the physics changes, the field is kept; aspect kept within 4:1) |
 | `,` `.` / `\` | depth / make it square again at the same area |
@@ -470,7 +473,16 @@ simulation rather than alongside it:
   only a faint continuous hiss left underneath for downpours.
 - **The breeze plays the wind layer and listens to it.** The wind's gust
   envelope comes back from the audio thread and multiplies the breeze
-  forcing, so the gusts you hear roughen the water you see.
+  forcing, so the gusts you hear roughen the water you see. The suite's
+  wind is a forest wind — gusty, fluttering, low-bodied, leaves rustling —
+  and the water shows a sea breeze, so by default it is tuned down to a
+  steady, soft, mid-high hiss; the `harsh` knob moves it back towards the
+  gale.
+- **Five knobs**, on keys and `--sound`, all multipliers on the designed
+  levels shown on the HUD's third line: `drops` (ticks, splashes and
+  plinks of the drops you see), `bed` (the grain crackle and hiss of the
+  ones you don't), `brown` (a little room tone, off by default), `breeze`
+  (its level) and `harsh` (its gustiness, rustle, tremor and tone together).
 - Rain adds the hiss bed at the rain rate; on basins of 40 m and up the sea
   layer follows the surface's rms slope, both in level and in how hard the
   surf breaks.

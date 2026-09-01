@@ -13,8 +13,8 @@
  * Copyright (C) 2026 Mico <https://github.com/micomrkaic>
  * GNU General Public License v3 or later; see LICENSE.
  *
- * Vendored into pond unchanged from noise-suite ("dsp: delayed onsets, glide,
- * grains", September 2026): https://github.com/micomrkaic/noise-suite
+ * Vendored into pond unchanged from noise-suite ("dsp: wind flutter depth",
+ * September 2026): https://github.com/micomrkaic/noise-suite
  */
 #ifndef NOISE_DSP_H
 #define NOISE_DSP_H
@@ -88,6 +88,7 @@ double dsp_sea_run(dsp_sea *s);
 typedef struct {
     dsp_rng rng; double rate;
     double gustiness, rustle, tone;
+    double flutter;         /* depth of the 1.5 Hz tremor, 1 = as designed (+-30 %), 0 = none */
     double gust;            /* the gust envelope, last sample, 0.05..1 (read it to drive something else) */
     dsp_lp1 wg, wf, wb1, wb2, wr_hp, wr_lp;
 } dsp_wind;

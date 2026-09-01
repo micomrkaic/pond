@@ -63,6 +63,9 @@ static const char *const help_lines[] = {
     "n         basin shape: rectangle / disk",
     "y         nonlinear (HOS) on / off",
     "m  a/A    sound on/off, volume down/up",
+    "j/J u/U   drop level, rain-bed level",
+    "z/Z w/W   brown noise, breeze level",
+    "e/E       breeze harshness (gusts, rustle)",
     "1-4       tray 30 cm, pond 3 m, pool 12 m, sea 80 m",
     "[ ]  { }  width, length (5%; hold to sweep)",
     ", .  \\    depth;  square it up (same area)",
@@ -132,6 +135,7 @@ static void print_help(void)
          "  --nomsaa      do not ask for a multisampled framebuffer\n"
          "  --cpu-caustics  compute the caustic light map on the CPU (default: GPU when possible)\n"
          "  --mute        no sound          --volume V   0..1 (default 0.7)\n"
+         "  --sound K=V,... sound knobs: drops, bed, brown, breeze, harsh (1 = as designed; e.g. bed=0.5,brown=0.3)\n"
          "  --cam Y,P,D   camera yaw, pitch (deg) and distance (in basin lengths)\n"
          "  --glass N     0 opaque, 1 floor only, 2 glass walls, 3 glass walls + bottom, 4 no walls\n"
          "  --frames N    quit after N displayed frames\n"
@@ -193,7 +197,7 @@ static void set_preset(app *a, int p)
 static void update_hud(app *a)
 {
     static const char *glass_names[] = { "opaque", "floor only", "glass walls", "glass walls + bottom", "no walls" };
-    char buf[300], line2[200];
+    char buf[480], line2[200];
     char nl[48];
     if (a->hos_on && a->hs) snprintf(nl, sizeof nl, "  HOS M=%d nc=%d%s", hos_order(a->hs), hos_nc(a->hs), a->hos_skipped ? " (too steep)" : "");
     else if (a->hos_on) snprintf(nl, sizeof nl, "  HOS: rectangle only");
@@ -208,8 +212,13 @@ static void update_hud(app *a)
     char dims[64];
     if (a->shape == WAVE_DISK) snprintf(dims, sizeof dims, "disk D=%.3g m", a->w->Lx);
     else snprintf(dims, sizeof dims, "%.3g x %.3g m", a->w->Lx, a->w->Ly);
-    snprintf(buf, sizeof buf, "%s  %s  h=%.3g m  %s\n%s",
-             presets[a->preset].name, dims, a->w->depth, glass_names[a->p3.glass], line2);
+    char line3[160] = "";
+    if (a->au)
+        snprintf(line3, sizeof line3, "\nsnd: drops %.0f%%  bed %.0f%%  brown %.0f%%  breeze %.0f%%  harsh %.0f%%",
+                 100 * audio_knob(a->au, SND_DROPS), 100 * audio_knob(a->au, SND_BED), 100 * audio_knob(a->au, SND_BROWN),
+                 100 * audio_knob(a->au, SND_BREEZE), 100 * audio_knob(a->au, SND_HARSH));
+    snprintf(buf, sizeof buf, "%s  %s  h=%.3g m  %s\n%s%s",
+             presets[a->preset].name, dims, a->w->depth, glass_names[a->p3.glass], line2, line3);
     if (a->v3) view3d_set_overlay(a->v3, buf, help_lines, NHELP, a->show_help);
     char title[300];
     snprintf(title, sizeof title, "pond  |  %s  %s  h=%.3g m  |  %s",
@@ -294,6 +303,14 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
     case SDLK_y: a->hos_on = !a->hos_on; break;
     case SDLK_m: if (a->au) audio_set_mute(a->au, !audio_muted(a->au)); break;
     case SDLK_a: if (a->au) audio_set_volume(a->au, shift ? audio_volume(a->au) * 1.25 + 0.01 : audio_volume(a->au) / 1.25); break;
+    /* sound knobs: lower case down, upper case up; 25 % per press, from zero up to a token 0.05 */
+    case SDLK_j: case SDLK_u: case SDLK_z: case SDLK_w: case SDLK_e: {
+        snd_knob kn = k == SDLK_j ? SND_DROPS : k == SDLK_u ? SND_BED : k == SDLK_z ? SND_BROWN : k == SDLK_w ? SND_BREEZE : SND_HARSH;
+        double v = audio_knob(a->au, kn);
+        v = shift ? (v < 0.05 ? 0.05 : v * 1.25) : (v < 0.06 ? 0.0 : v / 1.25);
+        audio_set_knob(a->au, kn, v);
+        break;
+    }
     case SDLK_s:
         if (a->mode3d) a->shot_pending = 1; else save_screenshot_2d(a);
         break;
@@ -607,6 +624,7 @@ POND_MAIN(int argc, char **argv)
     double depth_arg = 0;
     int a_frames = 0, a_help = 0, msaa = 1, cpu_caustics = 0, mute = 0;
     double volume = 0.7;
+    const char *sound = NULL;
 #ifdef __EMSCRIPTEN__
     grid = emscripten_run_script_int("(function(){var v=new URLSearchParams(location.search).get('grid');return v?(v|0):0;})()");
     if (grid <= 0) grid = 256;
@@ -640,6 +658,7 @@ POND_MAIN(int argc, char **argv)
         else if (!strcmp(argv[i], "--cpu-caustics")) cpu_caustics = 1;
         else if (!strcmp(argv[i], "--mute")) mute = 1;
         else if (!strcmp(argv[i], "--volume") && i + 1 < argc) volume = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--sound") && i + 1 < argc) sound = argv[++i];
         else { print_help(); return !strcmp(argv[i], "--help") ? 0 : 1; }
     }
     if (grid < 16 || (grid & (grid - 1))) { fprintf(stderr, "grid must be a power of two >= 16\n"); return 1; }
@@ -695,6 +714,15 @@ POND_MAIN(int argc, char **argv)
         a.au = audio_open();
         if (a.au) audio_set_volume(a.au, volume);
         else fprintf(stderr, "no audio device; running silent\n");
+        if (a.au && sound) {
+            char tmp[256]; snprintf(tmp, sizeof tmp, "%s", sound);
+            for (char *tok = strtok(tmp, ","); tok; tok = strtok(NULL, ",")) {
+                char *eq = strchr(tok, '=');
+                if (!eq) continue;
+                *eq = 0;
+                for (int k = 0; k < SND_NUM; k++) if (!strcmp(tok, snd_knob_names[k])) audio_set_knob(a.au, (snd_knob)k, atof(eq + 1));
+            }
+        }
     }
     Uint32 wflags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | (mode3d ? SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI : 0);
     if (mode3d) view3d_gl_attributes(msaa);
