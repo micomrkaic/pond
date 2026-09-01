@@ -100,10 +100,17 @@ void  wave_realize(wave *w);
  * Drop: volume-conserving crater  amp * (1 - q) e^{-q},  q = r^2 / (2 s^2).
  * amp < 0 gives a crater with a raised rim. */
 void  wave_add_drop(wave *w, double x, double y, double s, double amp);
-/* Plane wavemaker along the x = 0 wall: velocity forcing accel * exp(-(x/width)^2),
- * applied as an impulse over dt.  Works in mode space directly (only the (m,0)
- * modes are involved), so it costs one 1-D transform. */
-void  wave_add_paddle(wave *w, double width, double accel, double dt);
+/* Wavemaker: a strip of velocity forcing hugging one wall, accel * exp(-(u/width)^2)
+ * in the distance u from that wall, applied as an impulse over dt.
+ *   wall  0 x=0, 1 x=Lx, 2 y=0, 3 y=Ly   (disk: ignored, the rim is the wall)
+ *   pos   where the paddle sits along the wall, 0..1 (disk: turns around the rim)
+ *   span  how much of the wall it occupies, 0..1; >= 1 is the whole wall
+ * The forcing is separable, profile(u) * g(v), so it never touches real space:
+ * a full-wall paddle is one 1-D transform into the plane-wave modes, as before,
+ * and a partial one is two transforms and an outer product over the modes g
+ * actually reaches (a narrow paddle is broad in k along the wall, but still only
+ * tens of modes, so the sum is short). */
+void  wave_add_paddle(wave *w, int wall, double pos, double span, double width, double accel, double dt);
 /* Stochastic wind forcing.  Modes are kicked with amplitude weights
  *   w(k) = (k/k0)^-2 above the peak k0 (a k^-4 elevation spectrum),
  *          Gaussian roll-off below it, times a cos^2 directional spread
@@ -115,6 +122,9 @@ void  wave_breeze(wave *w, double k0, double amp, double dt);
 void  wave_set_mode(wave *w, int m, int n, float a, float b);
 
 double wave_omega(const wave *w, double k);
+/* The inverse: the wavenumber that radiates at angular frequency omega.  omega(k)
+ * is strictly increasing, so a bisection is exact to machine precision. */
+double wave_k_of_omega(const wave *w, double omega);
 /* disk internals (disk.c) */
 int   disk_basis_build(int nr, int M, float *G, float *kappa);
 void  disk_inverse(const wave *w, const float *modes, float *field);

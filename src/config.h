@@ -47,6 +47,9 @@ typedef struct {
     /* sources */
     int    rain, breeze, paddle;
     double rain_rate, warp;
+    double paddle_freq;        /* Hz; 0 = the old default of 8 wavelengths across the basin */
+    double paddle_pos, paddle_span, paddle_stroke;
+    int    paddle_wall;
 
     /* sound */
     int    no_audio;           /* do not open a device at all */

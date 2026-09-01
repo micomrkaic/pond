@@ -76,7 +76,9 @@ static const char *const help_lines[] = {
     ", .  \\    depth;  square it up (same area)",
     "r i/I     rain on/off, rate",
     "b         breeze (wind sea)",
-    "p k/K     wavemaker on/off, wavelength",
+    "p / P     wavemaker on/off, next wall",
+    "k/K l/L   its frequency, its span (size)",
+    "< >       slide it along the wall",
     "- =       time warp        x/X   damping",
     "g/G f     display gain, floor pattern",
     "d         hide / show this settings box",
@@ -114,7 +116,11 @@ typedef struct {
     double rain_rate;          /* drops per simulated second */
     double warp;               /* simulated seconds per real second */
     double acc;                /* simulated time not yet stepped */
-    double paddle_div;         /* paddle wavelength = L / paddle_div */
+    double paddle_div;         /* wavelengths across the basin: the frequency, kept basin-relative
+                                  so a change of preset or size keeps the same picture */
+    int    paddle_wall;        /* 0 x=0, 1 x=Lx, 2 y=0, 3 y=Ly */
+    double paddle_pos;         /* 0..1 along that wall (disk: turns around the rim) */
+    double paddle_span;        /* 0..1 of the wall; 1 = the whole wall */
     double paddle_gain, breeze_gain, finger_gain;
     int preset;
 
@@ -154,6 +160,10 @@ static void print_help(void)
          "  --rain-rate R drops per simulated second (default 2)\n"
          "  --warp W      simulated seconds per real second (default 1)\n"
          "  --floor N     floor pattern: 0 tiles, 1 checkerboard, 2 sand (default: the preset's)\n"
+         "  --paddle-freq F  wavemaker frequency in Hz (default: 8 wavelengths across the basin)\n"
+         "  --paddle-wall W  x=0 (default), x=Lx, y=0, y=Ly; the disk always uses its rim\n"
+         "  --paddle-pos P   0..1 along that wall     --paddle-span S  0..1 of it, 1 = all of it\n"
+         "  --paddle-stroke M  multiplier on the stroke\n"
          "  --fullscreen  start full screen (F11 or alt+enter toggles it)\n"
          "  --no-hud      start with the settings box hidden (d toggles it)\n"
          "  --config F    read F instead of the default config file\n"
@@ -217,10 +227,34 @@ static void set_preset(app *a, int p)
     a->hud_dirty = 1;
 }
 
+/* The wavemaker is driven at a frequency; the wavelength it radiates is whatever
+ * the dispersion relation answers with.  The number kept is that wavelength as a
+ * count across the basin, so resizing the basin or changing preset keeps the same
+ * picture rather than the same hertz. */
+static double paddle_k(const app *a)
+{
+    return 2.0 * M_PI * a->paddle_div / sqrt(a->w->Lx * a->w->Ly);
+}
+
+static double paddle_hz(const app *a)
+{
+    return wave_omega(a->w, paddle_k(a)) / (2.0 * M_PI);
+}
+
+static void set_paddle_hz(app *a, double f)
+{
+    const double L = sqrt(a->w->Lx * a->w->Ly);
+    double div = wave_k_of_omega(a->w, 2.0 * M_PI * f) * L / (2.0 * M_PI);
+    const double dmax = 0.25 * a->nx;      /* keep the radiated wave well inside the grid */
+    if (div > dmax) div = dmax;
+    if (div < 0.25) div = 0.25;
+    a->paddle_div = div;
+}
+
 static void update_hud(app *a)
 {
     static const char *glass_names[] = { "opaque", "floor only", "glass walls", "glass walls + bottom", "no walls" };
-    char buf[480], line2[200];
+    char buf[640], line2[200];
     char nl[48];
     if (a->hos_on && a->hs) snprintf(nl, sizeof nl, "  HOS M=%d nc=%d%s", hos_order(a->hs), hos_nc(a->hs), a->hos_skipped ? " (too steep)" : "");
     else if (a->hos_on) snprintf(nl, sizeof nl, "  HOS: rectangle only");
@@ -240,8 +274,17 @@ static void update_hud(app *a)
         snprintf(line3, sizeof line3, "\nsnd: drops %.0f%%  bed %.0f%%  brown %.0f%%  breeze %.0f%%  harsh %.0f%%",
                  100 * audio_knob(a->au, SND_DROPS), 100 * audio_knob(a->au, SND_BED), 100 * audio_knob(a->au, SND_BROWN),
                  100 * audio_knob(a->au, SND_BREEZE), 100 * audio_knob(a->au, SND_HARSH));
-    snprintf(buf, sizeof buf, "%s  %s  h=%.3g m  %s\n%s%s",
-             presets[a->preset].name, dims, a->w->depth, glass_names[a->p3.glass], line2, line3);
+    char line4[128] = "";
+    if (a->paddle) {
+        static const char *const wall_names[] = { "wall x=0", "wall x=Lx", "wall y=0", "wall y=Ly" };
+        const double k = paddle_k(a);
+        snprintf(line4, sizeof line4, "\npaddle: %.3g Hz  lambda %.3g m  %s  pos %.0f%%  span %.0f%%",
+                 paddle_hz(a), 2.0 * M_PI / k,
+                 a->shape == WAVE_DISK ? "rim" : wall_names[a->paddle_wall],
+                 100.0 * a->paddle_pos, 100.0 * a->paddle_span);
+    }
+    snprintf(buf, sizeof buf, "%s  %s  h=%.3g m  %s\n%s%s%s",
+             presets[a->preset].name, dims, a->w->depth, glass_names[a->p3.glass], line2, line3, line4);
     if (a->v3) view3d_set_overlay(a->v3, buf, help_lines, NHELP, a->show_help, a->show_hud);
     char title[300];
     snprintf(title, sizeof title, "pond  |  %s  %s  h=%.3g m  |  %s",
@@ -362,7 +405,10 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
     case SDLK_c: wave_clear(w); break;
     case SDLK_r: a->rain = !a->rain; break;
     case SDLK_b: a->breeze = !a->breeze; break;
-    case SDLK_p: a->paddle = !a->paddle; break;
+    case SDLK_p:
+        if (shift) { a->paddle_wall = (a->paddle_wall + 1) % 4; a->paddle_pos = 0.5; }
+        else a->paddle = !a->paddle;
+        break;
     case SDLK_v: a->rp.view = !a->rp.view; break;
     case SDLK_f: a->rp.floor_style = a->p3.floor_style = (a->p3.floor_style + 1) % 3; break;
     case SDLK_t: a->p3.glass = (a->p3.glass + 1) % 5; break;
@@ -384,7 +430,12 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
         break;
     case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: set_preset(a, k - SDLK_1); break;
     case SDLK_i: a->rain_rate *= shift ? 1.5 : 1.0 / 1.5; break;
-    case SDLK_k: a->paddle_div *= shift ? 1.0 / 1.25 : 1.25; break;
+    case SDLK_k: set_paddle_hz(a, paddle_hz(a) * (shift ? 1.25 : 1.0 / 1.25)); break;
+    case SDLK_l:
+        a->paddle_span *= shift ? 1.25 : 1.0 / 1.25;
+        if (a->paddle_span > 1.0) a->paddle_span = 1.0;
+        if (a->paddle_span < 0.02) a->paddle_span = 0.02;
+        break;
     /* basin dimensions, 5 % per press; keys auto-repeat, so holding one sweeps smoothly.
      * The grid stays put, so the cells stretch; the aspect ratio is kept within 4:1. */
     case SDLK_LEFTBRACKET: case SDLK_RIGHTBRACKET: {
@@ -394,8 +445,23 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
         if (Lx / Ly <= 4.0 && Ly / Lx <= 4.0) { wave_set_pool(w, Lx, Ly, w->depth); pool_changed(a); }
         break;
     }
-    case SDLK_COMMA:  wave_set_pool(w, w->Lx, w->Ly, w->depth / 1.1); pool_changed(a); break;
-    case SDLK_PERIOD: wave_set_pool(w, w->Lx, w->Ly, w->depth * 1.1); pool_changed(a); break;
+    case SDLK_COMMA: case SDLK_PERIOD: {
+        const int up = (k == SDLK_PERIOD);
+        if (shift) {                        /* < > slide the paddle along its wall */
+            a->paddle_pos += up ? 0.02 : -0.02;
+            if (a->shape == WAVE_DISK) {    /* the rim has no ends: wrap */
+                if (a->paddle_pos < 0.0) a->paddle_pos += 1.0;
+                if (a->paddle_pos > 1.0) a->paddle_pos -= 1.0;
+            } else {
+                if (a->paddle_pos < 0.0) a->paddle_pos = 0.0;
+                if (a->paddle_pos > 1.0) a->paddle_pos = 1.0;
+            }
+            break;
+        }
+        wave_set_pool(w, w->Lx, w->Ly, up ? w->depth * 1.1 : w->depth / 1.1);
+        pool_changed(a);
+        break;
+    }
     case SDLK_BACKSLASH: {   /* make it square again, keeping the area */
         double L = sqrt(w->Lx * w->Ly);
         wave_set_pool(w, L, L, w->depth); pool_changed(a); break;
@@ -508,12 +574,11 @@ static void apply_sources(app *a, double dts)
         }
     }
     if (a->paddle) {
-        double k = 2.0 * M_PI * a->paddle_div / L;
-        double om = wave_omega(w, k);
-        double width = 0.006 * L;
-        if (width < 2.0 * w->dx) width = 2.0 * w->dx;
-        double accel = a->paddle_gain * 0.0025 * L * om * om * cos(om * w->t);
-        wave_add_paddle(w, width, accel, dts);
+        /* a fixed stroke driven at omega: the acceleration is stroke * omega^2, so the
+         * waves it makes grow with frequency the way a real wavemaker's do */
+        const double om = wave_omega(w, paddle_k(a));
+        const double accel = a->paddle_gain * 0.0025 * L * om * om * cos(om * w->t);
+        wave_add_paddle(w, a->paddle_wall, a->paddle_pos, a->paddle_span, 0.006 * L, accel, dts);
     }
     if (a->breeze) {
         double k0 = 2.0 * M_PI * 8.0 / L;        /* spectral peak at L/8 */
@@ -744,6 +809,11 @@ POND_MAIN(int argc, char **argv)
         else if (!strcmp(argv[i], "--volume") && i + 1 < argc) config_set(&cfg, "volume", argv[++i]);
         else if (!strcmp(argv[i], "--warp") && i + 1 < argc) config_set(&cfg, "warp", argv[++i]);
         else if (!strcmp(argv[i], "--rain-rate") && i + 1 < argc) config_set(&cfg, "rain-rate", argv[++i]);
+        else if (!strcmp(argv[i], "--paddle-freq") && i + 1 < argc) config_set(&cfg, "paddle-freq", argv[++i]);
+        else if (!strcmp(argv[i], "--paddle-wall") && i + 1 < argc) config_set(&cfg, "paddle-wall", argv[++i]);
+        else if (!strcmp(argv[i], "--paddle-pos") && i + 1 < argc) config_set(&cfg, "paddle-pos", argv[++i]);
+        else if (!strcmp(argv[i], "--paddle-span") && i + 1 < argc) config_set(&cfg, "paddle-span", argv[++i]);
+        else if (!strcmp(argv[i], "--paddle-stroke") && i + 1 < argc) config_set(&cfg, "paddle-stroke", argv[++i]);
         else if (!strcmp(argv[i], "--sound") && i + 1 < argc) {
             char tmp[256]; snprintf(tmp, sizeof tmp, "%s", argv[++i]);
             for (char *tok = strtok(tmp, ","); tok; tok = strtok(NULL, ",")) {
@@ -771,8 +841,12 @@ POND_MAIN(int argc, char **argv)
     a.running = 1;
     a.warp = cfg.warp;
     a.rain_rate = cfg.rain_rate;
-    a.paddle_div = 8.0;
-    a.paddle_gain = a.breeze_gain = a.finger_gain = 1.0;
+    a.paddle_div = 8.0;                    /* until a frequency asks for something else */
+    a.paddle_wall = cfg.paddle_wall;
+    a.paddle_pos = cfg.paddle_pos;
+    a.paddle_span = cfg.paddle_span;
+    a.paddle_gain = cfg.paddle_stroke;
+    a.breeze_gain = a.finger_gain = 1.0;
     a.frames_left = a_frames;
     a.snap_path = snap3d;
     a.mode3d = cfg.mode3d;
@@ -798,6 +872,7 @@ POND_MAIN(int argc, char **argv)
         wave_set_pool(a.w, Lx, Ly, h);
     }
 
+    if (cfg.paddle_freq > 0) set_paddle_hz(&a, cfg.paddle_freq);   /* needs the final basin */
     if (bench_frames == 0) { a.rain = cfg.rain; a.paddle = cfg.paddle; a.breeze = cfg.breeze; }
     if (bench_frames > 0) {
         SDL_Init(0);

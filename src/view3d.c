@@ -578,7 +578,7 @@ struct view3d {
     float *lm_acc; float *lm_tmp; uint8_t *lm8;
     float *cs_tab;                 /* disk: cos, sin per angle */
     canvas ovl; int ovl_dirty, ovl_w, ovl_h;
-    char hud[256]; const char *const *help; int nhelp, show_help, show_hud;
+    char hud[640]; const char *const *help; int nhelp, show_help, show_hud;
 
     float cam[3], fwd[3], right[3], up[3], tanhalf, aspect;
     int want_capture; uint8_t *capture; int cap_w, cap_h;
@@ -1548,7 +1548,7 @@ static void draw_overlay(view3d *v)
 
         /* HUD: one or more lines separated by newlines; d hides it */
         if (v->show_hud) {
-            char tmp[256];
+            char tmp[640];
             strncpy(tmp, v->hud, sizeof tmp - 1); tmp[sizeof tmp - 1] = 0;
             int nl = 1, maxlen = 0;
             for (char *q = tmp; *q; q++) if (*q == '\n') nl++;

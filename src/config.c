@@ -53,6 +53,11 @@ void config_defaults(pond_config *c)
     c->rain = c->breeze = c->paddle = 0;
     c->rain_rate = 2.0;
     c->warp = 1.0;
+    c->paddle_freq = 0.0;      /* auto */
+    c->paddle_pos = 0.5;
+    c->paddle_span = 1.0;
+    c->paddle_stroke = 1.0;
+    c->paddle_wall = 0;
 
     c->no_audio = 0;
     c->mute = 0;
@@ -171,6 +176,18 @@ int config_set(pond_config *c, const char *k, const char *v)
     if (keyeq(k, "breeze"))    { c->breeze = as_bool(v, c->breeze); return 0; }
     if (keyeq(k, "paddle"))    { c->paddle = as_bool(v, c->paddle); return 0; }
     if (keyeq(k, "rain-rate")) { double r = atof(v); if (r > 0) c->rain_rate = r; return 0; }
+    if (keyeq(k, "paddle-freq")) { double x = atof(v); c->paddle_freq = x > 0 ? x : 0; return 0; }
+    if (keyeq(k, "paddle-pos"))  { double x = atof(v); c->paddle_pos = x < 0 ? 0 : (x > 1 ? 1 : x); return 0; }
+    if (keyeq(k, "paddle-span")) { double x = atof(v); c->paddle_span = x < 0.02 ? 0.02 : (x > 1 ? 1 : x); return 0; }
+    if (keyeq(k, "paddle-stroke")) { double x = atof(v); if (x >= 0) c->paddle_stroke = x; return 0; }
+    if (keyeq(k, "paddle-wall")) {
+        if (keyeq(v, "x=0") || keyeq(v, "x0")) c->paddle_wall = 0;
+        else if (keyeq(v, "x=Lx") || keyeq(v, "xL")) c->paddle_wall = 1;
+        else if (keyeq(v, "y=0") || keyeq(v, "y0")) c->paddle_wall = 2;
+        else if (keyeq(v, "y=Ly") || keyeq(v, "yL")) c->paddle_wall = 3;
+        else { int n = atoi(v); c->paddle_wall = (n < 0 || n > 3) ? 0 : n; }
+        return 0;
+    }
     if (keyeq(k, "warp"))      { double w = atof(v); if (w > 0) c->warp = w; return 0; }
 
     /* sound */
@@ -321,6 +338,16 @@ int config_write(const pond_config *c, const char *path)
     put(f, "paddle", onoff(c->paddle), NULL);
     snprintf(v, sizeof v, "%g", c->rain_rate);             put(f, "rain-rate", v, "drops per simulated second");
     snprintf(v, sizeof v, "%g", c->warp);                  put(f, "warp", v, "simulated seconds per real second");
+    fprintf(f, "\n# ---- wavemaker ----\n");
+    if (c->paddle_freq > 0) snprintf(v, sizeof v, "%g", c->paddle_freq); else snprintf(v, sizeof v, "auto");
+    put(f, "paddle-freq", v, "Hz; auto = 8 wavelengths across");
+    {
+        static const char *const wn[] = { "x=0", "x=Lx", "y=0", "y=Ly" };
+        put(f, "paddle-wall", wn[c->paddle_wall], "x=0, x=Lx, y=0, y=Ly (disk: the rim)");
+    }
+    snprintf(v, sizeof v, "%g", c->paddle_pos);            put(f, "paddle-pos", v, "0..1 along that wall");
+    snprintf(v, sizeof v, "%g", c->paddle_span);           put(f, "paddle-span", v, "0..1 of it; 1 = the whole wall");
+    snprintf(v, sizeof v, "%g", c->paddle_stroke);         put(f, "paddle-stroke", v, "multiplier on the stroke");
 
     fprintf(f, "\n# ---- sound ----\n");
     put(f, "no-audio", onoff(c->no_audio), "do not open a device at all");

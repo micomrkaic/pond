@@ -48,6 +48,20 @@ double wave_omega(const wave *w, double k)
     return sqrt((w->g * k + w->sigma * k * k * k / w->rho) * tanh(k * w->depth));
 }
 
+double wave_k_of_omega(const wave *w, double omega)
+{
+    if (omega <= 0) return 0;
+    /* omega(k) rises monotonically from 0, so bracket by doubling and bisect */
+    double hi = 1e-4;
+    while (wave_omega(w, hi) < omega && hi < 1e9) hi *= 2.0;
+    double lo = hi / 2.0;
+    for (int it = 0; it < 60; it++) {
+        const double mid = 0.5 * (lo + hi);
+        if (wave_omega(w, mid) < omega) lo = mid; else hi = mid;
+    }
+    return 0.5 * (lo + hi);
+}
+
 static void build_dispersion(wave *w)
 {
     if (w->shape == WAVE_DISK) {
@@ -355,21 +369,31 @@ void wave_add_drop(wave *w, double x, double y, double s, double amp)
     w->dirty_d = 1;
 }
 
-void wave_add_paddle(wave *w, double width, double accel, double dt)
+void wave_add_paddle(wave *w, int wall, double pos, double span, double width, double accel, double dt)
 {
+    const double imp = accel * dt;
+    if (span > 1.0) span = 1.0;
+    if (span < 0.01) span = 0.01;
+    const int full = span >= 1.0;
+
     if (w->shape == WAVE_DISK) {
-        /* velocity forcing in a strip along the wall over a 60-degree sector at theta = 0:
-         * separable in (r, theta), so it goes straight into mode space */
-        const double imp = accel * dt;
+        /* A strip inside the rim, over a sector centred at pos turns.  Separable in
+         * (r, theta), so it goes straight into mode space.  span = 1 forces the whole
+         * rim at once and makes rings that converge on the centre. */
         float *fr = malloc(sizeof(float) * (size_t)w->nr), *gt = malloc(sizeof(float) * (size_t)w->nt);
         if (!fr || !gt) { free(fr); free(gt); return; }
+        double wd = width < 2.0 * w->dr ? 2.0 * w->dr : width;
         for (int i = 0; i < w->nr; i++) {
-            const double x = (w->R - (i + 0.5) * w->dr) / width;
+            const double x = (w->R - (i + 0.5) * w->dr) / wd;
             fr[i] = x > 6.0 ? 0.0f : (float)(imp * exp(-x * x));
         }
+        const double th0 = 2.0 * M_PI * pos, sig = M_PI * span;
         for (int j = 0; j < w->nt; j++) {
-            double th = j * w->dth; if (th > M_PI) th -= 2.0 * M_PI;
-            const double a = th / (M_PI / 6.0);
+            if (full) { gt[j] = 1.0f; continue; }
+            double th = j * w->dth - th0;
+            while (th >  M_PI) th -= 2.0 * M_PI;
+            while (th < -M_PI) th += 2.0 * M_PI;
+            const double a = th / sig;
             gt[j] = (a > -2.0 && a < 2.0) ? (float)exp(-a * a) : 0.0f;
         }
         memset(w->tmpm, 0, (size_t)w->nmodes * sizeof(float));
@@ -378,20 +402,58 @@ void wave_add_paddle(wave *w, double width, double accel, double dt)
         free(fr); free(gt);
         return;
     }
-    /* The forcing is profile(x) * 1(y): its 2-D DCT is dct_x(profile) (x) dct_y(1),
-     * and dct_y of a constant is ny * c at n = 0 only.  So the paddle excites
-     * only the plane-wave modes (m, 0) and needs one 1-D transform, no buffer. */
-    const int nx = w->nx;
-    const double dx = w->dx, imp = accel * dt;
-    float *row = w->tmp;
-    for (int i = 0; i < nx; i++) {
-        const double x = (i + 0.5) * dx / width;
-        row[i] = x < 6.0 ? (float)(imp * exp(-x * x)) : 0.0f;
+
+    /* Rectangle.  p is the axis across the strip (the one the wall is normal to),
+     * q the axis along it.  The forcing is f(p) * g(q), and the 2-D DCT-II of a
+     * separable function is the outer product of the two 1-D transforms. */
+    if (wall < 0 || wall > 3) wall = 0;
+    const int along_y = wall < 2;               /* walls 0,1 are x = const: the strip runs along y */
+    const int np = along_y ? w->nx : w->ny, nq = along_y ? w->ny : w->nx;
+    const double dp = along_y ? w->dx : w->dy, dq = along_y ? w->dy : w->dx;
+    const double Lp = along_y ? w->Lx : w->Ly, Lq = along_y ? w->Ly : w->Lx;
+    const dct_plan *pp = along_y ? &w->px : &w->py, *pq = along_y ? &w->py : &w->px;
+    const int far = (wall & 1);                 /* the far wall: x = Lx or y = Ly */
+
+    double wd = width < 2.0 * dp ? 2.0 * dp : width;
+    float *f = w->tmp;
+    for (int i = 0; i < np; i++) {
+        const double c = (i + 0.5) * dp;
+        const double u = (far ? Lp - c : c) / wd;
+        f[i] = u < 6.0 ? (float)(imp * exp(-u * u)) : 0.0f;
     }
-    dct_forward(&w->px, row, row);
-    const float ny = (float)w->ny;
-    for (int m = 1; m < nx; m++)
-        if (w->omega[m] > 0.0f) w->B[m] += row[m] * ny / w->omega[m];
+    dct_forward(pp, f, f);
+
+    if (full) {
+        /* g == 1, whose DCT is nq at q = 0 and nothing else: only the plane-wave
+         * modes are excited, and this costs the one transform it always did */
+        const float cq = (float)nq;
+        for (int m = 1; m < np; m++) {
+            const size_t idx = along_y ? (size_t)m : (size_t)w->nx * m;
+            if (w->omega[idx] > 0.0f) w->B[idx] += f[m] * cq / w->omega[idx];
+        }
+        return;
+    }
+
+    float *g = malloc((size_t)nq * sizeof(float));
+    if (!g) return;
+    const double c0 = pos * Lq, sig = 0.5 * span * Lq;
+    for (int j = 0; j < nq; j++) {
+        const double v = ((j + 0.5) * dq - c0) / sig;
+        g[j] = (v > -6.0 && v < 6.0) ? (float)exp(-v * v) : 0.0f;
+    }
+    dct_forward(pq, g, g);
+    float gmax = 0.0f;
+    for (int n = 0; n < nq; n++) { const float a = fabsf(g[n]); if (a > gmax) gmax = a; }
+    const float gmin = 1e-6f * gmax;
+    for (int n = 0; n < nq; n++) {
+        const float gn = g[n];
+        if (fabsf(gn) < gmin) continue;
+        for (int m = 0; m < np; m++) {
+            const size_t idx = along_y ? (size_t)m + (size_t)w->nx * n : (size_t)n + (size_t)w->nx * m;
+            if (w->omega[idx] > 0.0f) w->B[idx] += f[m] * gn / w->omega[idx];
+        }
+    }
+    free(g);
 }
 
 void wave_breeze(wave *w, double k0, double amp, double dt)

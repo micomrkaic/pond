@@ -43,11 +43,16 @@ all: $(BIN)
 $(BIN): $(SRC) $(HDR)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -o $@ $(SRC) $(SDL_LIBS) $(LDLIBS)
 
-test: build/test_dct build/test_wave build/test_disk build/test_hos
+test: build/test_dct build/test_wave build/test_disk build/test_hos build/test_paddle
 	./build/test_dct
 	./build/test_wave
 	./build/test_disk
 	./build/test_hos
+	./build/test_paddle
+
+build/test_paddle: tests/test_paddle.c src/wave.c src/disk.c src/dct.c src/wave.h src/dct.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ tests/test_paddle.c src/wave.c src/disk.c src/dct.c $(LDLIBS)
 
 build/test_hos: tests/test_hos.c src/hos.c src/wave.c src/disk.c src/dct.c src/hos.h src/wave.h src/dct.h
 	@mkdir -p build

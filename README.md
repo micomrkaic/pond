@@ -25,6 +25,8 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     ./pond --basin 25x12 --depth 1.8       # any rectangle, in metres
     ./pond --shape disk --basin 10         # a round basin, 10 m across
     ./pond --hos --preset 3 --scene paddle # nonlinear, order 3 on the lowest 64x64 modes
+    ./pond --scene paddle --paddle-freq 1.2      # a wavemaker at 1.2 Hz: the water picks the wavelength
+    ./pond --scene paddle --paddle-span 0.12 --paddle-pos 0.25 --paddle-wall y=0
     ./pond --cpu-caustics                  # if the GPU pass is unavailable or suspect
     ./pond --mute                          # starts silent; --no-audio opens no device at all
                                            # POND_WAV=take.wav records what you hear
@@ -70,7 +72,10 @@ screen, one finger is the finger, two fingers orbit and pinch-zoom.
 | `,` `.` / `\` | depth / make it square again at the same area |
 | `r` `i`/`I` | rain on/off, rate |
 | `b` | breeze (directional wind sea) on/off |
-| `p` `k`/`K` | plane wavemaker on/off, wavelength |
+| `p` / `P` | wavemaker on/off / move it to the next wall |
+| `k`/`K` | its frequency (the wavelength follows from the dispersion relation) |
+| `l`/`L` | its span: the fraction of the wall it occupies, down to a point source |
+| `<` `>` | slide it along that wall (on the disk, round the rim) |
 | `-` `=` | time warp |
 | `x`/`X` | extra uniform damping |
 | `g`/`G` `f` | display gain, floor pattern |
@@ -131,6 +136,13 @@ starts the program.
     paddle        = off
     rain-rate     = 2           # drops per simulated second
     warp          = 1           # simulated seconds per real second
+
+    # ---- wavemaker ----
+    paddle-freq   = auto        # Hz; auto = 8 wavelengths across
+    paddle-wall   = x=0         # x=0, x=Lx, y=0, y=Ly (disk: the rim)
+    paddle-pos    = 0.5         # 0..1 along that wall
+    paddle-span   = 1           # 0..1 of it; 1 = the whole wall
+    paddle-stroke = 1           # multiplier on the stroke
 
     # ---- sound ----
     no-audio      = off         # do not open a device at all
@@ -261,6 +273,25 @@ float precision. There is no time-stepping error to accumulate. Sources
 are impulses: a drop adds $\Delta\eta$ (transformed into $\Delta A_n$), the
 wavemaker adds $\Delta\eta_t$ (transformed into $\Delta B_n = \Delta\dot a_n/\omega_n$).
 The $k = 0$ mode (the mean level) is pinned at zero.
+
+The wavemaker is driven, not tuned: it is a strip of velocity forcing beside
+one wall moving as $\cos\omega t$ with a fixed stroke, so the acceleration is
+$s\,\omega^2$ and $\omega$ is what you set. Its spatial spectrum is broad —
+a narrow strip is broad in $k$ — but only the modes with $\omega_n\approx\omega$
+grow secularly, so what you see is the wavelength the dispersion relation
+answers with, $k = k(\omega)$, and nothing else. `tests/test_paddle.c` drives
+a 3 m tank at 3 Hz and finds the peak mode within 1 % of $k(2\pi f)$; that
+inverse is a bisection on $\omega(k)$, which is strictly increasing.
+
+The forcing is $f(u)\,g(v)$ — a Gaussian of width `width` in the distance $u$
+from the wall, a Gaussian of the paddle's span in the coordinate $v$ along it
+— and the 2-D DCT-II of a separable function is the outer product of the two
+1-D transforms, so the paddle never touches real space. A full-wall paddle
+has $g \equiv 1$, whose transform is one non-zero coefficient, and costs the
+single 1-D transform it always did; a short one costs a second transform and
+a sum over the few tens of along-wall modes a Gaussian actually reaches
+(0.14 ms a frame at $512^2$, worst case). It is that cheapness that makes
+position and span free to move while the thing is running.
 
 The code keeps a fixed sub-step, $\Delta t = 1/240$ s at time-warp 1, with
 lazily cached powers of the per-mode rotor, so a frame of $p$ sub-steps is one
@@ -431,8 +462,9 @@ artefacts of the tiny cells there — are dropped at injection; besides being
 unphysical they decayed into denormal floats, which cost a hundred times a
 normal multiply and made the first version crawl. The rotor pass flushes
 anything below $10^{-30}$ to zero for the same reason. The wall paddle is
-separable in $(r,\theta)$ and goes straight into mode space through the few
-angular modes a 60° sector contains. Everything downstream — rotor
+separable in $(r,\theta)$ too and goes straight into mode space through the
+few angular modes its sector contains; opened to the whole rim it is
+axisymmetric, and makes rings that converge on the centre. Everything downstream — rotor
 propagation, damping, the breeze band, drops — is shared code indexing a flat
 mode array. The renderer uses a polar mesh (ring 0 drawn as the centre fan
 with a single averaged normal), a cylinder in the refraction intersection,
@@ -627,7 +659,7 @@ map with additive blending, which is the same forward map).
     src/dsp.[ch]      noise-suite synthesis library, unchanged
     src/render.[ch]   top-down CPU shading (--2d)
     src/main.c        SDL2 window, input, timing, bench, Emscripten loop
-    tests/            dct, wave, disk and hos tests (run with `make test`)
+    tests/            dct, wave, disk, hos and paddle tests (run with `make test`)
     web/shell.html    Emscripten shell
 
 The 3-D path was exercised under Xvfb with Mesa's llvmpipe (OpenGL 4.5 core).
