@@ -41,6 +41,9 @@ typedef struct {
 int  dct_plan_init(dct_plan *p, int n);   /* 0 on success, -1 if n invalid / OOM */
 void dct_plan_free(dct_plan *p);
 
+/* The underlying complex FFT of length n, in place, unnormalised (inverse=1 uses e^{+i}). */
+void dct_fft(const dct_plan *p, float *re, float *im, int inverse);
+
 /* 1-D; x and X may alias. */
 void dct_forward(const dct_plan *p, const float *x, float *X);
 void dct_inverse(const dct_plan *p, const float *X, float *x);

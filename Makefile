@@ -24,16 +24,16 @@ LDLIBS  ?= -lm
 SDL_CFLAGS := $(shell sdl2-config --cflags 2>/dev/null)
 SDL_LIBS   := $(shell sdl2-config --libs 2>/dev/null)
 
-SRC  := src/main.c src/wave.c src/dct.c src/render.c src/view3d.c src/text.c
+SRC  := src/main.c src/wave.c src/disk.c src/dct.c src/render.c src/view3d.c src/text.c
 HDR  := src/wave.h src/dct.h src/render.h src/view3d.h src/text.h src/gl.h src/font8x8.h
 BIN  := pond
 
 EMCC       ?= emcc
 # Fixed heap, no growth: growable memory gives the runtime a resizable
 # ArrayBuffer, which current Chrome refuses in TextDecoder (and elsewhere).
-# 128 MB is enough for a 512^2 grid; the browser build clamps the grid there.
+# 160 MB covers a 512^2 rectangle or a 512 x 256 disk basis; the browser build clamps the grid there.
 EMFLAGS    ?= -std=c17 -O3 -msimd128 -sUSE_SDL=2 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 \
-              -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=128MB -sMINIFY_HTML=0
+              -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=160MB -sMINIFY_HTML=0
 WEB_DIR    := build/web
 
 .PHONY: all web test bench clean
@@ -43,17 +43,22 @@ all: $(BIN)
 $(BIN): $(SRC) $(HDR)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -o $@ $(SRC) $(SDL_LIBS) $(LDLIBS)
 
-test: build/test_dct build/test_wave
+test: build/test_dct build/test_wave build/test_disk
 	./build/test_dct
 	./build/test_wave
+	./build/test_disk
+
+build/test_disk: tests/test_disk.c src/wave.c src/disk.c src/dct.c src/wave.h src/dct.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) -o $@ tests/test_disk.c src/wave.c src/disk.c src/dct.c $(LDLIBS)
 
 build/test_dct: tests/test_dct.c src/dct.c src/dct.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -o $@ tests/test_dct.c src/dct.c $(LDLIBS)
 
-build/test_wave: tests/test_wave.c src/wave.c src/dct.c src/wave.h src/dct.h
+build/test_wave: tests/test_wave.c src/wave.c src/disk.c src/dct.c src/wave.h src/dct.h
 	@mkdir -p build
-	$(CC) $(CFLAGS) -o $@ tests/test_wave.c src/wave.c src/dct.c $(LDLIBS)
+	$(CC) $(CFLAGS) -o $@ tests/test_wave.c src/wave.c src/disk.c src/dct.c $(LDLIBS)
 
 # headless timing; needs no display
 bench: $(BIN)

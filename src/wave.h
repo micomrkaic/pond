@@ -37,9 +37,23 @@
 #include "dct.h"
 #include <stdint.h>
 
+typedef enum { WAVE_RECT = 0, WAVE_DISK = 1 } wave_shape;
+
 typedef struct {
-    int nx, ny;
-    double Lx, Ly, dx, dy;     /* basin size [m], cell size [m]; cells need not be square */
+    wave_shape shape;
+    int nx, ny;                /* real-space grid: columns, rows.  Disk: nx = nt angles, ny = nr rings */
+    int nmodes;                /* length of the mode arrays */
+    double Lx, Ly, dx, dy;     /* basin size [m] (disk: the bounding square, 2R), cell size [m] */
+    /* disk only */
+    int nr, nt, M;             /* rings, angles, angular modes (nt/2 + 1) */
+    double R, dr, dth;
+    float *G, *kappa;          /* radial eigenbasis of the unit disk (M x nr x nr) and its wavenumbers (M x nr) */
+    int *ncut;                 /* per m: radial modes n >= ncut are beyond the grid's radial Nyquist (kept at zero) */
+    float *sq_rho, *isq_rho;   /* sqrt(rho_i) and its inverse */
+    float *spec_re, *spec_im;  /* scratch, nr x M */
+    float *fre, *fim;          /* scratch, nt */
+    float *tmpm;               /* scratch, nmodes */
+    dct_plan pt;               /* FFT plan of length nt */
     double depth;              /* [m] */
     double g, sigma, rho, nu;  /* 9.81, 0.072, 1000, 1e-6 for water */
     double gamma0;             /* extra uniform damping [1/s] (bottom/wall boundary layers, dirt) */
@@ -68,9 +82,12 @@ typedef struct {
 } wave;
 
 wave *wave_create(int nx, int ny, double Lx, double Ly, double depth);
+/* circular basin of diameter D: nt angles x nr rings (both powers of two, nt >= 8).
+ * Coordinates given to the sources are those of the bounding square [0, D]^2. */
+wave *wave_create_disk(int nt, int nr, double D, double depth);
 void  wave_destroy(wave *w);
 
-void  wave_set_pool(wave *w, double Lx, double Ly, double depth);   /* rebuilds dispersion tables; state kept */
+void  wave_set_pool(wave *w, double Lx, double Ly, double depth);   /* rebuilds dispersion tables; state kept.  Disk: Lx = Ly = D */
 void  wave_set_damping(wave *w, double gamma0);
 void  wave_clear(wave *w);
 
@@ -98,6 +115,11 @@ void  wave_breeze(wave *w, double k0, double amp, double dt);
 void  wave_set_mode(wave *w, int m, int n, float a, float b);
 
 double wave_omega(const wave *w, double k);
+/* disk internals (disk.c) */
+int   disk_basis_build(int nr, int M, float *G, float *kappa);
+void  disk_inverse(const wave *w, const float *modes, float *field);
+void  disk_forward_add(const wave *w, const float *field, float *modes);
+void  disk_add_separable(const wave *w, const float *f_r, const float *g_th, float *modes);
 double wave_norm(const wave *w);    /* sum A^2 + B^2 over modes */
 /* RMS surface slope of the realized field, a good dimensionless "how rough" number. */
 double wave_rms_slope(const wave *w);

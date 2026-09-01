@@ -50,6 +50,20 @@ double wave_omega(const wave *w, double k)
 
 static void build_dispersion(wave *w)
 {
+    if (w->shape == WAVE_DISK) {
+        const int nr = w->nr, M = w->M;
+        for (int plane = 0; plane < 2; plane++)
+            for (int m = 0; m < M; m++)
+                for (int n = 0; n < nr; n++) {
+                    const double k = w->kappa[(size_t)m * nr + n] / w->R;
+                    const size_t idx = (size_t)plane * M * nr + (size_t)m * nr + n;
+                    w->kmag[idx]  = (float)k;
+                    w->omega[idx] = (float)wave_omega(w, k);
+                    w->gamma[idx] = (float)(2.0 * w->nu * k * k + w->gamma0);
+                }
+        w->dt_rotor = -1.0;
+        return;
+    }
     const int nx = w->nx, ny = w->ny;
     for (int n = 0; n < ny; n++) {
         const double ky = M_PI * n / w->Ly;
@@ -67,7 +81,7 @@ static void build_dispersion(wave *w)
 
 static void build_rotor(wave *w, double dt)
 {
-    const size_t N = (size_t)w->nx * w->ny;
+    const size_t N = (size_t)w->nmodes;
     for (size_t i = 0; i < N; i++) {
         const double d = exp(-(double)w->gamma[i] * dt);
         const double th = (double)w->omega[i] * dt;
@@ -81,7 +95,7 @@ static void build_rotor(wave *w, double dt)
 /* R^p = R^{p-1} * R, computed lazily; exact up to float rounding */
 static void ensure_rotor_pow(wave *w, int p)
 {
-    const size_t N = (size_t)w->nx * w->ny;
+    const size_t N = (size_t)w->nmodes;
     while (w->rotor_pow_valid < p) {
         const int q = w->rotor_pow_valid + 1;
         const float *pr = (q == 2) ? w->Rr : w->Rpr[q - 1];
@@ -96,39 +110,81 @@ static void ensure_rotor_pow(wave *w, int p)
     }
 }
 
-wave *wave_create(int nx, int ny, double Lx, double Ly, double depth)
+static wave *alloc_common(int nx, int ny, int nmodes)
 {
     wave *w = calloc(1, sizeof *w);
     if (!w) return NULL;
-    w->nx = nx; w->ny = ny;
+    w->nx = nx; w->ny = ny; w->nmodes = nmodes;
     w->g = 9.81; w->sigma = 0.072; w->rho = 1000.0; w->nu = 1.0e-6;
     w->gamma0 = 0.03;
     w->rng = 0x9E3779B97F4A7C15ULL;
     w->dt_rotor = -1.0;
 
-    const size_t N = (size_t)nx * ny;
-    w->A = calloc(N, sizeof(float));   w->B = calloc(N, sizeof(float));
-    w->omega = malloc(N * sizeof(float)); w->gamma = malloc(N * sizeof(float));
-    w->kmag = malloc(N * sizeof(float));
-    w->Rr = malloc(N * sizeof(float)); w->Ri = malloc(N * sizeof(float));
+    const size_t N = (size_t)nx * ny, NM = (size_t)nmodes;
+    w->A = calloc(NM, sizeof(float));   w->B = calloc(NM, sizeof(float));
+    w->omega = malloc(NM * sizeof(float)); w->gamma = malloc(NM * sizeof(float));
+    w->kmag = malloc(NM * sizeof(float));
+    w->Rr = malloc(NM * sizeof(float)); w->Ri = malloc(NM * sizeof(float));
     w->eta = calloc(N, sizeof(float));
     w->src_d = calloc(N, sizeof(float)); w->src_v = calloc(N, sizeof(float));
     w->tmp = malloc((size_t)(nx > ny ? nx : ny) * sizeof(float));
     int ok = 1;
     for (int p = 2; p <= WAVE_MAXPOW; p++) {
-        w->Rpr[p] = malloc(N * sizeof(float)); w->Rpi[p] = malloc(N * sizeof(float));
+        w->Rpr[p] = malloc(NM * sizeof(float)); w->Rpi[p] = malloc(NM * sizeof(float));
         if (!w->Rpr[p] || !w->Rpi[p]) ok = 0;
     }
-    w->bz_idx = malloc(N * sizeof(int)); w->bz_w = malloc(N * sizeof(float));
+    w->bz_idx = malloc(NM * sizeof(int)); w->bz_w = malloc(NM * sizeof(float));
     w->bz_k0 = -1.0;
     if (!ok || !w->bz_idx || !w->bz_w ||
         !w->A || !w->B || !w->omega || !w->gamma || !w->kmag || !w->Rr || !w->Ri ||
-        !w->eta || !w->src_d || !w->src_v || !w->tmp ||
-        dct_plan_init(&w->px, nx) || dct_plan_init(&w->py, ny)) {
+        !w->eta || !w->src_d || !w->src_v || !w->tmp) {
         wave_destroy(w);
         return NULL;
     }
+    return w;
+}
+
+wave *wave_create(int nx, int ny, double Lx, double Ly, double depth)
+{
+    wave *w = alloc_common(nx, ny, nx * ny);
+    if (!w) return NULL;
+    w->shape = WAVE_RECT;
+    if (dct_plan_init(&w->px, nx) || dct_plan_init(&w->py, ny)) { wave_destroy(w); return NULL; }
     wave_set_pool(w, Lx, Ly, depth);
+    return w;
+}
+
+wave *wave_create_disk(int nt, int nr, double D, double depth)
+{
+    const int M = nt / 2 + 1;
+    wave *w = alloc_common(nt, nr, 2 * M * nr);
+    if (!w) return NULL;
+    w->shape = WAVE_DISK;
+    w->nt = nt; w->nr = nr; w->M = M;
+    w->G = malloc((size_t)M * nr * nr * sizeof(float));
+    w->kappa = malloc((size_t)M * nr * sizeof(float));
+    w->sq_rho = malloc((size_t)nr * sizeof(float)); w->isq_rho = malloc((size_t)nr * sizeof(float));
+    w->spec_re = malloc((size_t)nr * M * sizeof(float)); w->spec_im = malloc((size_t)nr * M * sizeof(float));
+    w->fre = malloc((size_t)nt * sizeof(float)); w->fim = malloc((size_t)nt * sizeof(float));
+    w->tmpm = malloc((size_t)w->nmodes * sizeof(float));
+    w->ncut = malloc((size_t)M * sizeof(int));
+    if (!w->G || !w->kappa || !w->sq_rho || !w->isq_rho || !w->spec_re || !w->spec_im || !w->fre || !w->fim || !w->tmpm || !w->ncut ||
+        dct_plan_init(&w->pt, nt) || disk_basis_build(nr, M, w->G, w->kappa)) {
+        wave_destroy(w);
+        return NULL;
+    }
+    for (int i = 0; i < nr; i++) {
+        const double rho = (i + 0.5) / nr;
+        w->sq_rho[i] = (float)sqrt(rho); w->isq_rho[i] = (float)(1.0 / sqrt(rho));
+    }
+    /* modes beyond the radial Nyquist of the unit disk are artefacts of the tiny inner
+     * cells (their eigenvectors live on one or two rings); they are never propagated */
+    for (int m = 0; m < M; m++) {
+        int n = 0;
+        while (n < nr && w->kappa[(size_t)m * nr + n] <= (float)(M_PI * nr)) n++;
+        w->ncut[m] = n;
+    }
+    wave_set_pool(w, D, D, depth);
     return w;
 }
 
@@ -139,15 +195,25 @@ void wave_destroy(wave *w)
     free(w->Rr); free(w->Ri); free(w->eta); free(w->src_d); free(w->src_v); free(w->tmp);
     for (int p = 2; p <= WAVE_MAXPOW; p++) { free(w->Rpr[p]); free(w->Rpi[p]); }
     free(w->bz_idx); free(w->bz_w);
-    dct_plan_free(&w->px); dct_plan_free(&w->py);
+    free(w->G); free(w->kappa); free(w->sq_rho); free(w->isq_rho);
+    free(w->spec_re); free(w->spec_im); free(w->fre); free(w->fim); free(w->tmpm); free(w->ncut);
+    if (w->px.n) dct_plan_free(&w->px);
+    if (w->py.n) dct_plan_free(&w->py);
+    if (w->pt.n) dct_plan_free(&w->pt);
     free(w);
 }
 
 void wave_set_pool(wave *w, double Lx, double Ly, double depth)
 {
+    if (w->shape == WAVE_DISK) Ly = Lx;           /* diameter */
     w->Lx = Lx; w->Ly = Ly;
     w->dx = Lx / w->nx;
     w->dy = Ly / w->ny;
+    if (w->shape == WAVE_DISK) {
+        w->R = 0.5 * Lx;
+        w->dr = w->R / w->nr;
+        w->dth = 2.0 * M_PI / w->nt;
+    }
     w->depth = depth;
     build_dispersion(w);
     w->bz_k0 = -1.0;      /* breeze band cache depends on the pool */
@@ -161,9 +227,9 @@ void wave_set_damping(wave *w, double gamma0)
 
 void wave_clear(wave *w)
 {
-    const size_t N = (size_t)w->nx * w->ny;
-    memset(w->A, 0, N * sizeof(float));
-    memset(w->B, 0, N * sizeof(float));
+    const size_t N = (size_t)w->nx * w->ny, NM = (size_t)w->nmodes;
+    memset(w->A, 0, NM * sizeof(float));
+    memset(w->B, 0, NM * sizeof(float));
     memset(w->src_d, 0, N * sizeof(float));
     memset(w->src_v, 0, N * sizeof(float));
     w->dirty_d = w->dirty_v = 0;
@@ -172,21 +238,43 @@ void wave_clear(wave *w)
 
 static void flush_sources(wave *w)
 {
-    const size_t N = (size_t)w->nx * w->ny;
+    const size_t N = (size_t)w->nx * w->ny, NM = (size_t)w->nmodes;
     if (w->dirty_d) {
-        dct2_forward(&w->px, &w->py, w->src_d, w->tmp);
-        for (size_t i = 0; i < N; i++) w->A[i] += w->src_d[i];
+        if (w->shape == WAVE_DISK) disk_forward_add(w, w->src_d, w->A);
+        else {
+            dct2_forward(&w->px, &w->py, w->src_d, w->tmp);
+            for (size_t i = 0; i < NM; i++) w->A[i] += w->src_d[i];
+        }
         memset(w->src_d, 0, N * sizeof(float));
         w->dirty_d = 0;
     }
     if (w->dirty_v) {
-        dct2_forward(&w->px, &w->py, w->src_v, w->tmp);
-        for (size_t i = 1; i < N; i++)
-            if (w->omega[i] > 0.0f) w->B[i] += w->src_v[i] / w->omega[i];
+        if (w->shape == WAVE_DISK) {
+            /* transform into a scratch mode array, then scale by 1/omega */
+            memset(w->tmpm, 0, NM * sizeof(float));
+            disk_forward_add(w, w->src_v, w->tmpm);
+            for (size_t i = 0; i < NM; i++) if (w->omega[i] > 0.0f) w->B[i] += w->tmpm[i] / w->omega[i];
+        } else {
+            dct2_forward(&w->px, &w->py, w->src_v, w->tmp);
+            for (size_t i = 1; i < NM; i++)
+                if (w->omega[i] > 0.0f) w->B[i] += w->src_v[i] / w->omega[i];
+        }
         memset(w->src_v, 0, N * sizeof(float));
         w->dirty_v = 0;
     }
-    w->A[0] = w->B[0] = 0.0f;   /* the pool does not change its mean level */
+    /* the pool does not change its mean level: pin the k = 0 mode(s) */
+    for (size_t i = 0; i < NM; i++) if (w->omega[i] <= 0.0f) w->A[i] = w->B[i] = 0.0f;
+    if (w->shape == WAVE_DISK) {
+        for (int plane = 0; plane < 2; plane++)
+            for (int m = 0; m < w->M; m++) {
+                const size_t off = (size_t)plane * w->M * w->nr + (size_t)m * w->nr;
+                const int nc = w->ncut[m];
+                if (nc < w->nr) {
+                    memset(w->A + off + nc, 0, (size_t)(w->nr - nc) * sizeof(float));
+                    memset(w->B + off + nc, 0, (size_t)(w->nr - nc) * sizeof(float));
+                }
+            }
+    }
 }
 
 void wave_step(wave *w, double dt, int nsub)
@@ -195,7 +283,7 @@ void wave_step(wave *w, double dt, int nsub)
     if (nsub <= 0) return;
     if (w->dt_rotor != dt) build_rotor(w, dt);
 
-    const size_t N = (size_t)w->nx * w->ny;
+    const size_t N = (size_t)w->nmodes;
     float *restrict A = w->A, *restrict B = w->B;
     int left = nsub;
     while (left > 0) {
@@ -205,8 +293,11 @@ void wave_step(wave *w, double dt, int nsub)
         const float *restrict Ri = (p == 1) ? w->Ri : w->Rpi[p];
         for (size_t i = 0; i < N; i++) {
             const float a = A[i], b = B[i], rr = Rr[i], ri = Ri[i];
-            A[i] = a * rr - b * ri;
-            B[i] = a * ri + b * rr;
+            float na = a * rr - b * ri, nb = a * ri + b * rr;
+            /* modes that have decayed to nothing become exact zeros: denormal floats
+             * would otherwise cost a hundred times a normal multiply in the transforms */
+            A[i] = (fabsf(na) < 1e-30f) ? 0.0f : na;
+            B[i] = (fabsf(nb) < 1e-30f) ? 0.0f : nb;
         }
         left -= p;
     }
@@ -215,6 +306,7 @@ void wave_step(wave *w, double dt, int nsub)
 
 void wave_realize(wave *w)
 {
+    if (w->shape == WAVE_DISK) { disk_inverse(w, w->A, w->eta); return; }
     const size_t N = (size_t)w->nx * w->ny;
     memcpy(w->eta, w->A, N * sizeof(float));
     dct2_inverse(&w->px, &w->py, w->eta, w->tmp);
@@ -223,6 +315,26 @@ void wave_realize(wave *w)
 void wave_add_drop(wave *w, double x, double y, double s, double amp)
 {
     const double reach = 5.0 * s, dx = w->dx, dy = w->dy;
+    if (w->shape == WAVE_DISK) {
+        /* (x, y) in the bounding square; stamp onto the rings that can reach it */
+        const double px = x - w->R, py = y - w->R, rc = sqrt(px * px + py * py);
+        const double inv2s2 = 1.0 / (2.0 * s * s);
+        int i0 = (int)floor((rc - reach) / w->dr), i1 = (int)ceil((rc + reach) / w->dr);
+        if (i0 < 0) i0 = 0;
+        if (i1 > w->nr - 1) i1 = w->nr - 1;
+        for (int i = i0; i <= i1; i++) {
+            const double r = (i + 0.5) * w->dr;
+            for (int j = 0; j < w->nt; j++) {
+                const double th = j * w->dth;
+                const double xx = r * cos(th) - px, yy = r * sin(th) - py;
+                const double q = (xx * xx + yy * yy) * inv2s2;
+                if (q < 12.0)
+                    w->src_d[(size_t)j + (size_t)w->nt * i] += (float)(amp * (1.0 - q) * exp(-q));
+            }
+        }
+        w->dirty_d = 1;
+        return;
+    }
     int i0 = (int)floor((x - reach) / dx), i1 = (int)ceil((x + reach) / dx);
     int j0 = (int)floor((y - reach) / dy), j1 = (int)ceil((y + reach) / dy);
     if (i0 < 0) i0 = 0;
@@ -245,6 +357,27 @@ void wave_add_drop(wave *w, double x, double y, double s, double amp)
 
 void wave_add_paddle(wave *w, double width, double accel, double dt)
 {
+    if (w->shape == WAVE_DISK) {
+        /* velocity forcing in a strip along the wall over a 60-degree sector at theta = 0:
+         * separable in (r, theta), so it goes straight into mode space */
+        const double imp = accel * dt;
+        float *fr = malloc(sizeof(float) * (size_t)w->nr), *gt = malloc(sizeof(float) * (size_t)w->nt);
+        if (!fr || !gt) { free(fr); free(gt); return; }
+        for (int i = 0; i < w->nr; i++) {
+            const double x = (w->R - (i + 0.5) * w->dr) / width;
+            fr[i] = x > 6.0 ? 0.0f : (float)(imp * exp(-x * x));
+        }
+        for (int j = 0; j < w->nt; j++) {
+            double th = j * w->dth; if (th > M_PI) th -= 2.0 * M_PI;
+            const double a = th / (M_PI / 6.0);
+            gt[j] = (a > -2.0 && a < 2.0) ? (float)exp(-a * a) : 0.0f;
+        }
+        memset(w->tmpm, 0, (size_t)w->nmodes * sizeof(float));
+        disk_add_separable(w, fr, gt, w->tmpm);
+        for (int i = 0; i < w->nmodes; i++) if (w->omega[i] > 0.0f) w->B[i] += w->tmpm[i] / w->omega[i];
+        free(fr); free(gt);
+        return;
+    }
     /* The forcing is profile(x) * 1(y): its 2-D DCT is dct_x(profile) (x) dct_y(1),
      * and dct_y of a constant is ny * c at n = 0 only.  So the paddle excites
      * only the plane-wave modes (m, 0) and needs one 1-D transform, no buffer. */
@@ -264,7 +397,27 @@ void wave_add_paddle(wave *w, double width, double accel, double dt)
 void wave_breeze(wave *w, double k0, double amp, double dt)
 {
     const size_t N = (size_t)w->nx * w->ny;
-    if (w->bz_k0 != k0) {
+    if (w->bz_k0 != k0 && w->shape == WAVE_DISK) {
+        int n = 0;
+        double W = 0;
+        for (int idx = 0; idx < w->nmodes; idx++) {
+            const int plane = idx / (w->M * w->nr), m = (idx / w->nr) % w->M;
+            if (plane == 1 && (m == 0 || m == w->nt / 2)) continue;
+            const double k = w->kmag[idx];
+            if (k <= 0 || k > 6.0 * k0) continue;
+            double wt;
+            if (k < k0) { const double d = (k - k0) / (0.35 * k0); wt = exp(-d * d); }
+            else        { wt = (k0 / k) * (k0 / k); }
+            wt *= 0.5;    /* the rectangle's cos^2 spread averages to 1/2 */
+            if (wt < 1e-3) continue;
+            w->bz_idx[n] = idx; w->bz_w[n] = (float)wt; n++;
+            W += wt * wt;
+        }
+        w->bz_n = n; w->bz_k0 = k0;
+        /* eta_rms = (2 / (nt sqrt(nr))) sqrt(sum A^2) on the disk (Parseval in theta,
+         * orthonormal radial basis in the rho-weighted inner product) */
+        w->bz_norm = W > 0 ? (float)(0.5 * w->nt * sqrt((double)w->nr) / sqrt(W)) : 0.0f;
+    } else if (w->bz_k0 != k0) {
         /* rebuild the band: indices, spectral weights, and the normalisation that
          * turns a per-mode kick into an rms surface elevation.
          * eta = (4/N^2) sum A c(x), <c^2> = 1/4  =>  eta_rms = (2/N^2) sqrt(sum A^2) */
@@ -303,7 +456,7 @@ void wave_set_mode(wave *w, int m, int n, float a, float b)
 
 double wave_norm(const wave *w)
 {
-    const size_t N = (size_t)w->nx * w->ny;
+    const size_t N = (size_t)w->nmodes;
     double s = 0;
     for (size_t i = 0; i < N; i++) s += (double)w->A[i] * w->A[i] + (double)w->B[i] * w->B[i];
     return s;
@@ -314,6 +467,19 @@ double wave_rms_slope(const wave *w)
     const int nx = w->nx, ny = w->ny;
     const float *e = w->eta;
     double s = 0;
+    if (w->shape == WAVE_DISK) {
+        /* polar: d/dr between rings, (1/r) d/dtheta around the ring */
+        for (int i = 0; i < ny - 1; i++) {
+            const double r = (i + 0.5) * w->dr;
+            for (int j = 0; j < nx; j++) {
+                const int jp = (j + 1) % nx;
+                const double er = (e[j + nx * (i + 1)] - e[j + nx * i]) / w->dr;
+                const double et = (e[jp + nx * i] - e[j + nx * i]) / (r * w->dth);
+                s += er * er + et * et;
+            }
+        }
+        return sqrt(s / ((double)(ny - 1) * nx));
+    }
     for (int j = 0; j < ny - 1; j++)
         for (int i = 0; i < nx - 1; i++) {
             const double ex = (e[i + 1 + nx * j] - e[i + nx * j]) / w->dx;

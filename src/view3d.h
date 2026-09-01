@@ -37,7 +37,7 @@ typedef struct view3d view3d;
 
 /* Call SDL_GL_SetAttribute through view3d_gl_attributes() before SDL_CreateWindow. */
 void     view3d_gl_attributes(int msaa);
-view3d  *view3d_create(SDL_Window *win, int nx, int ny);
+view3d  *view3d_create(SDL_Window *win, const wave *w);   /* grid size and shape come from the wave */
 void     view3d_destroy(view3d *v);
 
 void     view3d_set_pool(view3d *v, const wave *w);    /* rebuild the basin geometry */

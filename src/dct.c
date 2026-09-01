@@ -101,6 +101,8 @@ static void fft(const dct_plan *p, float *re, float *im, int inverse)
     }
 }
 
+void dct_fft(const dct_plan *p, float *re, float *im, int inverse) { fft(p, re, im, inverse); }
+
 void dct_forward(const dct_plan *p, const float *x, float *X)
 {
     const int n = p->n, h = n / 2;

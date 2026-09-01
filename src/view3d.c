@@ -123,6 +123,7 @@ static const char *vs_surf = GLSL(
     uniform vec2 u_L;
     uniform vec2 u_d;      /* cell size dx, dy */
     uniform float u_gain;
+    uniform int u_shape;
     uniform mat4 u_vp;
     out vec3 v_pos;
     out vec3 v_nrm;
@@ -131,6 +132,41 @@ static const char *vs_surf = GLSL(
         return texelFetch(u_height, ivec2(i, j), 0).r * u_gain;
     }
     void main() {
+        if (u_shape == 1) {
+            /* polar grid: column j = angle, row i = ring; ring 0 is drawn at the centre,
+             * ring nr-1 at the wall (half a cell of stretch), derivatives at the true radius */
+            int j = int(a_uv.x), i = int(a_uv.y);
+            int nt = u_n.x, nr = u_n.y;
+            float R = 0.5 * u_L.x;
+            float dr = R / float(nr), dth = 6.28318530718 / float(nt);
+            float th = dth * float(j);
+            float ct = cos(th), st = sin(th);
+            float h, gx, gz;
+            if (i == 0) {
+                /* all of ring 0 is drawn at the centre: one height and one gradient for the
+                 * whole fan, from opposite samples on ring 1 */
+                int jo = (j + nt / 2) % nt, jq = (j + nt / 4) % nt, jr = (j + 3 * nt / 4) % nt;
+                h = 0.5 * (H(j, 0) + H(jo, 0));
+                float r1 = 1.5 * dr;
+                float g1 = (H(j, 1) - H(jo, 1)) / (2.0 * r1);
+                float g2 = (H(jq, 1) - H(jr, 1)) / (2.0 * r1);
+                gx = g1 * ct - g2 * st; gz = g1 * st + g2 * ct;
+            } else {
+                h = H(j, i);
+                int ip = min(i + 1, nr - 1);
+                float fr = (ip - i + 1 == 2) ? 1.0 : 2.0;
+                float hr = (H(j, ip) - H(j, i - 1)) * fr / (2.0 * dr);
+                int jm = (j + nt - 1) % nt, jp = (j + 1) % nt;
+                float rs = (float(i) + 0.5) * dr;
+                float ht = (H(jp, i) - H(jm, i)) / (2.0 * dth * rs);
+                gx = hr * ct - ht * st; gz = hr * st + ht * ct;
+            }
+            float rm = R * float(i) / float(nr - 1);
+            v_pos = vec3(R + rm * ct, h, R + rm * st);
+            v_nrm = normalize(vec3(-gx, 1.0, -gz));
+            gl_Position = u_vp * vec4(v_pos, 1.0);
+            return;
+        }
         int i = int(a_uv.x), j = int(a_uv.y);
         float fx = (i == 0 || i == u_n.x - 1) ? 2.0 : 1.0;
         float fz = (j == 0 || j == u_n.y - 1) ? 2.0 : 1.0;
@@ -154,18 +190,32 @@ static const char *fs_surf = GLSL(
     uniform int u_walls;      /* 0 tiled walls, 1 walls absent (glass or none) */
     uniform int u_floor;      /* 0 tiled floor, 1 floor absent */
     uniform int u_extend;     /* 1: the floor plane continues outside the basin */
+    uniform int u_shape;      /* 0 box, 1 cylinder */
     uniform vec3 u_mu;
     uniform sampler2D u_light;
     out vec4 o;
 
+    bool in_basin(vec2 q) {
+        if (u_shape == 1) return length(q - 0.5 * u_L) <= 0.5 * u_L.x;
+        return q.x >= 0.0 && q.x <= u_L.x && q.y >= 0.0 && q.y <= u_L.y;
+    }
+
     /* colour seen along direction T from surface point P, inside the basin */
     vec3 inside(vec3 P, vec3 T) {
-        /* distance to the wall planes and to the floor / surface planes */
+        /* distance to the walls and to the floor / surface planes */
         float tw = 1e30;
-        if (T.x < 0.0) tw = min(tw, (0.0 - P.x) / T.x);
-        if (T.x > 0.0) tw = min(tw, (u_L.x - P.x) / T.x);
-        if (T.z < 0.0) tw = min(tw, (0.0 - P.z) / T.z);
-        if (T.z > 0.0) tw = min(tw, (u_L.y - P.z) / T.z);
+        if (u_shape == 1) {
+            vec2 C = 0.5 * u_L; float R = 0.5 * u_L.x;
+            vec2 pp = P.xz - C, dd = T.xz;
+            float a = dot(dd, dd), b = dot(pp, dd), c = dot(pp, pp) - R * R;
+            float disc = b * b - a * c;
+            if (a > 1e-12 && disc > 0.0) tw = (-b + sqrt(disc)) / a;
+        } else {
+            if (T.x < 0.0) tw = min(tw, (0.0 - P.x) / T.x);
+            if (T.x > 0.0) tw = min(tw, (u_L.x - P.x) / T.x);
+            if (T.z < 0.0) tw = min(tw, (0.0 - P.z) / T.z);
+            if (T.z > 0.0) tw = min(tw, (u_L.y - P.z) / T.z);
+        }
         float tv = 1e30;
         if (T.y < 0.0) tv = (-u_depth - P.y) / T.y;
         if (T.y > 0.0) tv = (0.0 - P.y) / T.y;
@@ -179,7 +229,7 @@ static const char *fs_surf = GLSL(
             else {
                 vec3 Q = P + tv * T;
                 vec3 col = pattern(Q.xz, u_tile, u_style);
-                if (Q.x >= 0.0 && Q.x <= u_L.x && Q.z >= 0.0 && Q.z <= u_L.y) {
+                if (in_basin(Q.xz)) {
                     float lm = texture(u_light, Q.xz / u_L).r * 4.0;
                     c = col * (0.30 + 0.70 * lm);
                 } else {
@@ -191,8 +241,12 @@ static const char *fs_surf = GLSL(
             if (u_walls == 1) c = sky(T);
             else {
                 vec3 Q = P + tw * T;
-                bool xwall = (T.x < 0.0 && Q.x < 1e-4 * u_L.x) || (T.x > 0.0 && Q.x > u_L.x - 1e-4 * u_L.x);
-                vec2 q = xwall ? vec2(Q.z, Q.y) : vec2(Q.x, Q.y);
+                vec2 q;
+                if (u_shape == 1) q = vec2(atan(Q.z - 0.5 * u_L.y, Q.x - 0.5 * u_L.x) * 0.5 * u_L.x, Q.y);
+                else {
+                    bool xwall = (T.x < 0.0 && Q.x < 1e-4 * u_L.x) || (T.x > 0.0 && Q.x > u_L.x - 1e-4 * u_L.x);
+                    q = xwall ? vec2(Q.z, Q.y) : vec2(Q.x, Q.y);
+                }
                 c = pattern(q, u_tile, u_style) * 0.55;
             }
         } else {
@@ -256,6 +310,7 @@ static const char *fs_solid = GLSL(
     uniform float u_tile;
     uniform int u_style;
     uniform vec3 u_mu;
+    uniform int u_shape;
     uniform sampler2D u_light;
     out vec4 o;
     void main() {
@@ -270,10 +325,18 @@ static const char *fs_solid = GLSL(
             float dist = length(D); D /= dist;
             float t = dist;
             if (D.y > 0.0) t = min(t, (0.0 - v_pos.y) / D.y);
-            if (D.x < 0.0) t = min(t, (0.0 - v_pos.x) / D.x);
-            if (D.x > 0.0) t = min(t, (u_L.x - v_pos.x) / D.x);
-            if (D.z < 0.0) t = min(t, (0.0 - v_pos.z) / D.z);
-            if (D.z > 0.0) t = min(t, (u_L.y - v_pos.z) / D.z);
+            if (u_shape == 1) {
+                vec2 C = 0.5 * u_L; float R = 0.5 * u_L.x;
+                vec2 pp = v_pos.xz - C, dd = D.xz;
+                float a = dot(dd, dd), b = dot(pp, dd), cc = dot(pp, pp) - R * R;
+                float disc = b * b - a * cc;
+                if (a > 1e-12 && disc > 0.0) t = min(t, (-b + sqrt(disc)) / a);
+            } else {
+                if (D.x < 0.0) t = min(t, (0.0 - v_pos.x) / D.x);
+                if (D.x > 0.0) t = min(t, (u_L.x - v_pos.x) / D.x);
+                if (D.z < 0.0) t = min(t, (0.0 - v_pos.z) / D.z);
+                if (D.z > 0.0) t = min(t, (u_L.y - v_pos.z) / D.z);
+            }
             vec3 att = exp(-u_mu * max(t, 0.0));
             c = c * att + SCATTER * (1.0 - att);
         } else {
@@ -371,7 +434,11 @@ struct view3d {
     SDL_Window *win;
     SDL_GLContext ctx;
     int nx, ny, W, H;
-    float Lx, Ly, depth, dx, dy;
+    int shape;                     /* 0 rectangle, 1 disk */
+    float Lx, Ly, depth, dx, dy;   /* disk: Lx = Ly = 2R, dx = dtheta, dy = dr */
+    int lm_w, lm_h;                /* caustic light map size */
+    /* vertex ranges in vbo_solid: slab, walls, table, inner floor */
+    int slab_off, slab_n, walls_off, walls_n, table_off, table_n, inner_off, inner_n;
     float yaw, pitch, dist, cx, cz;
 
     GLuint p_bg, p_surf, p_solid, p_sides, p_glass, p_ovl;
@@ -382,6 +449,7 @@ struct view3d {
     GLuint tex_h, tex_lm, tex_ovl;
 
     float *lm_acc; float *lm_tmp; uint8_t *lm8;
+    float *cs_tab;                 /* disk: cos, sin per angle */
     canvas ovl; int ovl_dirty, ovl_w, ovl_h;
     char hud[256]; const char *const *help; int nhelp, show_help;
 
@@ -489,36 +557,130 @@ static void box_faces(float *out, int *n, float x0, float x1, float y0, float y1
     }
 }
 
-/* vertex ranges in vbo_solid */
-#define SOLID_SLAB   0     /* 36: basin slab, top face = floor (kind 0)        */
-#define SOLID_WALLS  36    /* 144: four wall boxes (kind 1)                    */
-#define SOLID_TABLE  180   /* 36: extended slab, top face sunlit (kind 3)      */
-#define SOLID_INNER  216   /* 6: floor quad inside the basin (kind 0), for the extended slab */
-#define SOLID_TOTAL  222
+/* emit a quad (two triangles) with vertex order fixed so the winding matches the normal */
+static void quad(float *out, int *n, const float *p0, const float *p1, const float *p2, const float *p3,
+                 const float *nrm, float kind)
+{
+    float e1[3] = { p1[0]-p0[0], p1[1]-p0[1], p1[2]-p0[2] }, e2[3] = { p2[0]-p0[0], p2[1]-p0[1], p2[2]-p0[2] }, cr[3];
+    v3cross(e1, e2, cr);
+    int flip = (cr[0]*nrm[0] + cr[1]*nrm[1] + cr[2]*nrm[2]) < 0.0f;
+    const float *tri[6] = { p0, p1, p2, p0, p2, p3 };
+    if (flip) { tri[1] = p2; tri[2] = p1; tri[4] = p3; tri[5] = p2; }
+    for (int t = 0; t < 6; t++) {
+        float *v = out + (*n) * 7;
+        v[0] = tri[t][0]; v[1] = tri[t][1]; v[2] = tri[t][2];
+        v[3] = nrm[0]; v[4] = nrm[1]; v[5] = nrm[2]; v[6] = kind;
+        (*n)++;
+    }
+}
+
+static void tri(float *out, int *n, const float *p0, const float *p1, const float *p2, const float *nrm, float kind)
+{
+    float e1[3] = { p1[0]-p0[0], p1[1]-p0[1], p1[2]-p0[2] }, e2[3] = { p2[0]-p0[0], p2[1]-p0[1], p2[2]-p0[2] }, cr[3];
+    v3cross(e1, e2, cr);
+    int flip = (cr[0]*nrm[0] + cr[1]*nrm[1] + cr[2]*nrm[2]) < 0.0f;
+    const float *t3[3] = { p0, flip ? p2 : p1, flip ? p1 : p2 };
+    for (int t = 0; t < 3; t++) {
+        float *v = out + (*n) * 7;
+        v[0] = t3[t][0]; v[1] = t3[t][1]; v[2] = t3[t][2];
+        v[3] = nrm[0]; v[4] = nrm[1]; v[5] = nrm[2]; v[6] = kind;
+        (*n)++;
+    }
+}
+
+#define DISK_SEGS 96
 
 static void build_solid(view3d *v)
 {
     const float L = v->Lx, Lz = v->Ly, h = v->depth;
     const float Lmax = L > Lz ? L : Lz;
     const float t = 0.03f * Lmax, fb = 0.06f * Lmax, E = 0.15f * Lmax;
-    float *buf = malloc(sizeof(float) * 7 * SOLID_TOTAL);
+    float *buf;
     int n = 0;
-    box_faces(buf, &n, -t, L + t, -h - t, -h, -t, Lz + t, 0.0f, 1.0f);   /* slab: top face is the floor */
-    box_faces(buf, &n, -t, 0.0f,  -h, fb, -t, Lz + t, 1.0f, 1.0f);
-    box_faces(buf, &n, L, L + t,  -h, fb, -t, Lz + t, 1.0f, 1.0f);
-    box_faces(buf, &n, 0.0f, L,   -h, fb, -t, 0.0f,   1.0f, 1.0f);
-    box_faces(buf, &n, 0.0f, L,   -h, fb, Lz, Lz + t, 1.0f, 1.0f);
-    /* a table the basin sits on when the walls are invisible: floor plane continues */
-    box_faces(buf, &n, -E, L + E, -h - t, -h, -E, Lz + E, 3.0f, 1.0f);
-    {
-        const float eps = 0.0005f * Lmax, y = -h + eps;
-        const float q[6][2] = { {0, 0}, {L, 0}, {L, Lz}, {0, 0}, {L, Lz}, {0, Lz} };
-        for (int k = 0; k < 6; k++) {
-            float *p = buf + (size_t)n * 7;
-            p[0] = q[k][0]; p[1] = y; p[2] = q[k][1];
-            p[3] = 0; p[4] = 1; p[5] = 0; p[6] = 0.0f;
-            n++;
+    if (v->shape == 0) {
+        buf = malloc(sizeof(float) * 7 * 222);
+        v->slab_off = n;
+        box_faces(buf, &n, -t, L + t, -h - t, -h, -t, Lz + t, 0.0f, 1.0f);   /* slab: top face is the floor */
+        v->slab_n = n - v->slab_off;
+        v->walls_off = n;
+        box_faces(buf, &n, -t, 0.0f,  -h, fb, -t, Lz + t, 1.0f, 1.0f);
+        box_faces(buf, &n, L, L + t,  -h, fb, -t, Lz + t, 1.0f, 1.0f);
+        box_faces(buf, &n, 0.0f, L,   -h, fb, -t, 0.0f,   1.0f, 1.0f);
+        box_faces(buf, &n, 0.0f, L,   -h, fb, Lz, Lz + t, 1.0f, 1.0f);
+        v->walls_n = n - v->walls_off;
+        /* a table the basin sits on when the walls are invisible: floor plane continues */
+        v->table_off = n;
+        box_faces(buf, &n, -E, L + E, -h - t, -h, -E, Lz + E, 3.0f, 1.0f);
+        v->table_n = n - v->table_off;
+        v->inner_off = n;
+        {
+            const float eps = 0.0005f * Lmax, y = -h + eps;
+            const float q[6][2] = { {0, 0}, {L, 0}, {L, Lz}, {0, 0}, {L, Lz}, {0, Lz} };
+            for (int k = 0; k < 6; k++) {
+                float *p = buf + (size_t)n * 7;
+                p[0] = q[k][0]; p[1] = y; p[2] = q[k][1];
+                p[3] = 0; p[4] = 1; p[5] = 0; p[6] = 0.0f;
+                n++;
+            }
         }
+        v->inner_n = n - v->inner_off;
+    } else {
+        /* cylinder: walls are a ring R..R+t from -h to fb; slab a disc of radius R+t */
+        const float R = 0.5f * L, cx = R, cz = R;
+        const int S = DISK_SEGS;
+        buf = malloc(sizeof(float) * 7 * (size_t)(S * (18 + 12) + 36 + S * 3 + 16));
+        const float up[3] = { 0, 1, 0 }, down[3] = { 0, -1, 0 };
+        float pa[3], pb[3], pc[3], pd[3], ctr[3], nrm[3];
+        v->slab_off = n;
+        for (int sgm = 0; sgm < S; sgm++) {
+            float a0 = 2.0f * (float)M_PI * sgm / S, a1 = 2.0f * (float)M_PI * (sgm + 1) / S, am = 0.5f * (a0 + a1);
+            float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
+            /* slab top (floor, kind 0) and bottom (kind 1) fans, side (kind 1) */
+            ctr[0] = cx; ctr[1] = -h; ctr[2] = cz;
+            pa[0] = cx + (R + t) * c0; pa[1] = -h; pa[2] = cz + (R + t) * s0;
+            pb[0] = cx + (R + t) * c1; pb[1] = -h; pb[2] = cz + (R + t) * s1;
+            tri(buf, &n, ctr, pa, pb, up, 0.0f);
+            ctr[1] = pa[1] = pb[1] = -h - t;
+            tri(buf, &n, ctr, pa, pb, down, 1.0f);
+            pc[0] = pa[0]; pc[1] = -h; pc[2] = pa[2]; pd[0] = pb[0]; pd[1] = -h; pd[2] = pb[2];
+            nrm[0] = cosf(am); nrm[1] = 0; nrm[2] = sinf(am);
+            quad(buf, &n, pa, pb, pd, pc, nrm, 1.0f);
+        }
+        v->slab_n = n - v->slab_off;
+        v->walls_off = n;
+        for (int sgm = 0; sgm < S; sgm++) {
+            float a0 = 2.0f * (float)M_PI * sgm / S, a1 = 2.0f * (float)M_PI * (sgm + 1) / S, am = 0.5f * (a0 + a1);
+            float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
+            float ni[3] = { -cosf(am), 0, -sinf(am) }, no[3] = { cosf(am), 0, sinf(am) };
+            /* inner face at R */
+            pa[0] = cx + R * c0; pa[1] = -h; pa[2] = cz + R * s0;
+            pb[0] = cx + R * c1; pb[1] = -h; pb[2] = cz + R * s1;
+            pc[0] = pb[0]; pc[1] = fb; pc[2] = pb[2];
+            pd[0] = pa[0]; pd[1] = fb; pd[2] = pa[2];
+            quad(buf, &n, pa, pb, pc, pd, ni, 1.0f);
+            /* outer face at R + t */
+            float qa[3] = { cx + (R + t) * c0, -h, cz + (R + t) * s0 }, qb[3] = { cx + (R + t) * c1, -h, cz + (R + t) * s1 };
+            float qc[3] = { qb[0], fb, qb[2] }, qd[3] = { qa[0], fb, qa[2] };
+            quad(buf, &n, qa, qb, qc, qd, no, 1.0f);
+            /* top ring */
+            quad(buf, &n, pd, pc, qc, qd, up, 1.0f);
+        }
+        v->walls_n = n - v->walls_off;
+        v->table_off = n;
+        box_faces(buf, &n, -E, L + E, -h - t, -h, -E, L + E, 3.0f, 1.0f);
+        v->table_n = n - v->table_off;
+        v->inner_off = n;
+        {
+            const float eps = 0.0005f * Lmax, y = -h + eps;
+            ctr[0] = cx; ctr[1] = y; ctr[2] = cz;
+            for (int sgm = 0; sgm < S; sgm++) {
+                float a0 = 2.0f * (float)M_PI * sgm / S, a1 = 2.0f * (float)M_PI * (sgm + 1) / S;
+                pa[0] = cx + R * cosf(a0); pa[1] = y; pa[2] = cz + R * sinf(a0);
+                pb[0] = cx + R * cosf(a1); pb[1] = y; pb[2] = cz + R * sinf(a1);
+                tri(buf, &n, ctr, pa, pb, up, 0.0f);
+            }
+        }
+        v->inner_n = n - v->inner_off;
     }
     glBindBuffer(GL_ARRAY_BUFFER, v->vbo_solid);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(float) * 7 * n), buf, GL_STATIC_DRAW);
@@ -531,14 +693,25 @@ static void build_surface(view3d *v)
     float *verts = malloc(sizeof(float) * 2 * (size_t)nx * ny);
     for (int j = 0; j < ny; j++)
         for (int i = 0; i < nx; i++) { verts[2 * (i + nx * j)] = (float)i; verts[2 * (i + nx * j) + 1] = (float)j; }
-    GLuint *idx = malloc(sizeof(GLuint) * 6 * (size_t)(nx - 1) * (ny - 1));
+    GLuint *idx = malloc(sizeof(GLuint) * 6 * (size_t)nx * ny);
     int n = 0;
-    for (int j = 0; j < ny - 1; j++)
-        for (int i = 0; i < nx - 1; i++) {
-            GLuint a = (GLuint)(i + nx * j), b = a + 1, c = a + (GLuint)nx, d = c + 1;
-            idx[n++] = a; idx[n++] = c; idx[n++] = b;
-            idx[n++] = b; idx[n++] = c; idx[n++] = d;
-        }
+    if (v->shape == 0) {
+        for (int j = 0; j < ny - 1; j++)
+            for (int i = 0; i < nx - 1; i++) {
+                GLuint a = (GLuint)(i + nx * j), b = a + 1, c = a + (GLuint)nx, d = c + 1;
+                idx[n++] = a; idx[n++] = c; idx[n++] = b;
+                idx[n++] = b; idx[n++] = c; idx[n++] = d;
+            }
+    } else {
+        /* rings j (rows) x angles i (columns), closed in the angle */
+        for (int j = 0; j < ny - 1; j++)
+            for (int i = 0; i < nx; i++) {
+                int i1 = (i + 1) % nx;
+                GLuint a = (GLuint)(i + nx * j), b = (GLuint)(i1 + nx * j), c = (GLuint)(i + nx * (j + 1)), d = (GLuint)(i1 + nx * (j + 1));
+                idx[n++] = a; idx[n++] = c; idx[n++] = b;
+                idx[n++] = b; idx[n++] = c; idx[n++] = d;
+            }
+    }
     v->n_surf_idx = n;
     glBindVertexArray(v->vao_surf);
     glBindBuffer(GL_ARRAY_BUFFER, v->vbo_surf);
@@ -553,26 +726,43 @@ static void build_surface(view3d *v)
 
 static void build_sides(view3d *v)
 {
-    /* four strips, one column per edge cell (same x/z mapping as the surface mesh, so
-     * the top edge coincides with it), plus a flat bottom face.
-     * vertex = uv(2) frac(2) bottom(1) nrm(3) */
+    /* vertex = uv(2) frac(2) bottom(1) nrm(3).  Rectangle: four strips, one column per
+     * edge cell (same x/z mapping as the surface mesh, so the top edge coincides with it).
+     * Disk: one closed strip around the rim.  Then a flat bottom face. */
     const int nx = v->nx, ny = v->ny, VS = 8;
-    int cols = 2 * nx + 2 * ny;
-    float *verts = malloc(sizeof(float) * VS * (2 * (size_t)cols + 4));
-    GLuint *idx = malloc(sizeof(GLuint) * (6 * (size_t)cols + 6));
+    int cols = (v->shape == 0) ? 2 * nx + 2 * ny : nx + 1;
+    float *verts = malloc(sizeof(float) * VS * (2 * (size_t)cols + (size_t)nx + 4));
+    GLuint *idx = malloc(sizeof(GLuint) * (6 * (size_t)cols + 3 * (size_t)nx + 6));
     int nv = 0, ni = 0;
-    for (int wall = 0; wall < 4; wall++) {
-        int along = (wall < 2) ? nx : ny;
-        for (int c = 0; c < along; c++) {
-            float frac = (float)c / (float)(along - 1);
-            float u, w, fx, fz, nX = 0, nZ = 0;
-            if (wall == 0)      { u = (float)c; w = 0.0f;            fx = frac; fz = 0.0f; nZ = -1; }
-            else if (wall == 1) { u = (float)c; w = (float)(ny - 1); fx = frac; fz = 1.0f; nZ =  1; }
-            else if (wall == 2) { u = 0.0f;     w = (float)c;        fx = 0.0f; fz = frac; nX = -1; }
-            else                { u = (float)(nx - 1); w = (float)c; fx = 1.0f; fz = frac; nX =  1; }
+    if (v->shape == 0) {
+        for (int wall = 0; wall < 4; wall++) {
+            int along = (wall < 2) ? nx : ny;
+            for (int c = 0; c < along; c++) {
+                float frac = (float)c / (float)(along - 1);
+                float u, w, fx, fz, nX = 0, nZ = 0;
+                if (wall == 0)      { u = (float)c; w = 0.0f;            fx = frac; fz = 0.0f; nZ = -1; }
+                else if (wall == 1) { u = (float)c; w = (float)(ny - 1); fx = frac; fz = 1.0f; nZ =  1; }
+                else if (wall == 2) { u = 0.0f;     w = (float)c;        fx = 0.0f; fz = frac; nX = -1; }
+                else                { u = (float)(nx - 1); w = (float)c; fx = 1.0f; fz = frac; nX =  1; }
+                for (int b = 0; b < 2; b++) {
+                    float *p = verts + nv * VS;
+                    p[0] = u; p[1] = w; p[2] = fx; p[3] = fz; p[4] = (float)b; p[5] = nX; p[6] = 0; p[7] = nZ;
+                    nv++;
+                }
+                if (c > 0) {
+                    GLuint t0 = (GLuint)(nv - 4), b0 = t0 + 1, t1 = t0 + 2, b1 = t0 + 3;
+                    idx[ni++] = t0; idx[ni++] = b0; idx[ni++] = t1;
+                    idx[ni++] = t1; idx[ni++] = b0; idx[ni++] = b1;
+                }
+            }
+        }
+    } else {
+        for (int c = 0; c <= nx; c++) {
+            float th = 2.0f * (float)M_PI * (float)c / (float)nx, ct = cosf(th), st = sinf(th);
             for (int b = 0; b < 2; b++) {
                 float *p = verts + nv * VS;
-                p[0] = u; p[1] = w; p[2] = fx; p[3] = fz; p[4] = (float)b; p[5] = nX; p[6] = 0; p[7] = nZ;
+                p[0] = (float)(c % nx); p[1] = (float)(ny - 1); p[2] = 0.5f + 0.5f * ct; p[3] = 0.5f + 0.5f * st;
+                p[4] = (float)b; p[5] = ct; p[6] = 0; p[7] = st;
                 nv++;
             }
             if (c > 0) {
@@ -584,7 +774,7 @@ static void build_sides(view3d *v)
     }
     v->n_sides_idx = ni;
     /* bottom face of the water body (drawn only when there is no container) */
-    {
+    if (v->shape == 0) {
         const float corners[4][2] = { {0, 0}, {1, 0}, {1, 1}, {0, 1} };
         GLuint base = (GLuint)nv;
         for (int c = 0; c < 4; c++) {
@@ -594,6 +784,19 @@ static void build_sides(view3d *v)
         }
         idx[ni++] = base; idx[ni++] = base + 1; idx[ni++] = base + 2;
         idx[ni++] = base; idx[ni++] = base + 2; idx[ni++] = base + 3;
+    } else {
+        GLuint ctr = (GLuint)nv;
+        float *p = verts + nv * VS;
+        p[0] = 0; p[1] = 0; p[2] = 0.5f; p[3] = 0.5f; p[4] = 1.0f; p[5] = 0; p[6] = -1; p[7] = 0;
+        nv++;
+        GLuint base = (GLuint)nv;
+        for (int c = 0; c <= nx; c++) {
+            float th = 2.0f * (float)M_PI * (float)c / (float)nx;
+            p = verts + nv * VS;
+            p[0] = 0; p[1] = 0; p[2] = 0.5f + 0.5f * cosf(th); p[3] = 0.5f + 0.5f * sinf(th); p[4] = 1.0f; p[5] = 0; p[6] = -1; p[7] = 0;
+            nv++;
+        }
+        for (int c = 0; c < nx; c++) { idx[ni++] = ctr; idx[ni++] = base + (GLuint)c; idx[ni++] = base + (GLuint)c + 1; }
     }
     v->n_bottom_idx = ni - v->n_sides_idx;
 
@@ -635,11 +838,15 @@ void view3d_gl_attributes(int msaa)
     }
 }
 
-view3d *view3d_create(SDL_Window *win, int nx, int ny)
+view3d *view3d_create(SDL_Window *win, const wave *w)
 {
     view3d *v = calloc(1, sizeof *v);
     if (!v) return NULL;
+    const int nx = w->nx, ny = w->ny;
     v->win = win; v->nx = nx; v->ny = ny;
+    v->shape = (w->shape == WAVE_DISK) ? 1 : 0;
+    v->lm_w = (v->shape == 0) ? nx : nx / 2;
+    v->lm_h = (v->shape == 0) ? ny : nx / 2;
     v->ctx = SDL_GL_CreateContext(win);
     if (!v->ctx) {
         /* retry without multisampling */
@@ -694,7 +901,7 @@ view3d *view3d_create(SDL_Window *win, int nx, int ny)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, nx, ny, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, v->lm_w, v->lm_h, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
 
     glGenTextures(1, &v->tex_ovl);
     glBindTexture(GL_TEXTURE_2D, v->tex_ovl);
@@ -703,9 +910,13 @@ view3d *view3d_create(SDL_Window *win, int nx, int ny)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    v->lm_acc = malloc(sizeof(float) * (size_t)nx * ny);
-    v->lm_tmp = malloc(sizeof(float) * (size_t)nx * ny);
-    v->lm8 = malloc((size_t)nx * ny);
+    v->lm_acc = malloc(sizeof(float) * (size_t)v->lm_w * v->lm_h);
+    v->lm_tmp = malloc(sizeof(float) * (size_t)v->lm_w * v->lm_h);
+    v->lm8 = malloc((size_t)v->lm_w * v->lm_h);
+    if (v->shape == 1) {
+        v->cs_tab = malloc(sizeof(float) * 2 * (size_t)nx);
+        for (int j = 0; j < nx; j++) { v->cs_tab[2 * j] = cosf(2.0f * (float)M_PI * j / nx); v->cs_tab[2 * j + 1] = sinf(2.0f * (float)M_PI * j / nx); }
+    }
     v->ovl_dirty = 1;
     v->yaw = 35.0f; v->pitch = 42.0f;
     GLenum err = glGetError();
@@ -716,14 +927,16 @@ view3d *view3d_create(SDL_Window *win, int nx, int ny)
 void view3d_destroy(view3d *v)
 {
     if (!v) return;
-    free(v->lm_acc); free(v->lm_tmp); free(v->lm8); free(v->ovl.rgba); free(v->capture);
+    free(v->lm_acc); free(v->lm_tmp); free(v->lm8); free(v->cs_tab); free(v->ovl.rgba); free(v->capture);
     if (v->ctx) SDL_GL_DeleteContext(v->ctx);
     free(v);
 }
 
 void view3d_set_pool(view3d *v, const wave *w)
 {
-    v->Lx = (float)w->Lx; v->Ly = (float)w->Ly; v->depth = (float)w->depth; v->dx = (float)w->dx; v->dy = (float)w->dy;
+    v->Lx = (float)w->Lx; v->Ly = (float)w->Ly; v->depth = (float)w->depth;
+    if (w->shape == WAVE_DISK) { v->dx = (float)w->dth; v->dy = (float)w->dr; }
+    else { v->dx = (float)w->dx; v->dy = (float)w->dy; }
     v->cx = 0.5f * v->Lx; v->cz = 0.5f * v->Ly;
     build_solid(v);
 }
@@ -786,7 +999,10 @@ int view3d_pick(const view3d *v, int mx, int my, double *x, double *y)
     float t = -v->cam[1] / d[1];
     if (t <= 0.0f) return 0;
     float px = v->cam[0] + t * d[0], pz = v->cam[2] + t * d[2];
-    if (px < 0.0f || px > v->Lx || pz < 0.0f || pz > v->Ly) return 0;
+    if (v->shape == 1) {
+        float R = 0.5f * v->Lx, ex = px - R, ez = pz - R;
+        if (ex * ex + ez * ez > R * R) return 0;
+    } else if (px < 0.0f || px > v->Lx || pz < 0.0f || pz > v->Ly) return 0;
     *x = px; *y = pz;
     return 1;
 }
@@ -800,11 +1016,12 @@ static inline int mirror_idx(int i, int n) { return i < 0 ? -1 - i : (i >= n ? 2
 
 static void compute_caustics(view3d *v, const wave *w, const view3d_params *p, int edge)
 {
-    const int nx = v->nx, ny = v->ny;
+    const int nx = v->nx, ny = v->ny, lw = v->lm_w, lh = v->lm_h;
     const float dx = v->dx, dy = v->dy, gain = p->gain, depth = v->depth;
     const float *e = w->eta;
     float *acc = v->lm_acc;
-    memset(acc, 0, sizeof(float) * (size_t)nx * ny);
+    memset(acc, 0, sizeof(float) * (size_t)lw * lh);
+    const float lcx = v->Lx / (float)lw, lcz = v->Ly / (float)lh;    /* light map cell size */
 
     /* incident light direction (downwards) */
     float I[3] = { -p->sun[0], -p->sun[1], -p->sun[2] };
@@ -818,27 +1035,60 @@ static void compute_caustics(view3d *v, const wave *w, const view3d_params *p, i
     const float Tx0 = eta * I[0], Ty0 = eta * I[1] + m0, Tz0 = eta * I[2];
     const float ox = -depth * Tx0 / Ty0, oz = -depth * Tz0 / Ty0;   /* floor = surface + (ox, oz) */
 
-    int px = 0, pz = 0;
-    if (edge == 1) {
-        px = (int)(fabsf(ox) / dx) + 3;
-        pz = (int)(fabsf(oz) / dy) + 3;
-        if (px > nx - 1) px = nx - 1;
-        if (pz > ny - 1) pz = ny - 1;
-    } else if (edge == 2) {
-        for (int j = 0; j < ny; j++)
-            for (int i = 0; i < nx; i++) {
-                const float sx = ((float)i + 0.5f) * dx - ox, sz = ((float)j + 0.5f) * dy - oz;
-                if (sx < 0.0f || sx > v->Lx || sz < 0.0f || sz > v->Ly) acc[i + nx * j] = 1.0f;
+    if (edge == 2) {
+        /* glass walls: the strip a wall would shadow is lit flat through the glass */
+        for (int j = 0; j < lh; j++)
+            for (int i = 0; i < lw; i++) {
+                const float sx = ((float)i + 0.5f) * lcx - ox, sz = ((float)j + 0.5f) * lcz - oz;
+                int inside;
+                if (v->shape == 1) { float R = 0.5f * v->Lx, ex = sx - R, ez = sz - R; inside = ex * ex + ez * ez <= R * R; }
+                else inside = sx >= 0.0f && sx <= v->Lx && sz >= 0.0f && sz <= v->Ly;
+                if (!inside) acc[i + lw * j] = 1.0f;
             }
     }
 
-    for (int j = -pz; j < ny + pz; j++) {
-        const int jm = mirror_idx(j - 1, ny), jc = mirror_idx(j, ny), jp = mirror_idx(j + 1, ny);
+    /* the pad of mirrored cells outside the wall used when there is no wall */
+    int px = 0, pz = 0;
+    if (edge == 1) {
+        if (v->shape == 0) { px = (int)(fabsf(ox) / dx) + 3; pz = (int)(fabsf(oz) / dy) + 3; }
+        else { px = 0; pz = (int)(sqrtf(ox * ox + oz * oz) / dy) + 3; }     /* rings only */
+        if (px > nx - 1) px = nx - 1;
+        if (pz > ny - 1) pz = ny - 1;
+    }
+
+    const int j0 = (v->shape == 0) ? -pz : 0;      /* disk: mirror only outward, past the rim */
+    for (int j = j0; j < ny + pz; j++) {
         for (int i = -px; i < nx + px; i++) {
-            const int im = mirror_idx(i - 1, nx), ic = mirror_idx(i, nx), ip = mirror_idx(i + 1, nx);
-            const float h  = e[ic + nx * jc] * gain;
-            const float hx = (e[ip + nx * jc] - e[im + nx * jc]) * gain / (2.0f * dx);
-            const float hz = (e[ic + nx * jp] - e[ic + nx * jm]) * gain / (2.0f * dy);
+            float X, Z, hx, hz, h, area;
+            if (v->shape == 0) {
+                const int jm = mirror_idx(j - 1, ny), jc = mirror_idx(j, ny), jp = mirror_idx(j + 1, ny);
+                const int im = mirror_idx(i - 1, nx), ic = mirror_idx(i, nx), ip = mirror_idx(i + 1, nx);
+                h  = e[ic + nx * jc] * gain;
+                hx = (e[ip + nx * jc] - e[im + nx * jc]) * gain / (2.0f * dx);
+                hz = (e[ic + nx * jp] - e[ic + nx * jm]) * gain / (2.0f * dy);
+                X = ((float)i + 0.5f) * dx; Z = ((float)j + 0.5f) * dy;
+                area = dx * dy;
+            } else {
+                /* polar: j = ring, i = angle.  Rings mirror at the wall; through the centre
+                 * the inner neighbour of ring 0 is ring 0 on the opposite side. */
+                const int nt = nx, nr = ny;
+                const int ic = i, ipl = (i + 1) % nt, iml = (i + nt - 1) % nt;
+                const int jc = mirror_idx(j, nr), jp = mirror_idx(j + 1, nr);
+                int jm = j - 1, imn = ic;
+                if (jm < 0) { jm = 0; imn = (ic + nt / 2) % nt; }
+                jm = mirror_idx(jm, nr);
+                const float dr = v->dy, dth = v->dx;
+                const float rs = ((float)j + 0.5f) * dr;
+                h  = e[ic + nt * jc] * gain;
+                const float hr = (e[ic + nt * jp] - e[imn + nt * jm]) * gain / (2.0f * dr);
+                const float ht = (e[ipl + nt * jc] - e[iml + nt * jc]) * gain / (2.0f * dth * rs);
+                const float ct = v->cs_tab[2 * ic], st = v->cs_tab[2 * ic + 1];
+                hx = hr * ct - ht * st;
+                hz = hr * st + ht * ct;
+                const float R = 0.5f * v->Lx;
+                X = R + rs * ct; Z = R + rs * st;
+                area = rs * dr * dth;
+            }
             float N[3] = { -hx, 1.0f, -hz };
             v3norm(N);
             /* refract */
@@ -849,42 +1099,44 @@ static void compute_caustics(view3d *v, const wave *w, const view3d_params *p, i
             float T[3] = { eta * I[0] + m * N[0], eta * I[1] + m * N[1], eta * I[2] + m * N[2] };
             if (T[1] >= -1e-4f) continue;
             const float s = (-depth - h) / T[1];
-            const float qx = ((float)i + 0.5f) * dx + s * T[0];
-            const float qz = ((float)j + 0.5f) * dy + s * T[2];
-            /* bilinear splat into cell space */
-            const float gx = qx / dx - 0.5f, gz = qz / dy - 0.5f;
+            const float qx = X + s * T[0];
+            const float qz = Z + s * T[2];
+            /* bilinear splat into light-map cell space, weight = cell area / light-map cell area */
+            const float wgt0 = area / (lcx * lcz);
+            const float gx = qx / lcx - 0.5f, gz = qz / lcz - 0.5f;
             const int ix = (int)floorf(gx), iz = (int)floorf(gz);
             const float ax = gx - (float)ix, az = gz - (float)iz;
             const float wgt[4] = { (1 - ax) * (1 - az), ax * (1 - az), (1 - ax) * az, ax * az };
             const int cx[4] = { ix, ix + 1, ix, ix + 1 }, cz[4] = { iz, iz, iz + 1, iz + 1 };
             for (int q = 0; q < 4; q++)
-                if (cx[q] >= 0 && cx[q] < nx && cz[q] >= 0 && cz[q] < ny)
-                    acc[cx[q] + nx * cz[q]] += wgt[q];
+                if (cx[q] >= 0 && cx[q] < lw && cz[q] >= 0 && cz[q] < lh)
+                    acc[cx[q] + lw * cz[q]] += wgt0 * wgt[q];
         }
     }
     /* 3x3 binomial blur, then to 8 bit with 1.0 -> 64 */
     float *tmp = v->lm_tmp;
-    for (int j = 0; j < ny; j++)
-        for (int i = 0; i < nx; i++) {
-            const int im = i > 0 ? i - 1 : i, ip = i < nx - 1 ? i + 1 : i;
-            tmp[i + nx * j] = 0.25f * (acc[im + nx * j] + 2.0f * acc[i + nx * j] + acc[ip + nx * j]);
+    for (int j = 0; j < lh; j++)
+        for (int i = 0; i < lw; i++) {
+            const int im = i > 0 ? i - 1 : i, ip = i < lw - 1 ? i + 1 : i;
+            tmp[i + lw * j] = 0.25f * (acc[im + lw * j] + 2.0f * acc[i + lw * j] + acc[ip + lw * j]);
         }
-    for (int j = 0; j < ny; j++) {
-        const int jm = j > 0 ? j - 1 : j, jp = j < ny - 1 ? j + 1 : j;
-        for (int i = 0; i < nx; i++) {
-            float val = 0.25f * (tmp[i + nx * jm] + 2.0f * tmp[i + nx * j] + tmp[i + nx * jp]);
+    for (int j = 0; j < lh; j++) {
+        const int jm = j > 0 ? j - 1 : j, jp = j < lh - 1 ? j + 1 : j;
+        for (int i = 0; i < lw; i++) {
+            float val = 0.25f * (tmp[i + lw * jm] + 2.0f * tmp[i + lw * j] + tmp[i + lw * jp]);
             if (val > 4.0f) val = 4.0f;
-            v->lm8[i + nx * j] = (uint8_t)(val * 63.75f + 0.5f);
+            if (val < 0.0f) val = 0.0f;
+            v->lm8[i + lw * j] = (uint8_t)(val * 63.75f + 0.5f);
         }
     }
     if (getenv("POND_DEBUG")) {
         int mn = 255, mx = 0; double mean = 0;
-        for (int i = 0; i < nx * ny; i++) { if (v->lm8[i] < mn) mn = v->lm8[i]; if (v->lm8[i] > mx) mx = v->lm8[i]; mean += v->lm8[i]; }
-        printf("lightmap min %d max %d mean %.1f\n", mn, mx, mean / (nx * ny));
+        for (int i = 0; i < lw * lh; i++) { if (v->lm8[i] < mn) mn = v->lm8[i]; if (v->lm8[i] > mx) mx = v->lm8[i]; mean += v->lm8[i]; }
+        printf("lightmap min %d max %d mean %.1f\n", mn, mx, mean / (lw * lh));
     }
     glBindTexture(GL_TEXTURE_2D, v->tex_lm);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, nx, ny, GL_RED, GL_UNSIGNED_BYTE, v->lm8);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, lw, lh, GL_RED, GL_UNSIGNED_BYTE, v->lm8);
 }
 
 /* ------------------------------------------------------------------ overlay */
@@ -998,6 +1250,7 @@ static void set_common(view3d *v, GLuint p, const view3d_params *prm, const floa
         if ((l = U(p, "u_extend")) >= 0) glUniform1i(l, m == 1);
     }
     if ((l = U(p, "u_mu")) >= 0) glUniform3f(l, 0.38f, 0.060f, 0.015f);
+    if ((l = U(p, "u_shape")) >= 0) glUniform1i(l, v->shape);
     if ((l = U(p, "u_height")) >= 0) glUniform1i(l, 0);
     if ((l = U(p, "u_light")) >= 0) glUniform1i(l, 1);
 }
@@ -1045,9 +1298,9 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
     glDepthFunc(GL_LESS);
     set_common(v, v->p_solid, p, vp);
     glBindVertexArray(v->vao_solid);
-    if (m == 0) { glDrawArrays(GL_TRIANGLES, SOLID_SLAB, 36); glDrawArrays(GL_TRIANGLES, SOLID_WALLS, 144); }
-    if (m == 1) { glDrawArrays(GL_TRIANGLES, SOLID_TABLE, 36); glDrawArrays(GL_TRIANGLES, SOLID_INNER, 6); }
-    if (m == 2) { glDrawArrays(GL_TRIANGLES, SOLID_SLAB, 36); }
+    if (m == 0) { glDrawArrays(GL_TRIANGLES, v->slab_off, v->slab_n); glDrawArrays(GL_TRIANGLES, v->walls_off, v->walls_n); }
+    if (m == 1) { glDrawArrays(GL_TRIANGLES, v->table_off, v->table_n); glDrawArrays(GL_TRIANGLES, v->inner_off, v->inner_n); }
+    if (m == 2) { glDrawArrays(GL_TRIANGLES, v->slab_off, v->slab_n); }
 
     set_common(v, v->p_surf, p, vp);
     glBindVertexArray(v->vao_surf);
@@ -1071,8 +1324,8 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
             glFrontFace(GL_CCW);
             for (int pass = 0; pass < 2; pass++) {
                 glCullFace(pass == 0 ? GL_FRONT : GL_BACK);      /* far faces first */
-                if (m == 3) glDrawArrays(GL_TRIANGLES, SOLID_SLAB, 36);
-                glDrawArrays(GL_TRIANGLES, SOLID_WALLS, 144);
+                if (m == 3) glDrawArrays(GL_TRIANGLES, v->slab_off, v->slab_n);
+                glDrawArrays(GL_TRIANGLES, v->walls_off, v->walls_n);
             }
             glDisable(GL_CULL_FACE);
         }

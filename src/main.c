@@ -58,6 +58,7 @@ static const char *const help_lines[] = {
     "t         container: opaque, floor only,",
     "          glass, glass+bottom, none",
     "",
+    "n         basin shape: rectangle / disk",
     "1-4       tray 30 cm, pond 3 m, pool 12 m, sea 80 m",
     "[ ]  { }  width, length (5%; hold to sweep)",
     ", .  \\    depth;  square it up (same area)",
@@ -87,7 +88,8 @@ typedef struct {
     int mode3d, show_help;
 
     wave *w;
-    int nx, ny;
+    int nx, ny;                /* grid parameter (nx = ny = --grid) */
+    int shape;                 /* WAVE_RECT or WAVE_DISK */
     int running, paused, hud_dirty;
     int rain, breeze, paddle;
     double rain_rate;          /* drops per simulated second */
@@ -111,7 +113,8 @@ static void print_help(void)
     puts("\n  --grid N      mode grid (power of two, default 512 native / 256 web)\n"
          "  --window WxH  window size in pixels (default 1280x800; a single number means 16:10)\n"
          "  --preset N    start with preset 1..4\n"
-         "  --basin WxL   basin width x length in metres (overrides the preset)\n"
+         "  --shape S     rect (default) or disk\n"
+         "  --basin WxL   basin width x length in metres (overrides the preset; disk: diameter)\n"
          "  --depth H     depth in metres\n"
          "  --2d          top-down CPU renderer instead of the 3-D view\n"
          "  --nomsaa      do not ask for a multisampled framebuffer\n"
@@ -122,6 +125,38 @@ static void print_help(void)
          "  --bench N     run N headless frames of the CPU path, print timings, exit\n"
          "  --snap F      with --bench: save the last frame to F (bmp)\n"
          "  --scene S     sources to start with: any of rain,paddle,breeze\n");
+}
+
+static wave *make_wave(int shape, int grid, double Lx, double Ly, double depth)
+{
+    if (shape == WAVE_DISK) {
+        printf("building the disk basis (%d angles x %d rings)...\n", grid, grid / 2);
+        fflush(stdout);
+        return wave_create_disk(grid, grid / 2, Lx, depth);
+    }
+    return wave_create(grid, grid, Lx, Ly, depth);
+}
+
+static int set_shape(app *a, int shape)
+{
+    if (shape == a->shape) return 0;
+    double Lx = a->w->Lx, Ly = a->w->Ly, depth = a->w->depth, gamma0 = a->w->gamma0;
+    if (shape == WAVE_DISK) Lx = Ly = sqrt(Lx * Ly);
+    wave *nw = make_wave(shape, a->nx, Lx, Ly, depth);
+    if (!nw) { fprintf(stderr, "could not create the %s basin\n", shape == WAVE_DISK ? "disk" : "rectangular"); return -1; }
+    wave_set_damping(nw, gamma0);
+    wave_destroy(a->w);
+    a->w = nw;
+    a->shape = shape;
+    if (a->v3) {
+        view3d_destroy(a->v3);
+        a->v3 = view3d_create(a->win, a->w);
+        if (!a->v3) { fprintf(stderr, "3-D view unavailable\n"); a->running = 0; return -1; }
+        view3d_reset_camera(a->v3, a->w);
+    }
+    wave_add_drop(a->w, 0.5 * a->w->Lx, 0.5 * a->w->Ly, 0.03 * a->w->Lx, -0.15 * 0.03 * a->w->Lx);
+    a->hud_dirty = 1;
+    return 0;
 }
 
 static void pool_changed(app *a)
@@ -147,12 +182,15 @@ static void update_hud(app *a)
     snprintf(line2, sizeof line2, "warp %.2gx  gain %.2g  damp %.3g/s %s%s%s%s",
              a->warp, (double)a->p3.gain, a->w->gamma0,
              a->rain ? " rain" : "", a->breeze ? " breeze" : "", a->paddle ? " paddle" : "", a->paused ? "  PAUSED" : "");
-    snprintf(buf, sizeof buf, "%s  %.3g x %.3g m  h=%.3g m  %s\n%s",
-             presets[a->preset].name, a->w->Lx, a->w->Ly, a->w->depth, glass_names[a->p3.glass], line2);
+    char dims[64];
+    if (a->shape == WAVE_DISK) snprintf(dims, sizeof dims, "disk D=%.3g m", a->w->Lx);
+    else snprintf(dims, sizeof dims, "%.3g x %.3g m", a->w->Lx, a->w->Ly);
+    snprintf(buf, sizeof buf, "%s  %s  h=%.3g m  %s\n%s",
+             presets[a->preset].name, dims, a->w->depth, glass_names[a->p3.glass], line2);
     if (a->v3) view3d_set_overlay(a->v3, buf, help_lines, NHELP, a->show_help);
     char title[300];
-    snprintf(title, sizeof title, "pond  |  %s  %.3g x %.3g m  h=%.3g m  |  %s",
-             presets[a->preset].name, a->w->Lx, a->w->Ly, a->w->depth, line2);
+    snprintf(title, sizeof title, "pond  |  %s  %s  h=%.3g m  |  %s",
+             presets[a->preset].name, dims, a->w->depth, line2);
     SDL_SetWindowTitle(a->win, title);
     a->hud_dirty = 0;
 }
@@ -216,6 +254,7 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
     case SDLK_f: a->rp.floor_style = a->p3.floor_style = (a->p3.floor_style + 1) % 3; break;
     case SDLK_t: a->p3.glass = (a->p3.glass + 1) % 5; break;
     case SDLK_o: if (a->v3) view3d_reset_camera(a->v3, w); break;
+    case SDLK_n: set_shape(a, a->shape == WAVE_DISK ? WAVE_RECT : WAVE_DISK); break;
     case SDLK_s:
         if (a->mode3d) a->shot_pending = 1; else save_screenshot_2d(a);
         break;
@@ -227,6 +266,7 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
     case SDLK_LEFTBRACKET: case SDLK_RIGHTBRACKET: {
         double f = (k == SDLK_RIGHTBRACKET) ? 1.05 : 1.0 / 1.05;
         double Lx = shift ? w->Lx : w->Lx * f, Ly = shift ? w->Ly * f : w->Ly;
+        if (a->shape == WAVE_DISK) Lx = Ly = w->Lx * f;          /* diameter */
         if (Lx / Ly <= 4.0 && Ly / Lx <= 4.0) { wave_set_pool(w, Lx, Ly, w->depth); pool_changed(a); }
         break;
     }
@@ -334,7 +374,10 @@ static void apply_sources(app *a, double dts)
         int n = 0;
         while (u > p && n < 50) { u -= p; n++; p *= lam / n; }
         for (int i = 0; i < n; i++) {
-            double x = rand() / (RAND_MAX + 1.0) * w->Lx, y = rand() / (RAND_MAX + 1.0) * w->Ly;
+            double x, y;
+            do {
+                x = rand() / (RAND_MAX + 1.0) * w->Lx; y = rand() / (RAND_MAX + 1.0) * w->Ly;
+            } while (w->shape == WAVE_DISK && (x - w->R) * (x - w->R) + (y - w->R) * (y - w->R) > w->R * w->R);
             double s = 0.02 * L * (0.5 + rand() / (RAND_MAX + 1.0));
             wave_add_drop(w, x, y, s, -0.15 * s);
         }
@@ -399,6 +442,11 @@ static void frame(void *ud)
                 if (path == name) snprintf(name, sizeof name, "pond-%03d.bmp", a->shots++);
                 save_bmp_rgba(path, rgba, cw, ch);
                 free(rgba);
+                if (getenv("POND_DUMP")) {   /* the height field next to the screenshot, for debugging */
+                    FILE *fp = fopen(getenv("POND_DUMP"), "wb");
+                    if (fp) { fwrite(&a->w->nx, sizeof(int), 1, fp); fwrite(&a->w->ny, sizeof(int), 1, fp);
+                              fwrite(a->w->eta, sizeof(float), (size_t)a->w->nx * a->w->ny, fp); fclose(fp); }
+                }
             }
             a->shot_pending = 0;
         }
@@ -438,7 +486,7 @@ static int bench(app *a, int frames, const char *snap, const char *scene)
         Uint64 t2 = SDL_GetPerformanceCounter();
         wave_realize(a->w);
         Uint64 t3 = SDL_GetPerformanceCounter();
-        render_frame(a->w, &a->rp, a->pix);
+        if (a->shape == WAVE_RECT) render_frame(a->w, &a->rp, a->pix);
         Uint64 t4 = SDL_GetPerformanceCounter();
         t_src += (double)(t1 - t0) / f; t_step += (double)(t2 - t1) / f;
         t_real += (double)(t3 - t2) / f; t_rend += (double)(t4 - t3) / f;
@@ -476,12 +524,13 @@ POND_MAIN(int argc, char **argv)
 {
     int grid = 512, winw = 1280, winh = 800, bench_frames = 0, preset0 = 1, mode3d = 1, glass0 = 0;
     const char *snap = NULL, *scene = NULL, *snap3d = NULL, *cam = NULL, *basin = NULL;
+    int shape0 = WAVE_RECT;
     double depth_arg = 0;
     int a_frames = 0, a_help = 0, msaa = 1;
 #ifdef __EMSCRIPTEN__
     grid = emscripten_run_script_int("(function(){var v=new URLSearchParams(location.search).get('grid');return v?(v|0):0;})()");
     if (grid <= 0) grid = 256;
-    if (grid > 512) grid = 512;      /* fixed 128 MB heap in the browser */
+    if (grid > 512) grid = 512;      /* fixed 160 MB heap in the browser */
     winw = 1280; winh = 800;         /* the shell's CSS keeps this 16:10 shape */
 #endif
     for (int i = 1; i < argc; i++) {
@@ -499,6 +548,7 @@ POND_MAIN(int argc, char **argv)
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) a_frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--cam") && i + 1 < argc) cam = argv[++i];
         else if (!strcmp(argv[i], "--basin") && i + 1 < argc) basin = argv[++i];
+        else if (!strcmp(argv[i], "--shape") && i + 1 < argc) shape0 = !strcmp(argv[++i], "disk") ? WAVE_DISK : WAVE_RECT;
         else if (!strcmp(argv[i], "--depth") && i + 1 < argc) depth_arg = atof(argv[++i]);
         else if (!strcmp(argv[i], "--glass") && i + 1 < argc) glass0 = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--2d")) mode3d = 0;
@@ -529,7 +579,9 @@ POND_MAIN(int argc, char **argv)
     { float s[3] = { 0.30f, 0.90f, -0.25f }; float n = 1.0f / sqrtf(s[0]*s[0] + s[1]*s[1] + s[2]*s[2]);
       a.p3.sun[0] = s[0] * n; a.p3.sun[1] = s[1] * n; a.p3.sun[2] = s[2] * n; }
     a.pix = malloc((size_t)grid * grid * sizeof(uint32_t));
-    a.w = wave_create(grid, grid, presets[preset0].L, presets[preset0].L, presets[preset0].depth);
+    a.shape = shape0;
+    if (shape0 == WAVE_DISK && !mode3d) { fprintf(stderr, "the disk basin needs the 3-D view\n"); return 1; }
+    a.w = make_wave(shape0, grid, presets[preset0].L, presets[preset0].L, presets[preset0].depth);
     if (!a.pix || !a.w) { fprintf(stderr, "out of memory\n"); return 1; }
     a.preset = preset0;
     a.rp.floor_style = a.p3.floor_style = presets[preset0].floor;
@@ -564,7 +616,7 @@ POND_MAIN(int argc, char **argv)
     if (!a.win) { fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return 1; }
 
     if (mode3d) {
-        a.v3 = view3d_create(a.win, grid, grid);
+        a.v3 = view3d_create(a.win, a.w);
         if (!a.v3) { fprintf(stderr, "3-D view unavailable; try --2d\n"); return 1; }
         view3d_reset_camera(a.v3, a.w);
         if (cam) {
