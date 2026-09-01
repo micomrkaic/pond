@@ -9,7 +9,7 @@ time, then drawn as a 3-D basin — walls, floor, refraction, caustics, sky — 
 zoom, with walls and bottom switchable to glass. A top-down CPU renderer is
 kept as `--2d`.
 
-C17. Dependencies: SDL2 and an OpenGL 3.3 core context (macOS ships 4.1;
+C17. Dependencies: SDL2 (video and audio) and an OpenGL 3.3 core context (macOS ships 4.1;
 Mesa/NVIDIA on Linux; WebGL2 in the browser). No GL loader library: the
 handful of entry points used are fetched through `SDL_GL_GetProcAddress`
 (`src/gl.h`). Same source builds for Linux, macOS and Emscripten.
@@ -26,6 +26,7 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     ./pond --shape disk --basin 10         # a round basin, 10 m across
     ./pond --hos --preset 3 --scene paddle # nonlinear, order 3 on the lowest 64x64 modes
     ./pond --cpu-caustics                  # if the GPU pass is unavailable or suspect
+    ./pond --mute                          # or --volume 0.3; POND_WAV=take.wav records what you hear
     ./pond --preset 3 --scene rain,breeze  # pool, with sources already on
     ./pond --glass 1 --preset 3 --scene breeze   # floor only: bright water, caustics, no walls
     ./pond --glass 3 --cam 40,-20,1.3      # start looking up through a glass bottom
@@ -55,6 +56,7 @@ screen, one finger is the finger, two fingers orbit and pinch-zoom.
 | `t` | container: opaque → floor only → glass walls → glass walls + bottom → none |
 | `n` | basin shape: rectangle ↔ disk (the field starts over) |
 | `y` | nonlinear (HOS) correction on/off (rectangle only) |
+| `m` `a`/`A` | sound on/off, volume down/up |
 | `1` `2` `3` `4` | presets: tray 30 cm · pond 3 m · pool 12 m · sea 80 m |
 | `[` `]` / `{` `}` | width / length (disk: diameter), 5 % per press, hold to sweep (live: the physics changes, the field is kept; aspect kept within 4:1) |
 | `,` `.` / `\` | depth / make it square again at the same area |
@@ -436,6 +438,35 @@ Text is an 8×8 public-domain bitmap font rasterised on the CPU into a
 window-sized RGBA overlay, updated only when the HUD changes; the glyph
 scale follows the drawable height and shrinks until the help panel fits.
 
+## Sound (`src/audio.c`, `src/dsp.c`)
+
+The synthesis is [noise-suite](https://github.com/micomrkaic/noise-suite)'s
+core, vendored unchanged as `dsp.c`/`dsp.h` (libm only, per-layer state, a
+stereo mixer). Pond runs it in SDL's audio thread and drives it from the
+simulation rather than alongside it:
+
+- **Every drop is heard where it lands.** A drop into water makes a "plink"
+  because it entrains an air bubble, and the bubble rings at its Minnaert
+  frequency, f ≈ 3.26 m/s ÷ radius. Each drop the simulation makes — rain,
+  a click, the finger — spawns a bubble voice at that frequency (radius
+  taken as a third of the crater's), with the decay and the rising chirp
+  scaled by the size, plus a short noise burst for the splash, panned to
+  the drop's position relative to the camera and attenuated by distance.
+  Drops are drawn at a size relative to the basin so they can be seen; for
+  the ear they are taken at the size they would have in the 30 cm tray, so
+  rain plinks like rain on every preset, a click is a small stone, a
+  shift-click a bigger one.
+- **The breeze plays the wind layer and listens to it.** The wind's gust
+  envelope comes back from the audio thread and multiplies the breeze
+  forcing, so the gusts you hear roughen the water you see.
+- Rain adds the hiss bed at the rain rate; on basins of 40 m and up the sea
+  layer follows the surface's rms slope, both in level and in how hard the
+  surf breaks.
+
+Latency is one audio buffer, ~23 ms. In the browser, SDL's audio is Web
+Audio; nothing plays until the first click, by the browser's rules, which
+here makes the first drop start the sound.
+
 ## 2-D renderer (`src/render.c`, `--2d`)
 
 All from the height field in real units, so a 1 mm ripple in a tray and a
@@ -493,6 +524,8 @@ map with additive blending, which is the same forward map).
     src/view3d.[ch]   GL scene: shaders, meshes, caustic pass, camera, overlay
     src/gl.h          the GL 3.3 / GLES 3.0 subset used, loaded via SDL
     src/text.[ch]     8x8 bitmap text into an RGBA canvas (src/font8x8.h)
+    src/audio.[ch]    sound from the simulation, on the vendored noise-suite core
+    src/dsp.[ch]      noise-suite synthesis library, unchanged
     src/render.[ch]   top-down CPU shading (--2d)
     src/main.c        SDL2 window, input, timing, bench, Emscripten loop
     tests/            dct, wave, disk and hos tests (run with `make test`)
@@ -511,6 +544,7 @@ HTML minifier is broken with current Node.
 
 ## License
 
-GNU General Public License v3.0 or later — see `LICENSE`. The 8×8 bitmap
-font in `src/font8x8.h` is public domain (Daniel Hepper, after Marcel
-Sondaar / IBM) and is included unchanged.
+GNU General Public License v3.0 or later — see `LICENSE`. `src/dsp.[ch]` is
+noise-suite's synthesis core, same author and licence, included unchanged.
+The 8×8 bitmap font in `src/font8x8.h` is public domain (Daniel Hepper,
+after Marcel Sondaar / IBM) and is included unchanged.

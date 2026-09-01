@@ -24,8 +24,8 @@ LDLIBS  ?= -lm
 SDL_CFLAGS := $(shell sdl2-config --cflags 2>/dev/null)
 SDL_LIBS   := $(shell sdl2-config --libs 2>/dev/null)
 
-SRC  := src/main.c src/wave.c src/disk.c src/hos.c src/dct.c src/render.c src/view3d.c src/text.c
-HDR  := src/wave.h src/dct.h src/hos.h src/render.h src/view3d.h src/text.h src/gl.h src/font8x8.h
+SRC  := src/main.c src/wave.c src/disk.c src/hos.c src/dct.c src/render.c src/view3d.c src/text.c src/audio.c src/dsp.c
+HDR  := src/wave.h src/dct.h src/hos.h src/render.h src/view3d.h src/text.h src/gl.h src/font8x8.h src/audio.h src/dsp.h
 BIN  := pond
 
 EMCC       ?= emcc

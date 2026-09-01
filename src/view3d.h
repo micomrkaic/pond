@@ -47,6 +47,8 @@ void     view3d_orbit(view3d *v, float dyaw_deg, float dpitch_deg);
 void     view3d_zoom(view3d *v, float factor);
 void     view3d_set_camera(view3d *v, float yaw_deg, float pitch_deg, float dist_rel);
 
+/* where a basin point is relative to the listener: pan -1..1 (left..right), att 0..1 (distance) */
+void     view3d_listen(const view3d *v, double x, double z, double *pan, double *att);
 /* window pixel -> basin metres on the mean surface; 0 if the ray misses the water */
 int      view3d_pick(const view3d *v, int mx, int my, double *x, double *y);
 

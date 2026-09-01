@@ -21,6 +21,7 @@
 #include "render.h"
 #include "view3d.h"
 #include "hos.h"
+#include "audio.h"
 
 #include <SDL.h>
 #include <math.h>
@@ -61,6 +62,7 @@ static const char *const help_lines[] = {
     "",
     "n         basin shape: rectangle / disk",
     "y         nonlinear (HOS) on / off",
+    "m  a/A    sound on/off, volume down/up",
     "1-4       tray 30 cm, pond 3 m, pool 12 m, sea 80 m",
     "[ ]  { }  width, length (5%; hold to sweep)",
     ", .  \\    depth;  square it up (same area)",
@@ -94,6 +96,9 @@ typedef struct {
     int shape;                 /* WAVE_RECT or WAVE_DISK */
     hos *hs;                   /* nonlinear correction (rectangle only) */
     int hos_on, hos_nc, hos_order, hos_skipped;
+    audio *au;                 /* NULL when there is no audio device or --mute */
+    double finger_t;           /* simulated time of the last finger plink */
+    int frame_no;
     int running, paused, hud_dirty;
     int rain, breeze, paddle;
     double rain_rate;          /* drops per simulated second */
@@ -126,6 +131,7 @@ static void print_help(void)
          "  --2d          top-down CPU renderer instead of the 3-D view\n"
          "  --nomsaa      do not ask for a multisampled framebuffer\n"
          "  --cpu-caustics  compute the caustic light map on the CPU (default: GPU when possible)\n"
+         "  --mute        no sound          --volume V   0..1 (default 0.7)\n"
          "  --cam Y,P,D   camera yaw, pitch (deg) and distance (in basin lengths)\n"
          "  --glass N     0 opaque, 1 floor only, 2 glass walls, 3 glass walls + bottom, 4 no walls\n"
          "  --frames N    quit after N displayed frames\n"
@@ -187,13 +193,17 @@ static void set_preset(app *a, int p)
 static void update_hud(app *a)
 {
     static const char *glass_names[] = { "opaque", "floor only", "glass walls", "glass walls + bottom", "no walls" };
-    char buf[256], line2[128];
+    char buf[300], line2[200];
     char nl[48];
     if (a->hos_on && a->hs) snprintf(nl, sizeof nl, "  HOS M=%d nc=%d%s", hos_order(a->hs), hos_nc(a->hs), a->hos_skipped ? " (too steep)" : "");
     else if (a->hos_on) snprintf(nl, sizeof nl, "  HOS: rectangle only");
     else snprintf(nl, sizeof nl, "  linear");
-    snprintf(line2, sizeof line2, "warp %.2gx  gain %.2g  damp %.3g/s%s%s%s%s%s",
-             a->warp, (double)a->p3.gain, a->w->gamma0, nl,
+    char snd[24];
+    if (!a->au) snprintf(snd, sizeof snd, "  no sound");
+    else if (audio_muted(a->au)) snprintf(snd, sizeof snd, "  muted");
+    else snprintf(snd, sizeof snd, "  vol %.0f%%", 100.0 * audio_volume(a->au));
+    snprintf(line2, sizeof line2, "warp %.2gx  gain %.2g  damp %.3g/s%s%s%s%s%s%s",
+             a->warp, (double)a->p3.gain, a->w->gamma0, nl, snd,
              a->rain ? "  rain" : "", a->breeze ? " breeze" : "", a->paddle ? " paddle" : "", a->paused ? "  PAUSED" : "");
     char dims[64];
     if (a->shape == WAVE_DISK) snprintf(dims, sizeof dims, "disk D=%.3g m", a->w->Lx);
@@ -223,12 +233,25 @@ static int to_basin(const app *a, int mx, int my, double *x, double *y)
     return 1;
 }
 
+/* a drop into the water, seen and heard */
+static void splash(app *a, double x, double y, double s, double amp)
+{
+    wave_add_drop(a->w, x, y, s, amp);
+    if (!a->au) return;
+    double pan = 0, att = 1;
+    if (a->v3) view3d_listen(a->v3, x, y, &pan, &att);
+    /* drops are drawn at a size relative to the basin so they can be seen; for the ear,
+     * rain should plink like rain whatever the basin, so the acoustic size is the drop as it
+     * would be in the 30 cm tray: a raindrop's few millimetres, a click a small stone */
+    audio_splash(a->au, s * 0.3 / sqrt(a->w->Lx * a->w->Ly), pan, att);
+}
+
 static void drop_at(app *a, int mx, int my, double rel_size)
 {
     double x, y;
     if (!to_basin(a, mx, my, &x, &y)) return;
     double s = rel_size * sqrt(a->w->Lx * a->w->Ly);
-    wave_add_drop(a->w, x, y, s, -0.15 * s);
+    splash(a, x, y, s, -0.15 * s);
 }
 
 static void save_bmp_rgba(const char *name, uint8_t *rgba, int w, int h)
@@ -269,6 +292,8 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
     case SDLK_o: if (a->v3) view3d_reset_camera(a->v3, w); break;
     case SDLK_n: set_shape(a, a->shape == WAVE_DISK ? WAVE_RECT : WAVE_DISK); break;
     case SDLK_y: a->hos_on = !a->hos_on; break;
+    case SDLK_m: if (a->au) audio_set_mute(a->au, !audio_muted(a->au)); break;
+    case SDLK_a: if (a->au) audio_set_volume(a->au, shift ? audio_volume(a->au) * 1.25 + 0.01 : audio_volume(a->au) / 1.25); break;
     case SDLK_s:
         if (a->mode3d) a->shot_pending = 1; else save_screenshot_2d(a);
         break;
@@ -322,7 +347,7 @@ static void handle_events(app *a)
             if (e.button.button == SDL_BUTTON_LEFT && !modifier && to_basin(a, e.button.x, e.button.y, &x, &y)) {
                 /* on the water: drop, or a finger if the button stays down */
                 double sz = (shift ? 0.06 : 0.03) * sqrt(a->w->Lx * a->w->Ly);
-                wave_add_drop(a->w, x, y, sz, -0.15 * sz);
+                splash(a, x, y, sz, -0.15 * sz);
                 a->dragging = !shift;
             } else if (a->mode3d) {
                 /* off the water, with a modifier, or any other button: orbit */
@@ -380,6 +405,12 @@ static void apply_sources(app *a, double dts)
         if (to_basin(a, a->mx, a->my, &x, &y)) {
             double s = 0.015 * L;
             wave_add_drop(w, x, y, s, -a->finger_gain * 4.0 * s * dts);
+            if (a->au && w->t - a->finger_t > 0.12) {       /* a trail of small plinks */
+                double pan = 0, att = 1;
+                if (a->v3) view3d_listen(a->v3, x, y, &pan, &att);
+                audio_splash(a->au, 0.4 * s * 0.3 / L, pan, 0.5 * att);
+                a->finger_t = w->t;
+            }
         }
     }
     if (a->rain) {
@@ -393,7 +424,7 @@ static void apply_sources(app *a, double dts)
                 x = rand() / (RAND_MAX + 1.0) * w->Lx; y = rand() / (RAND_MAX + 1.0) * w->Ly;
             } while (w->shape == WAVE_DISK && (x - w->R) * (x - w->R) + (y - w->R) * (y - w->R) > w->R * w->R);
             double s = 0.02 * L * (0.5 + rand() / (RAND_MAX + 1.0));
-            wave_add_drop(w, x, y, s, -0.15 * s);
+            splash(a, x, y, s, -0.15 * s);
         }
     }
     if (a->paddle) {
@@ -406,7 +437,20 @@ static void apply_sources(app *a, double dts)
     }
     if (a->breeze) {
         double k0 = 2.0 * M_PI * 8.0 / L;        /* spectral peak at L/8 */
-        wave_breeze(w, k0, a->breeze_gain * 3.0e-4 * L, dts);
+        double gust = a->au ? 0.5 + audio_gust(a->au) : 1.0;   /* the gusts you hear roughen the water */
+        wave_breeze(w, k0, a->breeze_gain * 3.0e-4 * L * gust, dts);
+    }
+    /* continuous layers */
+    if (a->au) {
+        audio_set_rain(a->au, a->rain ? (a->rain_rate / 3.0 > 1.0 ? 1.0 : a->rain_rate / 3.0) : 0.0);
+        audio_set_wind(a->au, a->breeze ? 1.0 : 0.0);
+        if (++a->frame_no % 10 == 0) {
+            double Lmax = w->Lx > w->Ly ? w->Lx : w->Ly;
+            if (Lmax >= 40.0 && (a->breeze || a->paddle)) {
+                double sl = wave_rms_slope(w);
+                audio_set_sea(a->au, sl / 0.04 > 1.0 ? 1.0 : sl / 0.04, sl / 0.06);
+            } else audio_set_sea(a->au, 0.0, 0.0);
+        }
     }
 }
 
@@ -561,7 +605,8 @@ POND_MAIN(int argc, char **argv)
     const char *snap = NULL, *scene = NULL, *snap3d = NULL, *cam = NULL, *basin = NULL;
     int shape0 = WAVE_RECT, hos0 = 0, hos_nc = 64, hos_order = 3;
     double depth_arg = 0;
-    int a_frames = 0, a_help = 0, msaa = 1, cpu_caustics = 0;
+    int a_frames = 0, a_help = 0, msaa = 1, cpu_caustics = 0, mute = 0;
+    double volume = 0.7;
 #ifdef __EMSCRIPTEN__
     grid = emscripten_run_script_int("(function(){var v=new URLSearchParams(location.search).get('grid');return v?(v|0):0;})()");
     if (grid <= 0) grid = 256;
@@ -593,6 +638,8 @@ POND_MAIN(int argc, char **argv)
         else if (!strcmp(argv[i], "--overlay")) a_help = 1;
         else if (!strcmp(argv[i], "--nomsaa")) msaa = 0;
         else if (!strcmp(argv[i], "--cpu-caustics")) cpu_caustics = 1;
+        else if (!strcmp(argv[i], "--mute")) mute = 1;
+        else if (!strcmp(argv[i], "--volume") && i + 1 < argc) volume = atof(argv[++i]);
         else { print_help(); return !strcmp(argv[i], "--help") ? 0 : 1; }
     }
     if (grid < 16 || (grid & (grid - 1))) { fprintf(stderr, "grid must be a power of two >= 16\n"); return 1; }
@@ -644,6 +691,11 @@ POND_MAIN(int argc, char **argv)
     }
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
+    if (!mute) {
+        a.au = audio_open();
+        if (a.au) audio_set_volume(a.au, volume);
+        else fprintf(stderr, "no audio device; running silent\n");
+    }
     Uint32 wflags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | (mode3d ? SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI : 0);
     if (mode3d) view3d_gl_attributes(msaa);
     a.win = SDL_CreateWindow("pond", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, winw, winh, wflags);
@@ -679,12 +731,13 @@ POND_MAIN(int argc, char **argv)
     a.prev = SDL_GetPerformanceCounter();
 
     /* something to look at right away */
-    wave_add_drop(a.w, 0.5 * a.w->Lx, 0.5 * a.w->Ly, 0.03 * a.w->Lx, -0.15 * 0.03 * a.w->Lx);
+    splash(&a, 0.5 * a.w->Lx, 0.5 * a.w->Ly, 0.03 * a.w->Lx, -0.15 * 0.03 * a.w->Lx);
 
 #ifdef __EMSCRIPTEN__
     emscripten_set_main_loop_arg(frame, &a, 0, 1);
 #else
     while (a.running) frame(&a);
+    if (a.au) audio_close(a.au);
     if (a.hs) hos_destroy(a.hs);
     if (a.v3) view3d_destroy(a.v3);
     if (a.tex) SDL_DestroyTexture(a.tex);

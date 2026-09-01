@@ -1243,6 +1243,18 @@ static void update_camera(view3d *v)
     v3cross(v->right, v->fwd, v->up);   v3norm(v->up);
 }
 
+void view3d_listen(const view3d *v, double x, double z, double *pan, double *att)
+{
+    float d[3] = { (float)x - v->cam[0], 0.0f - v->cam[1], (float)z - v->cam[2] };
+    float dist = sqrtf(d[0]*d[0] + d[1]*d[1] + d[2]*d[2]);
+    if (dist < 1e-6f) { *pan = 0; *att = 1; return; }
+    float rx = d[0] * v->right[0] + d[2] * v->right[2];
+    *pan = rx / dist;
+    float L = v->Lx > v->Ly ? v->Lx : v->Ly;
+    float a = 1.2f * L / dist;                 /* falls off past about a basin length */
+    *att = a > 1.0f ? 1.0f : (a < 0.15f ? 0.15f : a);
+}
+
 int view3d_pick(const view3d *v, int mx, int my, double *x, double *y)
 {
     int ww, wh;
