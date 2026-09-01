@@ -384,10 +384,16 @@ sun at each vertex and emits the landing point on the floor as the position;
 each triangle then covers the floor it lights, the fragment shader writes
 $|\partial\mathbf p/\partial\mathbf q|$ from `dFdx`/`dFdy` of the original
 surface coordinates, and additive blending sums the sheets, so folds come out
-exactly. On the disk, where every polar cell is smaller than a texel, each
-cell is splatted as a point carrying its own area instead. A padded mesh
-that reaches past the walls with the mirrored field provides the no-wall
-mode; a fill pass handles light through glass. One 3×3 blur pass follows.
+exactly. That needs cells and texels of comparable size; polar cells are all
+smaller than a texel and get steadily smaller towards the centre, so on the
+disk the height field is first resampled onto the Cartesian light-map grid
+(the polar mesh drawn into a texture, with mirrored rings past the rim and a
+margin beyond the square), and the same triangle pass then runs on that. The
+first attempt splatted polar cells as points; a regular polar lattice
+sampled onto a square one produces moiré with four-fold symmetry, which is
+exactly what showed up on the floor. A padded mesh that reaches past the
+walls with the mirrored field provides the no-wall mode; a fill pass handles
+light through glass. One 3×3 blur pass follows.
 Needs a framebuffer object, an R16F colour attachment and screen-space
 derivatives — core in OpenGL 3.0 and WebGL2 with `EXT_color_buffer_float`;
 if the framebuffer is not complete, or with `--cpu-caustics`, the CPU splat
