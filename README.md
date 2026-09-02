@@ -72,10 +72,23 @@ screen, one finger is the finger, two fingers orbit and pinch-zoom.
 | `,` `.` / `\` | depth / make it square again at the same area |
 | `r` `i`/`I` | rain on/off, rate |
 | `b` | breeze (directional wind sea) on/off |
-| `p` / `P` | wavemaker on/off / move it to the next wall |
+| `p` / `P` | wavemaker on/off / move it to the next wall (its position along the wall is kept) |
 | `k`/`K` | its frequency (the wavelength follows from the dispersion relation) |
 | `l`/`L` | its span: the fraction of the wall it occupies, down to a point source |
 | `<` `>` | slide it along that wall (on the disk, round the rim) |
+
+While the wavemaker is running its footprint is outlined on the water in
+amber, so its place and size are visible as you change them; `d` takes that
+away along with the rest of the writing on the screen. The strip of forcing
+is a fraction of a percent of the basin deep, which would draw as a single
+line, so the outline is given a floor of 2 % of the basin — it marks where
+the paddle is, not the exact contour of the forcing.
+
+The frequency is held inside the band the basin can answer: from its lowest
+mode ($k=\pi/L$) up to eight cells per wavelength. Below the first mode
+nothing resonates and the paddle looks broken — `tests/test_paddle.c` drives
+a 3 m tank at half its lowest frequency for 20 s and gets 2000 times less
+water than driving at it.
 | `-` `=` | time warp |
 | `x`/`X` | extra uniform damping |
 | `g`/`G` `f` | display gain, floor pattern |
@@ -86,78 +99,71 @@ screen, one finger is the finger, two fingers orbit and pinch-zoom.
 In `--2d` mode the wheel is the time warp, `v` toggles a height-map view and
 `h` prints the help to the terminal.
 
-## Configuration file
+## Parameters, and the configuration file
 
-Settings are read three times over: built-in defaults, then a config file,
+Everything that can change while the program runs is a named parameter:
+booleans, enumerations, reals. Each has a getter and a setter on the running
+program (the setter carrying whatever side effects keep things consistent), a
+range, and a nudge — the step a key press takes. Keys nudge; the config file
+and the command line set; scripts, when they come, will tween. All of them
+land in the same place, `src/param.c`, and `--list-params` prints the lot:
+
+    $ ./pond --list-params
+    preset         2          tray/pond/pool/sea      tray 30 cm, pond 3 m, pool 12 m, sea 80 m; ...
+    shape          rect       rect/disk               rect or disk
+    width          3          0.05 .. 1000            basin width, metres (disk: the diameter)
+    ...
+    paddle-freq    2.04257    0.001 .. 10000          wavemaker frequency, Hz (held inside ...)
+    paddle-wall    x=0        x=0/x=Lx/y=0/y=Ly       which wall it is on (disk: the rim)
+    ...
+    yaw            35         0 .. 360                camera yaw, degrees
+    sound.harsh    0.15       0 .. 4                  gusts and rustle in the breeze
+
+Every name is a `--name value` option (booleans take no value; `--no-name`
+turns one off), a line in the config file, and — for the ones with a key —
+a key. So these are the same:
+
+    ./pond --paddle --paddle-freq 1.2 --paddle-span 0.15 --glass floor --yaw 60 --no-hud
+
+    # in ~/.config/pond/pond.conf
+    paddle      = on
+    paddle-freq = 1.2
+    paddle-span = 0.15
+    glass       = floor
+    yaw         = 60
+    hud         = off
+
+A handful of things have to be known before the program exists and are not
+parameters: `grid`, `window`, `mode` (3d or 2d), `msaa`, `cpu-caustics`,
+`no-audio`, `hos-nc`, `hos-order`, and the basin it starts with (`preset`,
+`shape`, `basin`/`width`/`length`, `depth`, so the wave is built once).
+The old spellings — `--2d`, `--nomsaa`, `--hos`, `--scene rain,paddle`,
+`--cam Y,P,D`, `--sound bed=0.5,brown=0.3` — still work.
+
+Settings are read three times over: built-in defaults, then the config file,
 then the command line, each overriding the one before. The file is the first
 of `$POND_CONFIG`, `$XDG_CONFIG_HOME/pond/pond.conf`,
 `~/.config/pond/pond.conf`, `~/.pondrc`, `./pond.conf` that exists;
 `--config FILE` names another and `--no-config` ignores all of them.
 
 You do not have to write one by hand. `--write-config` dumps the settings as
-they stand, so the command line is also the editor:
+they stand — the creation settings, then every parameter's value, grouped
+and commented with the help text above — so the command line is also the
+editor:
 
-    ./pond --volume 0.3 --sound brown=0.4,harsh=0.6 --glass 1 --write-config
+    ./pond --volume 0.3 --sound brown=0.4,harsh=0.6 --glass floor --write-config
     wrote /home/you/.config/pond/pond.conf
 
-The format is `key = value`, one per line; `key: value` and `key value` also
-work, `#` and `;` start a comment, booleans are any of on/off, yes/no,
-true/false, 1/0, and `-` and `_` are the same character in a key. Unknown
-keys are reported with their line number and skipped, so an old file still
-starts the program.
-
-    # ---- window and view ----
-    window        = 1280x800    # pixels, or one number for 16:10
-    fullscreen    = off         # F11 or alt+enter toggles it
-    grid          = 512         # modes per axis, a power of two
-    mode          = 3d          # 3d, or 2d for the CPU renderer
-    glass         = 0           # 0 opaque, 1 floor only, 2 glass,
-                                # 3 glass+bottom, 4 no container
-    floor         = auto        # auto, or 0 tiles, 1 checker, 2 sand
-    msaa          = on
-    cpu-caustics  = off
-    hud           = on          # the settings box, top left (key: d)
-    help          = off         # start with the help panel up (h/F1)
-    camera        = 35,42,1.5   # yaw, pitch (deg), distance in lengths
-
-    # ---- basin ----
-    preset        = 2           # 1 tray 30 cm, 2 pond 3 m,
-                                # 3 pool 12 m, 4 sea 80 m
-    shape         = rect        # rect or disk
-    basin         =             # width x length in metres; empty = preset
-    depth         = 0           # metres; 0 = the preset's
-    nonlinear     = off         # the HOS correction (rectangle only)
-    hos-nc        = 64
-    hos-order     = 3
-
-    # ---- sources at start ----
-    rain          = off
-    breeze        = off
-    paddle        = off
-    rain-rate     = 2           # drops per simulated second
-    warp          = 1           # simulated seconds per real second
-
-    # ---- wavemaker ----
-    paddle-freq   = auto        # Hz; auto = 8 wavelengths across
-    paddle-wall   = x=0         # x=0, x=Lx, y=0, y=Ly (disk: the rim)
-    paddle-pos    = 0.5         # 0..1 along that wall
-    paddle-span   = 1           # 0..1 of it; 1 = the whole wall
-    paddle-stroke = 1           # multiplier on the stroke
-
-    # ---- sound ----
-    no-audio      = off         # do not open a device at all
-    mute          = off         # device open but silent; m unmutes
-    volume        = 0.7         # 0..1
-    # multipliers on the designed levels: 1 = as designed, 0 = off
-    sound.drops   = 1
-    sound.bed     = 1
-    sound.brown   = 0
-    sound.breeze  = 1
-    sound.harsh   = 0.15
-
-The sound block is the same five knobs as the keys and `--sound`, and the
-same numbers the HUD's third line shows as percentages. The browser build has
-no file to read: there `?grid=N` in the URL is the only setting.
+Values the preset implies — width, length, depth, floor, and the default
+wavemaker frequency of eight wavelengths across — are written commented
+out, so a file whose `preset` you later edit follows the new preset instead
+of pinning the old one's size. The format is `key = value`, one per line;
+`key: value` and `key value` also work, `#` and `;` start a comment,
+booleans are any of on/off, yes/no, true/false, 1/0, enumerations take their
+names or a number, reals accept `%`, and `-` and `_` are the same character
+in a key. Unknown keys are reported with their line number and skipped, so
+an old file still starts the program. The browser build has no file to read:
+there `?grid=N` in the URL is the only setting.
 
 ## What it computes
 
@@ -275,8 +281,14 @@ wavemaker adds $\Delta\eta_t$ (transformed into $\Delta B_n = \Delta\dot a_n/\om
 The $k = 0$ mode (the mean level) is pinned at zero.
 
 The wavemaker is driven, not tuned: it is a strip of velocity forcing beside
-one wall moving as $\cos\omega t$ with a fixed stroke, so the acceleration is
-$s\,\omega^2$ and $\omega$ is what you set. Its spatial spectrum is broad —
+one wall moving as $\cos\omega t$, and $\omega$ is what you set. It runs at
+constant speed rather than constant stroke — peak velocity $u_0$, so the
+stroke is $u_0/\omega$ and the acceleration $u_0\omega$. A fixed stroke would
+put the radiated height in proportion to $\omega$ and leave the bottom of the
+dial invisible; at constant speed the frequency knob changes the wavelength
+and viscosity alone decides how the height falls away. $u_0$ is set from the
+default — eight wavelengths across the basin — so that setting looks as it
+always did. Its spatial spectrum is broad —
 a narrow strip is broad in $k$ — but only the modes with $\omega_n\approx\omega$
 grow secularly, so what you see is the wavelength the dispersion relation
 answers with, $k = k(\omega)$, and nothing else. `tests/test_paddle.c` drives
@@ -648,7 +660,9 @@ map with additive blending, which is the same forward map).
 
 ## Layout
 
-    src/config.[ch]   defaults, the config file, --write-config
+    src/app.h         the running program's state
+    src/param.[ch]    the named parameters: setters, ranges, nudges; --list-params
+    src/config.[ch]   creation settings, the config file, --write-config
     src/dct.[ch]      radix-2 FFT, DCT-II/III, 2-D row–column
     src/wave.[ch]     dispersion tables, rotor propagation, sources
     src/hos.[ch]      nonlinear (HOS) correction on the coarse modes

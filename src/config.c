@@ -21,6 +21,7 @@
 #endif
 
 #include "config.h"
+#include "param.h"
 #include "wave.h"
 
 #include <sys/stat.h>
@@ -35,44 +36,20 @@ void config_defaults(pond_config *c)
     memset(c, 0, sizeof *c);
     c->grid = 512;
     c->winw = 1280; c->winh = 800;
-    c->fullscreen = 0;
     c->mode3d = 1;
-    c->glass = 0;
-    c->floor_style = -1;
     c->msaa = 1;
     c->cpu_caustics = 0;
-    c->show_hud = 1;
-    c->show_help = 0;
-    c->cam_set = 0; c->cam_yaw = 35.0f; c->cam_pitch = 42.0f; c->cam_dist = 1.5f;
-
+    c->no_audio = 0;
     c->preset = 1;                 /* pond */
     c->shape = WAVE_RECT;
     c->Lx = c->Ly = c->depth = 0;  /* the preset's */
-    c->hos_on = 0; c->hos_nc = 64; c->hos_order = 3;
-
-    c->rain = c->breeze = c->paddle = 0;
-    c->rain_rate = 2.0;
-    c->warp = 1.0;
-    c->paddle_freq = 0.0;      /* auto */
-    c->paddle_pos = 0.5;
-    c->paddle_span = 1.0;
-    c->paddle_stroke = 1.0;
-    c->paddle_wall = 0;
-
-    c->no_audio = 0;
-    c->mute = 0;
-    c->volume = 0.7;
-    c->knob[SND_DROPS] = 1.0;
-    c->knob[SND_BED] = 1.0;
-    c->knob[SND_BROWN] = 0.0;
-    c->knob[SND_BREEZE] = 1.0;
-    c->knob[SND_HARSH] = 0.15;
+    c->hos_nc = 64; c->hos_order = 3;
+    c->nlate = 0;
 }
 
 /* -------------------------------------------------------------- small helpers */
 
-/* -std=c17 hides the POSIX strcasecmp, so: compare ignoring case, with '_'
- * and '-' the same character, so depth_arg and depth-arg both work. */
+/* compare ignoring case, with '_' and '-' the same character */
 static int keyeq(const char *a, const char *b)
 {
     for (; *a && *b; a++, b++) {
@@ -92,7 +69,7 @@ static int as_bool(const char *v, int dflt)
     return dflt;
 }
 
-/* "1280x800", "1280" (16:10 from the width), "800p" is not a thing here */
+/* "1280x800", or "1280" for 16:10 from the width */
 static void as_size(const char *v, int *w, int *h)
 {
     const char *x = strchr(v, 'x');
@@ -115,87 +92,87 @@ static void as_pair(const char *v, double *a, double *b)
     if (*b <= 0) *b = p;
 }
 
+static int queue(pond_config *c, const char *k, const char *v)
+{
+    if (c->nlate >= CONFIG_MAX_LATE) { fprintf(stderr, "too many settings; '%s' dropped\n", k); return -1; }
+    snprintf(c->late[c->nlate].name, sizeof c->late[0].name, "%s", k);
+    snprintf(c->late[c->nlate].val, sizeof c->late[0].val, "%s", v);
+    c->nlate++;
+    return 0;
+}
+
 /* --------------------------------------------------------------- one setting */
 
 int config_set(pond_config *c, const char *k, const char *v)
 {
     if (!c || !k || !v) return -1;
 
-    /* sound.<knob> — the prefix keeps "breeze" the wind and "sound.breeze" its level */
-    if (!strncmp(k, "sound.", 6) || !strncmp(k, "snd.", 4)) {
-        const char *name = strchr(k, '.') + 1;
-        for (int i = 0; i < SND_NUM; i++)
-            if (keyeq(name, snd_knob_names[i])) {
-                double x = atof(v);
-                c->knob[i] = x < 0 ? 0 : (x > 4 ? 4 : x);
-                return 0;
-            }
-        return -1;
-    }
-
-    /* window and view */
+    /* what has to be known before the program exists */
     if (keyeq(k, "grid"))         { c->grid = atoi(v); return 0; }
     if (keyeq(k, "window"))       { as_size(v, &c->winw, &c->winh); return 0; }
-    if (keyeq(k, "fullscreen"))   { c->fullscreen = as_bool(v, c->fullscreen); return 0; }
     if (keyeq(k, "mode"))         { c->mode3d = !keyeq(v, "2d"); return 0; }
-    if (keyeq(k, "glass"))        { int g = atoi(v); c->glass = (g < 0 || g > 4) ? 0 : g; return 0; }
-    if (keyeq(k, "floor")) {
-        if (keyeq(v, "auto") || keyeq(v, "preset")) c->floor_style = -1;
-        else { int f = atoi(v); c->floor_style = (f < 0 || f > 2) ? -1 : f; }
-        return 0;
-    }
     if (keyeq(k, "msaa"))         { c->msaa = as_bool(v, c->msaa); return 0; }
     if (keyeq(k, "cpu-caustics")) { c->cpu_caustics = as_bool(v, c->cpu_caustics); return 0; }
-    if (keyeq(k, "hud"))          { c->show_hud = as_bool(v, c->show_hud); return 0; }
-    if (keyeq(k, "help"))         { c->show_help = as_bool(v, c->show_help); return 0; }
-    if (keyeq(k, "camera")) {
-        float y = c->cam_yaw, p = c->cam_pitch, d = c->cam_dist;
-        if (sscanf(v, "%f,%f,%f", &y, &p, &d) >= 2) {
-            c->cam_yaw = y; c->cam_pitch = p; c->cam_dist = d > 0 ? d : 1.5f; c->cam_set = 1;
+    if (keyeq(k, "no-audio") || keyeq(k, "silent")) { c->no_audio = as_bool(v, c->no_audio); return 0; }
+    if (keyeq(k, "hos-nc"))       { int n = atoi(v); if (n > 0) c->hos_nc = n; return 0; }
+    if (keyeq(k, "hos-order"))    { int n = atoi(v); if (n == 2 || n == 3) c->hos_order = n; return 0; }
+    /* the basin it starts with: creation-time too, so the wave is built once */
+    if (keyeq(k, "preset"))       { int p = atoi(v) - 1; if (p >= 0 && p < 4) c->preset = p; return 0; }
+    if (keyeq(k, "shape"))        { c->shape = keyeq(v, "disk") ? WAVE_DISK : WAVE_RECT; return 0; }
+    if (keyeq(k, "basin"))        { if (*v) as_pair(v, &c->Lx, &c->Ly); return 0; }
+    if (keyeq(k, "width"))        { double x = atof(v); if (x > 0) { c->Lx = x; if (c->Ly <= 0) c->Ly = x; } return 0; }
+    if (keyeq(k, "length"))       { double x = atof(v); if (x > 0) { c->Ly = x; if (c->Lx <= 0) c->Lx = x; } return 0; }
+    if (keyeq(k, "depth"))        { double d = atof(v); if (d > 0) c->depth = d; return 0; }
+
+    /* spellings from before there was a table */
+    if (keyeq(k, "scene")) {
+        queue(c, "rain", strstr(v, "rain") ? "on" : "off");
+        queue(c, "paddle", strstr(v, "paddle") ? "on" : "off");
+        queue(c, "breeze", strstr(v, "breeze") ? "on" : "off");
+        return 0;
+    }
+    if (keyeq(k, "camera") || keyeq(k, "cam")) {
+        double y, p, d = 0;
+        const int n = sscanf(v, "%lf,%lf,%lf", &y, &p, &d);
+        if (n >= 2) {
+            char b[32];
+            snprintf(b, sizeof b, "%g", y); queue(c, "yaw", b);
+            snprintf(b, sizeof b, "%g", p); queue(c, "pitch", b);
+            if (n == 3) { snprintf(b, sizeof b, "%g", d); queue(c, "dist", b); }
         }
         return 0;
     }
-
-    /* basin */
-    if (keyeq(k, "preset"))    { int p = atoi(v) - 1; if (p >= 0 && p < 4) c->preset = p; return 0; }
-    if (keyeq(k, "shape"))     { c->shape = keyeq(v, "disk") ? WAVE_DISK : WAVE_RECT; return 0; }
-    if (keyeq(k, "basin"))     { if (*v) as_pair(v, &c->Lx, &c->Ly); return 0; }
-    if (keyeq(k, "depth"))     { double d = atof(v); if (d > 0) c->depth = d; return 0; }
-    if (keyeq(k, "nonlinear") || keyeq(k, "hos")) { c->hos_on = as_bool(v, c->hos_on); return 0; }
-    if (keyeq(k, "hos-nc"))    { int n = atoi(v); if (n > 0) c->hos_nc = n; return 0; }
-    if (keyeq(k, "hos-order")) { int n = atoi(v); if (n == 2 || n == 3) c->hos_order = n; return 0; }
-
-    /* sources */
-    if (keyeq(k, "scene")) {
-        c->rain = strstr(v, "rain") != NULL;
-        c->paddle = strstr(v, "paddle") != NULL;
-        c->breeze = strstr(v, "breeze") != NULL;
+    if (keyeq(k, "hos")) return queue(c, "nonlinear", v);
+    if (keyeq(k, "sound")) {                     /* k=v,k=v */
+        char tmp[256]; snprintf(tmp, sizeof tmp, "%s", v);
+        for (char *tok = strtok(tmp, ","); tok; tok = strtok(NULL, ",")) {
+            char *eq = strchr(tok, '=');
+            if (!eq) continue;
+            *eq = 0;
+            char key[64]; snprintf(key, sizeof key, "sound.%s", tok);
+            if (!param_find(key)) { fprintf(stderr, "unknown sound knob '%s'\n", tok); continue; }
+            queue(c, key, eq + 1);
+        }
         return 0;
     }
-    if (keyeq(k, "rain"))      { c->rain = as_bool(v, c->rain); return 0; }
-    if (keyeq(k, "breeze"))    { c->breeze = as_bool(v, c->breeze); return 0; }
-    if (keyeq(k, "paddle"))    { c->paddle = as_bool(v, c->paddle); return 0; }
-    if (keyeq(k, "rain-rate")) { double r = atof(v); if (r > 0) c->rain_rate = r; return 0; }
-    if (keyeq(k, "paddle-freq")) { double x = atof(v); c->paddle_freq = x > 0 ? x : 0; return 0; }
-    if (keyeq(k, "paddle-pos"))  { double x = atof(v); c->paddle_pos = x < 0 ? 0 : (x > 1 ? 1 : x); return 0; }
-    if (keyeq(k, "paddle-span")) { double x = atof(v); c->paddle_span = x < 0.02 ? 0.02 : (x > 1 ? 1 : x); return 0; }
-    if (keyeq(k, "paddle-stroke")) { double x = atof(v); if (x >= 0) c->paddle_stroke = x; return 0; }
-    if (keyeq(k, "paddle-wall")) {
-        if (keyeq(v, "x=0") || keyeq(v, "x0")) c->paddle_wall = 0;
-        else if (keyeq(v, "x=Lx") || keyeq(v, "xL")) c->paddle_wall = 1;
-        else if (keyeq(v, "y=0") || keyeq(v, "y0")) c->paddle_wall = 2;
-        else if (keyeq(v, "y=Ly") || keyeq(v, "yL")) c->paddle_wall = 3;
-        else { int n = atoi(v); c->paddle_wall = (n < 0 || n > 3) ? 0 : n; }
-        return 0;
+    if (keyeq(k, "snd.drops") || keyeq(k, "snd.bed") || keyeq(k, "snd.brown") || keyeq(k, "snd.breeze") || keyeq(k, "snd.harsh")) {
+        char key[64]; snprintf(key, sizeof key, "sound.%s", strchr(k, '.') + 1);
+        return queue(c, key, v);
     }
-    if (keyeq(k, "warp"))      { double w = atof(v); if (w > 0) c->warp = w; return 0; }
 
-    /* sound */
-    if (keyeq(k, "no-audio") || keyeq(k, "silent")) { c->no_audio = as_bool(v, c->no_audio); return 0; }
-    if (keyeq(k, "mute"))      { c->mute = as_bool(v, c->mute); return 0; }
-    if (keyeq(k, "volume"))    { double x = atof(v); c->volume = x < 0 ? 0 : (x > 1 ? 1 : x); return 0; }
-
+    /* everything the running program can change: queued for the parameter table */
+    if (param_find(k)) return queue(c, k, v);
     return -1;
+}
+
+int config_apply(const pond_config *c, struct app *a)
+{
+    int refused = 0;
+    for (int i = 0; i < c->nlate; i++) {
+        const int rc = param_set_str(a, c->late[i].name, c->late[i].val);
+        if (rc != 0) { fprintf(stderr, "cannot set %s = %s\n", c->late[i].name, c->late[i].val); refused++; }
+    }
+    return refused;
 }
 
 /* ------------------------------------------------------------------ the file */
@@ -285,15 +262,15 @@ int config_load(pond_config *c, const char *path)
 
 static void put(FILE *f, const char *key, const char *val, const char *comment)
 {
-    if (comment && *comment) fprintf(f, "%-13s = %-11s # %s\n", key, val, comment);
-    else                     fprintf(f, "%-13s = %s\n", key, val);
+    if (comment && *comment) fprintf(f, "%-14s = %-12s # %s\n", key, val, comment);
+    else                     fprintf(f, "%-14s = %s\n", key, val);
 }
 
 static const char *onoff(int b) { return b ? "on" : "off"; }
 
-int config_write(const pond_config *c, const char *path)
+int config_write(const pond_config *c, const struct app *a, const char *path)
 {
-    if (!c || !path) return -1;
+    if (!c || !a || !path) return -1;
     FILE *f = fopen(path, "w");
     if (!f) return -1;
     char v[80];
@@ -302,63 +279,38 @@ int config_write(const pond_config *c, const char *path)
         "# pond configuration.  Written by --write-config; edit freely.\n"
         "# Comments run from # or ; to the end of the line.  Settings are read\n"
         "# here first and then overridden by the command line; --no-config\n"
-        "# ignores this file altogether.\n");
+        "# ignores this file altogether.  Every name below is also a --name\n"
+        "# option, and --list-params shows them all with their ranges.\n");
 
-    fprintf(f, "\n# ---- window and view ----\n");
+    fprintf(f, "\n# ---- before the program starts ----\n");
     snprintf(v, sizeof v, "%dx%d", c->winw, c->winh);      put(f, "window", v, "pixels, or one number for 16:10");
-    put(f, "fullscreen", onoff(c->fullscreen), "F11 or alt+enter toggles it");
     snprintf(v, sizeof v, "%d", c->grid);                  put(f, "grid", v, "modes per axis, a power of two");
     put(f, "mode", c->mode3d ? "3d" : "2d", "3d, or 2d for the CPU renderer");
-    snprintf(v, sizeof v, "%d", c->glass);                 put(f, "glass", v, "0 opaque, 1 floor only, 2 glass,");
-    fprintf(f, "%-13s   %-11s # %s\n", "", "", "3 glass+bottom, 4 no container");
-    if (c->floor_style < 0) snprintf(v, sizeof v, "auto"); else snprintf(v, sizeof v, "%d", c->floor_style);
-    put(f, "floor", v, "auto, or 0 tiles, 1 checker, 2 sand");
     put(f, "msaa", onoff(c->msaa), "ask for a multisampled framebuffer");
     put(f, "cpu-caustics", onoff(c->cpu_caustics), "force the CPU caustic splat");
-    put(f, "hud", onoff(c->show_hud), "the settings box, top left (key: d)");
-    put(f, "help", onoff(c->show_help), "start with the help panel up (h/F1)");
-    snprintf(v, sizeof v, "%g,%g,%g", (double)c->cam_yaw, (double)c->cam_pitch, (double)c->cam_dist);
-    put(f, "camera", v, "yaw, pitch (deg), distance in lengths");
+    put(f, "no-audio", onoff(c->no_audio), "do not open a sound device at all");
+    snprintf(v, sizeof v, "%d", c->hos_nc);                put(f, "hos-nc", v, "HOS: modes per axis that take part");
+    snprintf(v, sizeof v, "%d", c->hos_order);             put(f, "hos-order", v, "HOS: 2 or 3");
 
-    fprintf(f, "\n# ---- basin ----\n");
-    snprintf(v, sizeof v, "%d", c->preset + 1);
-    put(f, "preset", v, "1 tray 30 cm, 2 pond 3 m,");
-    fprintf(f, "%-13s   %-11s # %s\n", "", "", "3 pool 12 m, 4 sea 80 m");
-    put(f, "shape", c->shape == WAVE_DISK ? "disk" : "rect", "rect or disk");
-    if (c->Lx > 0 && c->Ly > 0) snprintf(v, sizeof v, "%gx%g", c->Lx, c->Ly); else v[0] = 0;
-    put(f, "basin", v, "width x length in metres; empty = preset");
-    snprintf(v, sizeof v, "%g", c->depth);                 put(f, "depth", v, "metres; 0 = the preset's");
-    put(f, "nonlinear", onoff(c->hos_on), "the HOS correction (rectangle only)");
-    snprintf(v, sizeof v, "%d", c->hos_nc);                put(f, "hos-nc", v, "modes per axis that take part");
-    snprintf(v, sizeof v, "%d", c->hos_order);             put(f, "hos-order", v, "2 or 3");
-
-    fprintf(f, "\n# ---- sources at start ----\n");
-    put(f, "rain", onoff(c->rain), NULL);
-    put(f, "breeze", onoff(c->breeze), NULL);
-    put(f, "paddle", onoff(c->paddle), NULL);
-    snprintf(v, sizeof v, "%g", c->rain_rate);             put(f, "rain-rate", v, "drops per simulated second");
-    snprintf(v, sizeof v, "%g", c->warp);                  put(f, "warp", v, "simulated seconds per real second");
-    fprintf(f, "\n# ---- wavemaker ----\n");
-    if (c->paddle_freq > 0) snprintf(v, sizeof v, "%g", c->paddle_freq); else snprintf(v, sizeof v, "auto");
-    put(f, "paddle-freq", v, "Hz; auto = 8 wavelengths across");
-    {
-        static const char *const wn[] = { "x=0", "x=Lx", "y=0", "y=Ly" };
-        put(f, "paddle-wall", wn[c->paddle_wall], "x=0, x=Lx, y=0, y=Ly (disk: the rim)");
-    }
-    snprintf(v, sizeof v, "%g", c->paddle_pos);            put(f, "paddle-pos", v, "0..1 along that wall");
-    snprintf(v, sizeof v, "%g", c->paddle_span);           put(f, "paddle-span", v, "0..1 of it; 1 = the whole wall");
-    snprintf(v, sizeof v, "%g", c->paddle_stroke);         put(f, "paddle-stroke", v, "multiplier on the stroke");
-
-    fprintf(f, "\n# ---- sound ----\n");
-    put(f, "no-audio", onoff(c->no_audio), "do not open a device at all");
-    put(f, "mute", onoff(c->mute), "device open but silent; m unmutes");
-    snprintf(v, sizeof v, "%g", c->volume);                put(f, "volume", v, "0..1");
-    fprintf(f, "# multipliers on the designed levels: 1 = as designed, 0 = off\n");
-    for (int i = 0; i < SND_NUM; i++) {
-        char key[32];
-        snprintf(key, sizeof key, "sound.%s", snd_knob_names[i]);
-        snprintf(v, sizeof v, "%g", c->knob[i]);
-        put(f, key, v, NULL);
+    const char *group = "";
+    for (int i = 0; i < param_count(); i++) {
+        const param *p = param_at(i);
+        if (strcmp(p->group, group) != 0) {
+            group = p->group;
+            fprintf(f, "\n# ---- %s ----\n", group);
+            if (!strcmp(group, "basin"))
+                fprintf(f, "# preset is applied first; a width, length, depth or floor given here overrides\n"
+                           "# it (commented lines are the preset's own values, for reference)\n");
+            if (!strcmp(group, "sound"))
+                fprintf(f, "# the five sound.* levels multiply the designed ones: 1 = as designed, 0 = off\n");
+        }
+        param_get_str(a, p->name, v, sizeof v);
+        if (param_is_derived(a, p->name)) {
+            /* what the preset gives: left commented so the file keeps following the preset */
+            char k2[40];
+            snprintf(k2, sizeof k2, "# %s", p->name);
+            put(f, k2, v, p->help);
+        } else put(f, p->name, v, p->help);
     }
     fclose(f);
     return 0;

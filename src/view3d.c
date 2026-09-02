@@ -399,6 +399,18 @@ static const char *fs_blur = GLSL(
         o = vec4(s / 16.0, 0.0, 0.0, 1.0);
     }
 );
+/* --- flat marker geometry (the wavemaker outline): world space, one colour --- */
+static const char *vs_mark = GLSL(
+    in vec3 a_pos;
+    uniform mat4 u_vp;
+    void main() { gl_Position = u_vp * vec4(a_pos, 1.0); }
+);
+static const char *fs_mark = GLSL(
+    uniform vec3 u_col;
+    out vec4 o;
+    void main() { o = vec4(gam(u_col), 1.0); }
+);
+
 static const char *vs_fill = GLSL(
     out vec2 v_uv;
     void main() {
@@ -552,6 +564,8 @@ static const char *fs_ovl = GLSL(
     void main() { o = texture(u_tex, v_uv); }
 );
 
+#define MARK_MAX 768        /* vertices for the wavemaker outline: 6 per segment */
+
 /* ------------------------------------------------------------------ state */
 struct view3d {
     SDL_Window *win;
@@ -564,7 +578,8 @@ struct view3d {
     int slab_off, slab_n, walls_off, walls_n, table_off, table_n, inner_off, inner_n;
     float yaw, pitch, dist, cx, cz;
 
-    GLuint p_bg, p_surf, p_solid, p_sides, p_glass, p_ovl, p_caus, p_fill;
+    GLuint p_bg, p_surf, p_solid, p_sides, p_glass, p_ovl, p_caus, p_fill, p_mark;
+    GLuint vao_mark, vbo_mark; int n_mark;
     GLuint vao_caus, vbo_caus, ebo_caus; int n_caus_int, n_caus_all;   /* caustic mesh (rect: padded grid; disk: light-map grid) */
     GLuint vao_res, vbo_res, ebo_res; int n_res_idx; int res_pad;        /* disk: polar resample mesh */
     GLuint p_res, tex_hc, fbo_hc; int hc_pad;   /* texels of margin around the square */
@@ -1065,13 +1080,22 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
     v->p_caus  = program(vs_caus, fs_caus, 0);
     v->p_fill  = program(vs_fill, fs_fill, 0);
     v->p_blur  = program(vs_fill, fs_blur, 0);
+    v->p_mark  = program(vs_mark, fs_mark, 0);
     v->p_res   = program(vs_resample, fs_resample, 0);
-    if (!v->p_res || !v->p_blur || !v->p_bg || !v->p_surf || !v->p_solid || !v->p_sides || !v->p_glass || !v->p_ovl || !v->p_caus || !v->p_fill) { free(v); return NULL; }
+    if (!v->p_res || !v->p_blur || !v->p_bg || !v->p_surf || !v->p_solid || !v->p_sides || !v->p_glass || !v->p_ovl || !v->p_caus || !v->p_fill || !v->p_mark) { free(v); return NULL; }
 
     glGenVertexArrays(1, &v->vao_empty);
     glGenVertexArrays(1, &v->vao_surf); glGenBuffers(1, &v->vbo_surf); glGenBuffers(1, &v->ebo_surf);
     glGenVertexArrays(1, &v->vao_solid); glGenBuffers(1, &v->vbo_solid);
     glGenVertexArrays(1, &v->vao_sides); glGenBuffers(1, &v->vbo_sides); glGenBuffers(1, &v->ebo_sides);
+    glGenVertexArrays(1, &v->vao_mark); glGenBuffers(1, &v->vbo_mark);
+    glBindVertexArray(v->vao_mark);
+    glBindBuffer(GL_ARRAY_BUFFER, v->vbo_mark);
+    glBufferData(GL_ARRAY_BUFFER, MARK_MAX * 3 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void *)0);
+    glBindVertexArray(0);
+
     glGenVertexArrays(1, &v->vao_caus); glGenBuffers(1, &v->vbo_caus); glGenBuffers(1, &v->ebo_caus);
     glGenVertexArrays(1, &v->vao_res); glGenBuffers(1, &v->vbo_res); glGenBuffers(1, &v->ebo_res);
 
@@ -1208,6 +1232,13 @@ void view3d_set_camera(view3d *v, float yaw_deg, float pitch_deg, float dist_rel
 {
     v->yaw = yaw_deg; v->pitch = pitch_deg;
     v->dist = dist_rel * (v->Lx > v->Ly ? v->Lx : v->Ly);
+}
+
+void view3d_get_camera(const view3d *v, float *yaw_deg, float *pitch_deg, float *dist_rel)
+{
+    if (yaw_deg) *yaw_deg = v->yaw;
+    if (pitch_deg) *pitch_deg = v->pitch;
+    if (dist_rel) *dist_rel = v->dist / (v->Lx > v->Ly ? v->Lx : v->Ly);
 }
 
 void view3d_orbit(view3d *v, float dyaw, float dpitch)
@@ -1609,6 +1640,95 @@ static void draw_overlay(view3d *v)
 }
 
 /* ------------------------------------------------------------------ frame */
+/* ------------------------------------------------- the wavemaker's outline
+ * A closed strip of thin quads lying just above the mean surface: the footprint
+ * of the forcing, out to its 1/e contour in both directions.  Rebuilt each frame
+ * from a few dozen vertices, which is nothing. */
+static void mark_seg(float *b, int *n, float x0, float z0, float x1, float z1, float h, float y)
+{
+    float dx = x1 - x0, dz = z1 - z0;
+    const float l = sqrtf(dx * dx + dz * dz);
+    if (l < 1e-9f || *n + 6 > MARK_MAX) return;
+    dx /= l; dz /= l;
+    x0 -= dx * h; z0 -= dz * h;              /* overshoot the ends so the corners close */
+    x1 += dx * h; z1 += dz * h;
+    const float px = -dz * h, pz = dx * h;
+    const float q[4][2] = { { x0 + px, z0 + pz }, { x1 + px, z1 + pz },
+                            { x1 - px, z1 - pz }, { x0 - px, z0 - pz } };
+    static const int tri[6] = { 0, 1, 2, 0, 2, 3 };
+    for (int i = 0; i < 6; i++) {
+        b[*n * 3 + 0] = q[tri[i]][0];
+        b[*n * 3 + 1] = y;
+        b[*n * 3 + 2] = q[tri[i]][1];
+        (*n)++;
+    }
+}
+
+static void build_paddle_mark(view3d *v, const view3d_params *p)
+{
+    static float buf[MARK_MAX * 3];
+    int n = 0;
+    const float Lmax = v->Lx > v->Ly ? v->Lx : v->Ly;
+    const float h = 0.004f * Lmax;                  /* half the line thickness */
+    const float y = 0.006f * Lmax;                  /* just clear of the mean surface */
+    /* the forcing strip is a fraction of a percent of the basin deep, which would
+     * draw as one line: give the outline a floor so it reads as a bar at the wall */
+    float wd = p->paddle_width;
+    if (wd < 0.02f * Lmax) wd = 0.02f * Lmax;
+
+    if (v->shape == 1) {
+        const float R = 0.5f * v->Lx, cx = R, cz = R;
+        const float r0 = R - wd > 0.0f ? R - wd : 0.0f, r1 = R;
+        const int full = p->paddle_span >= 1.0f;
+        const float th0 = 6.28318530718f * p->paddle_pos, sig = 3.14159265f * p->paddle_span;
+        const float a0 = full ? 0.0f : th0 - sig, a1 = full ? 6.28318530718f : th0 + sig;
+        const int na = 48;
+        for (int i = 0; i < na; i++) {
+            const float t0 = a0 + (a1 - a0) * i / na, t1 = a0 + (a1 - a0) * (i + 1) / na;
+            mark_seg(buf, &n, cx + r1 * cosf(t0), cz + r1 * sinf(t0), cx + r1 * cosf(t1), cz + r1 * sinf(t1), h, y);
+            mark_seg(buf, &n, cx + r0 * cosf(t0), cz + r0 * sinf(t0), cx + r0 * cosf(t1), cz + r0 * sinf(t1), h, y);
+        }
+        if (!full) {
+            mark_seg(buf, &n, cx + r0 * cosf(a0), cz + r0 * sinf(a0), cx + r1 * cosf(a0), cz + r1 * sinf(a0), h, y);
+            mark_seg(buf, &n, cx + r0 * cosf(a1), cz + r0 * sinf(a1), cx + r1 * cosf(a1), cz + r1 * sinf(a1), h, y);
+        }
+    } else {
+        const int wall = p->paddle_wall & 3, along_z = wall < 2;
+        const float Lq = along_z ? v->Ly : v->Lx, Lp = along_z ? v->Lx : v->Ly;
+        float v0 = 0.0f, v1 = Lq;
+        if (p->paddle_span < 1.0f) {
+            const float c = p->paddle_pos * Lq, sig = 0.5f * p->paddle_span * Lq;
+            v0 = c - sig; v1 = c + sig;
+            if (v0 < 0.0f) v0 = 0.0f;
+            if (v1 > Lq) v1 = Lq;
+        }
+        const float u0 = (wall & 1) ? Lp - wd : 0.0f, u1 = (wall & 1) ? Lp : wd;
+        /* (u, v) -> (x, z) */
+        float c0[2], c1[2], c2[2], c3[2];
+        if (along_z) { c0[0] = u0; c0[1] = v0; c1[0] = u1; c1[1] = v0; c2[0] = u1; c2[1] = v1; c3[0] = u0; c3[1] = v1; }
+        else         { c0[1] = u0; c0[0] = v0; c1[1] = u1; c1[0] = v0; c2[1] = u1; c2[0] = v1; c3[1] = u0; c3[0] = v1; }
+        mark_seg(buf, &n, c0[0], c0[1], c1[0], c1[1], h, y);
+        mark_seg(buf, &n, c1[0], c1[1], c2[0], c2[1], h, y);
+        mark_seg(buf, &n, c2[0], c2[1], c3[0], c3[1], h, y);
+        mark_seg(buf, &n, c3[0], c3[1], c0[0], c0[1], h, y);
+    }
+    v->n_mark = n;
+    glBindBuffer(GL_ARRAY_BUFFER, v->vbo_mark);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)n * 3 * sizeof(float), buf);
+}
+
+static void draw_paddle_mark(view3d *v, const view3d_params *p, const float *vp)
+{
+    if (!p->paddle) return;
+    build_paddle_mark(v, p);
+    if (v->n_mark <= 0) return;
+    glUseProgram(v->p_mark);
+    glUniformMatrix4fv(U(v->p_mark, "u_vp"), 1, GL_FALSE, vp);
+    glUniform3f(U(v->p_mark, "u_col"), 1.0f, 0.45f, 0.10f);
+    glBindVertexArray(v->vao_mark);
+    glDrawArrays(GL_TRIANGLES, 0, v->n_mark);
+}
+
 static void set_common(view3d *v, GLuint p, const view3d_params *prm, const float *vp)
 {
     glUseProgram(p);
@@ -1689,6 +1809,8 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
     set_common(v, v->p_surf, p, vp);
     glBindVertexArray(v->vao_surf);
     glDrawElements(GL_TRIANGLES, v->n_surf_idx, GL_UNSIGNED_INT, (void *)0);
+
+    draw_paddle_mark(v, p, vp);
 
     /* transparent: the water body's faces, then the glass (if any) */
     if (m >= 1) {

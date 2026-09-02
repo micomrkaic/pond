@@ -17,11 +17,8 @@
 
 /* Entry point: SDL2 window, input, timing; Linux / macOS via OpenGL 3.3,
  * browser via Emscripten (WebGL2), same source. */
-#include "wave.h"
-#include "render.h"
-#include "view3d.h"
-#include "hos.h"
-#include "audio.h"
+#include "app.h"
+#include "param.h"
 #include "config.h"
 
 #include <SDL.h>
@@ -35,20 +32,7 @@
 #include <emscripten/html5.h>
 #endif
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
 #define SUBSTEPS_PER_SEC 240.0   /* rotor table granularity at time warp 1 */
-
-typedef struct { const char *name; double L, depth; int floor; } preset;
-static const preset presets[] = {
-    { "tray",  0.30,  0.02, 0 },
-    { "pond",  3.00,  0.60, 2 },
-    { "pool", 12.00,  2.00, 0 },
-    { "sea",  80.00, 30.00, 2 },
-};
-#define NPRESETS ((int)(sizeof presets / sizeof presets[0]))
 
 static const char *const help_lines[] = {
     "pond - dispersive waves in a rectangular basin",
@@ -79,6 +63,7 @@ static const char *const help_lines[] = {
     "p / P     wavemaker on/off, next wall",
     "k/K l/L   its frequency, its span (size)",
     "< >       slide it along the wall",
+    "          (its outline is drawn on the water)",
     "- =       time warp        x/X   damping",
     "g/G f     display gain, floor pattern",
     "d         hide / show this settings box",
@@ -90,165 +75,37 @@ static const char *const help_lines[] = {
 };
 #define NHELP ((int)(sizeof help_lines / sizeof help_lines[0]))
 
-typedef struct {
-    SDL_Window *win;
-    /* 2-D path */
-    SDL_Renderer *ren;
-    SDL_Texture *tex;
-    render_params rp;
-    uint32_t *pix;
-    SDL_Rect dst;
-    /* 3-D path */
-    view3d *v3;
-    view3d_params p3;
-    int mode3d, show_help, show_hud, fullscreen;
-
-    wave *w;
-    int nx, ny;                /* grid parameter (nx = ny = --grid) */
-    int shape;                 /* WAVE_RECT or WAVE_DISK */
-    hos *hs;                   /* nonlinear correction (rectangle only) */
-    int hos_on, hos_nc, hos_order, hos_skipped;
-    audio *au;                 /* NULL when there is no audio device or --mute */
-    double finger_t;           /* simulated time of the last finger plink */
-    int frame_no;
-    int running, paused, hud_dirty;
-    int rain, breeze, paddle;
-    double rain_rate;          /* drops per simulated second */
-    double warp;               /* simulated seconds per real second */
-    double acc;                /* simulated time not yet stepped */
-    double paddle_div;         /* wavelengths across the basin: the frequency, kept basin-relative
-                                  so a change of preset or size keeps the same picture */
-    int    paddle_wall;        /* 0 x=0, 1 x=Lx, 2 y=0, 3 y=Ly */
-    double paddle_pos;         /* 0..1 along that wall (disk: turns around the rim) */
-    double paddle_span;        /* 0..1 of the wall; 1 = the whole wall */
-    double paddle_gain, breeze_gain, finger_gain;
-    int preset;
-
-    int dragging, orbiting, mx, my;
-    int touch_active; float tx, ty;   /* two-finger gesture (touch screens, browsers) */
-    Uint64 prev;
-    int shots, shot_pending;
-    const char *snap_path;     /* --snap3d: save the last frame here */
-    int frames_left;           /* --frames N: quit after N frames (0 = never) */
-} app;
 
 static void print_help(void)
 {
     for (int k = 0; k < NHELP; k++) puts(help_lines[k]);
-    puts("\n  --grid N      mode grid (power of two, default 512 native / 256 web)\n"
-         "  --window WxH  window size in pixels (default 1280x800; a single number means 16:10)\n"
-         "  --preset N    start with preset 1..4\n"
-         "  --shape S     rect (default) or disk\n"
-         "  --hos         start with the nonlinear (HOS) correction on (rectangle only)\n"
-         "  --hos-nc N    modes per axis that take part (power of two, default 64)\n"
-         "  --hos-order M 2 or 3 (default 3)\n"
-         "  --basin WxL   basin width x length in metres (overrides the preset; disk: diameter)\n"
-         "  --depth H     depth in metres\n"
-         "  --2d          top-down CPU renderer instead of the 3-D view\n"
-         "  --nomsaa      do not ask for a multisampled framebuffer\n"
+    puts("\nBefore the program starts:\n"
+         "  --grid N        mode grid (power of two, default 512 native / 256 web)\n"
+         "  --window WxH    window size in pixels (default 1280x800; one number means 16:10)\n"
+         "  --2d            top-down CPU renderer instead of the 3-D view\n"
+         "  --nomsaa        do not ask for a multisampled framebuffer\n"
          "  --cpu-caustics  compute the caustic light map on the CPU (default: GPU when possible)\n"
-         "  --mute        start muted (m unmutes)   --no-audio  do not open a device\n"
-         "  --volume V    0..1 (default 0.7)\n"
-         "  --sound K=V,... sound knobs: drops, bed, brown, breeze, harsh (1 = as designed; e.g. bed=0.5,brown=0.3)\n"
-         "  --cam Y,P,D   camera yaw, pitch (deg) and distance (in basin lengths)\n"
-         "  --glass N     0 opaque, 1 floor only, 2 glass walls, 3 glass walls + bottom, 4 no walls\n"
-         "  --frames N    quit after N displayed frames\n"
-         "  --snap3d F    with --frames: save the last 3-D frame to F (bmp)\n"
-         "  --bench N     run N headless frames of the CPU path, print timings, exit\n"
-         "  --snap F      with --bench: save the last frame to F (bmp)\n"
-         "  --scene S     sources to start with: any of rain,paddle,breeze\n"
-         "  --rain-rate R drops per simulated second (default 2)\n"
-         "  --warp W      simulated seconds per real second (default 1)\n"
-         "  --floor N     floor pattern: 0 tiles, 1 checkerboard, 2 sand (default: the preset's)\n"
-         "  --paddle-freq F  wavemaker frequency in Hz (default: 8 wavelengths across the basin)\n"
-         "  --paddle-wall W  x=0 (default), x=Lx, y=0, y=Ly; the disk always uses its rim\n"
-         "  --paddle-pos P   0..1 along that wall     --paddle-span S  0..1 of it, 1 = all of it\n"
-         "  --paddle-stroke M  multiplier on the stroke\n"
-         "  --fullscreen  start full screen (F11 or alt+enter toggles it)\n"
-         "  --no-hud      start with the settings box hidden (d toggles it)\n"
-         "  --config F    read F instead of the default config file\n"
-         "  --no-config   ignore the config file\n"
+         "  --no-audio      do not open a sound device at all (--mute keeps it open but silent)\n"
+         "  --hos-nc N --hos-order M   the nonlinear correction's modes per axis and order (64, 3)\n"
+         "  --preset N      start with preset 1..4;  --shape rect|disk;  --basin WxL;  --depth H\n"
+         "\n"
+         "Everything else is a parameter, settable as --name value (booleans: --name, --no-name):\n"
+         "  --list-params   show them all with their ranges and current values, and exit\n"
+         "  e.g. --paddle --paddle-freq 1.2 --paddle-span 0.15 --glass floor --yaw 60 --no-hud\n"
+         "  --scene S       any of rain,paddle,breeze     --cam Y,P,D   camera yaw, pitch, distance\n"
+         "  --sound K=V,... the five sound levels           --hos         nonlinear correction on\n"
+         "\n"
+         "Per run:\n"
+         "  --frames N      quit after N displayed frames;  --snap3d F  save the last 3-D frame to F (bmp)\n"
+         "  --bench N       run N headless frames of the CPU path, print timings, exit;  --snap F  save the last\n"
+         "  --config F      read F instead of the default config file;  --no-config  ignore it\n"
          "  --write-config [F]  write the settings as a config file and exit\n"
          "\n"
-         "Settings come from built-in defaults, then the config file, then these\n"
-         "options.  The file is the first of $POND_CONFIG,\n"
-         "$XDG_CONFIG_HOME/pond/pond.conf, ~/.config/pond/pond.conf, ~/.pondrc,\n"
-         "./pond.conf that exists.  --write-config makes one from the current\n"
-         "settings, so \"pond --volume 0.3 --glass 1 --write-config\" saves that as\n"
-         "the way pond starts from now on.\n");
-}
-
-static wave *make_wave(int shape, int grid, double Lx, double Ly, double depth)
-{
-    if (shape == WAVE_DISK) {
-        printf("building the disk basis (%d angles x %d rings)...\n", grid, grid / 2);
-        fflush(stdout);
-        return wave_create_disk(grid, grid / 2, Lx, depth);
-    }
-    return wave_create(grid, grid, Lx, Ly, depth);
-}
-
-static int set_shape(app *a, int shape)
-{
-    if (shape == a->shape) return 0;
-    double Lx = a->w->Lx, Ly = a->w->Ly, depth = a->w->depth, gamma0 = a->w->gamma0;
-    if (shape == WAVE_DISK) Lx = Ly = sqrt(Lx * Ly);
-    wave *nw = make_wave(shape, a->nx, Lx, Ly, depth);
-    if (!nw) { fprintf(stderr, "could not create the %s basin\n", shape == WAVE_DISK ? "disk" : "rectangular"); return -1; }
-    wave_set_damping(nw, gamma0);
-    wave_destroy(a->w);
-    a->w = nw;
-    a->shape = shape;
-    if (a->hs) { hos_destroy(a->hs); a->hs = NULL; }
-    if (a->v3) {
-        view3d_destroy(a->v3);
-        a->v3 = view3d_create(a->win, a->w, a->p3.cpu_caustics);
-        if (!a->v3) { fprintf(stderr, "3-D view unavailable\n"); a->running = 0; return -1; }
-        view3d_reset_camera(a->v3, a->w);
-    }
-    wave_add_drop(a->w, 0.5 * a->w->Lx, 0.5 * a->w->Ly, 0.03 * a->w->Lx, -0.15 * 0.03 * a->w->Lx);
-    a->hud_dirty = 1;
-    return 0;
-}
-
-static void pool_changed(app *a)
-{
-    if (a->v3) view3d_set_pool(a->v3, a->w);
-    a->hud_dirty = 1;
-}
-
-static void set_preset(app *a, int p)
-{
-    if (p < 0 || p >= NPRESETS) return;
-    a->preset = p;
-    wave_set_pool(a->w, presets[p].L, presets[p].L, presets[p].depth);
-    a->rp.floor_style = a->p3.floor_style = presets[p].floor;
-    if (a->v3) view3d_reset_camera(a->v3, a->w);
-    a->hud_dirty = 1;
-}
-
-/* The wavemaker is driven at a frequency; the wavelength it radiates is whatever
- * the dispersion relation answers with.  The number kept is that wavelength as a
- * count across the basin, so resizing the basin or changing preset keeps the same
- * picture rather than the same hertz. */
-static double paddle_k(const app *a)
-{
-    return 2.0 * M_PI * a->paddle_div / sqrt(a->w->Lx * a->w->Ly);
-}
-
-static double paddle_hz(const app *a)
-{
-    return wave_omega(a->w, paddle_k(a)) / (2.0 * M_PI);
-}
-
-static void set_paddle_hz(app *a, double f)
-{
-    const double L = sqrt(a->w->Lx * a->w->Ly);
-    double div = wave_k_of_omega(a->w, 2.0 * M_PI * f) * L / (2.0 * M_PI);
-    const double dmax = 0.25 * a->nx;      /* keep the radiated wave well inside the grid */
-    if (div > dmax) div = dmax;
-    if (div < 0.25) div = 0.25;
-    a->paddle_div = div;
+         "Settings come from built-in defaults, then the config file, then these options.\n"
+         "The file is the first of $POND_CONFIG, $XDG_CONFIG_HOME/pond/pond.conf,\n"
+         "~/.config/pond/pond.conf, ~/.pondrc, ./pond.conf that exists.  --write-config makes\n"
+         "one from the current settings, so \"pond --volume 0.3 --glass floor --write-config\"\n"
+         "saves that as the way pond starts from now on.\n");
 }
 
 static void update_hud(app *a)
@@ -277,9 +134,9 @@ static void update_hud(app *a)
     char line4[128] = "";
     if (a->paddle) {
         static const char *const wall_names[] = { "wall x=0", "wall x=Lx", "wall y=0", "wall y=Ly" };
-        const double k = paddle_k(a);
+        const double k = app_paddle_k(a);
         snprintf(line4, sizeof line4, "\npaddle: %.3g Hz  lambda %.3g m  %s  pos %.0f%%  span %.0f%%",
-                 paddle_hz(a), 2.0 * M_PI / k,
+                 app_paddle_hz(a), 2.0 * M_PI / k,
                  a->shape == WAVE_DISK ? "rim" : wall_names[a->paddle_wall],
                  100.0 * a->paddle_pos, 100.0 * a->paddle_span);
     }
@@ -347,23 +204,6 @@ static void save_screenshot_2d(app *a)
 #endif
 }
 
-static void set_fullscreen(app *a, int on)
-{
-    if (!a->win) return;
-    a->fullscreen = !!on;
-#ifdef __EMSCRIPTEN__
-    /* The browser grants full screen only from inside a user gesture, and SDL
-     * events are polled from the animation frame, so defer the request to the
-     * next one Emscripten sees. */
-    if (on) emscripten_request_fullscreen("#canvas", 1);
-    else    emscripten_exit_fullscreen();
-#else
-    if (SDL_SetWindowFullscreen(a->win, on ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) != 0)
-        fprintf(stderr, "full screen: %s\n", SDL_GetError());
-#endif
-    a->hud_dirty = 1;
-}
-
 /* Held keys steer the camera every frame, so holding one sweeps smoothly
  * instead of stuttering along with the keyboard auto-repeat. */
 static void camera_keys(app *a, double dt)
@@ -383,93 +223,74 @@ static void camera_keys(app *a, double dt)
     if (in != out) view3d_zoom(a->v3, powf(2.0f, (out ? 1.0f : -1.0f) * sp * (float)dt));
 }
 
+/* Keys that are a parameter nudge: lower case down, upper case up, or a toggle /
+ * cycle.  shift: 0 without, 1 with, -1 either way.  What is not a nudge -- quit,
+ * clear, screenshot, the presets, reset camera -- is in the switch below. */
+typedef struct { SDL_Keycode key; int shift; const char *name; int dir; } keybind;
+static const keybind keybinds[] = {
+    { SDLK_r, -1, "rain", 0 },
+    { SDLK_i,  0, "rain-rate", -1 },      { SDLK_i, 1, "rain-rate", +1 },
+    { SDLK_b, -1, "breeze", 0 },
+    { SDLK_p,  0, "paddle", 0 },          { SDLK_p, 1, "paddle-wall", +1 },
+    { SDLK_k,  0, "paddle-freq", -1 },    { SDLK_k, 1, "paddle-freq", +1 },
+    { SDLK_l,  0, "paddle-span", -1 },    { SDLK_l, 1, "paddle-span", +1 },
+    { SDLK_COMMA, 1, "paddle-pos", -1 },  { SDLK_PERIOD, 1, "paddle-pos", +1 },
+    { SDLK_COMMA, 0, "depth", -1 },       { SDLK_PERIOD, 0, "depth", +1 },
+    { SDLK_LEFTBRACKET, 0, "width", -1 }, { SDLK_RIGHTBRACKET, 0, "width", +1 },
+    { SDLK_LEFTBRACKET, 1, "length", -1 },{ SDLK_RIGHTBRACKET, 1, "length", +1 },
+    { SDLK_n, -1, "shape", 0 },
+    { SDLK_y, -1, "nonlinear", 0 },
+    { SDLK_x,  0, "damping", -1 },        { SDLK_x, 1, "damping", +1 },
+    { SDLK_MINUS, -1, "warp", -1 },       { SDLK_KP_MINUS, -1, "warp", -1 },
+    { SDLK_EQUALS, -1, "warp", +1 },      { SDLK_PLUS, -1, "warp", +1 },  { SDLK_KP_PLUS, -1, "warp", +1 },
+    { SDLK_g,  0, "gain", -1 },           { SDLK_g, 1, "gain", +1 },
+    { SDLK_f, -1, "floor", +1 },
+    { SDLK_t, -1, "glass", +1 },
+    { SDLK_d, -1, "hud", 0 },
+    { SDLK_v, -1, "view", 0 },
+    { SDLK_SPACE, -1, "paused", 0 },
+    { SDLK_F11, -1, "fullscreen", 0 },
+    { SDLK_m, -1, "mute", 0 },
+    { SDLK_a,  0, "volume", -1 },         { SDLK_a, 1, "volume", +1 },
+    { SDLK_j,  0, "sound.drops", -1 },    { SDLK_j, 1, "sound.drops", +1 },
+    { SDLK_u,  0, "sound.bed", -1 },      { SDLK_u, 1, "sound.bed", +1 },
+    { SDLK_z,  0, "sound.brown", -1 },    { SDLK_z, 1, "sound.brown", +1 },
+    { SDLK_w,  0, "sound.breeze", -1 },   { SDLK_w, 1, "sound.breeze", +1 },
+    { SDLK_e,  0, "sound.harsh", -1 },    { SDLK_e, 1, "sound.harsh", +1 },
+};
+#define NKEYBINDS ((int)(sizeof keybinds / sizeof keybinds[0]))
+
 static void handle_key(app *a, SDL_Keycode k, int shift)
 {
     wave *w = a->w;
-    int alt = (SDL_GetModState() & KMOD_ALT) != 0;
+    const int alt = (SDL_GetModState() & KMOD_ALT) != 0;
+    for (int i = 0; i < NKEYBINDS; i++)
+        if (keybinds[i].key == k && (keybinds[i].shift < 0 || keybinds[i].shift == shift)) {
+            param_nudge(a, keybinds[i].name, keybinds[i].dir);
+            return;
+        }
     switch (k) {
     case SDLK_q: a->running = 0; break;
     case SDLK_ESCAPE:                       /* leave full screen first, then quit */
-        if (a->fullscreen) set_fullscreen(a, 0); else a->running = 0;
+        if (a->fullscreen) param_set(a, "fullscreen", 0); else a->running = 0;
         break;
-    case SDLK_F11: set_fullscreen(a, !a->fullscreen); break;
     case SDLK_RETURN: case SDLK_KP_ENTER:
-        if (alt) set_fullscreen(a, !a->fullscreen);
+        if (alt) param_nudge(a, "fullscreen", 0);
         break;
-    case SDLK_d: a->show_hud = !a->show_hud; break;
     case SDLK_h: case SDLK_F1:
-        a->show_help = !a->show_help;
+        param_nudge(a, "help", 0);
         if (!a->mode3d) print_help();
         break;
-    case SDLK_SPACE: a->paused = !a->paused; break;
     case SDLK_c: wave_clear(w); break;
-    case SDLK_r: a->rain = !a->rain; break;
-    case SDLK_b: a->breeze = !a->breeze; break;
-    case SDLK_p:
-        if (shift) { a->paddle_wall = (a->paddle_wall + 1) % 4; a->paddle_pos = 0.5; }
-        else a->paddle = !a->paddle;
-        break;
-    case SDLK_v: a->rp.view = !a->rp.view; break;
-    case SDLK_f: a->rp.floor_style = a->p3.floor_style = (a->p3.floor_style + 1) % 3; break;
-    case SDLK_t: a->p3.glass = (a->p3.glass + 1) % 5; break;
-    case SDLK_o: case SDLK_HOME: if (a->v3) view3d_reset_camera(a->v3, w); break;
-    case SDLK_n: set_shape(a, a->shape == WAVE_DISK ? WAVE_RECT : WAVE_DISK); break;
-    case SDLK_y: a->hos_on = !a->hos_on; break;
-    case SDLK_m: if (a->au) audio_set_mute(a->au, !audio_muted(a->au)); break;
-    case SDLK_a: if (a->au) audio_set_volume(a->au, shift ? audio_volume(a->au) * 1.25 + 0.01 : audio_volume(a->au) / 1.25); break;
-    /* sound knobs: lower case down, upper case up; 25 % per press, from zero up to a token 0.05 */
-    case SDLK_j: case SDLK_u: case SDLK_z: case SDLK_w: case SDLK_e: {
-        snd_knob kn = k == SDLK_j ? SND_DROPS : k == SDLK_u ? SND_BED : k == SDLK_z ? SND_BROWN : k == SDLK_w ? SND_BREEZE : SND_HARSH;
-        double v = audio_knob(a->au, kn);
-        v = shift ? (v < 0.05 ? 0.05 : v * 1.25) : (v < 0.06 ? 0.0 : v / 1.25);
-        audio_set_knob(a->au, kn, v);
-        break;
-    }
+    case SDLK_o: case SDLK_HOME: app_reset_camera(a); break;
     case SDLK_s:
         if (a->mode3d) a->shot_pending = 1; else save_screenshot_2d(a);
         break;
-    case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: set_preset(a, k - SDLK_1); break;
-    case SDLK_i: a->rain_rate *= shift ? 1.5 : 1.0 / 1.5; break;
-    case SDLK_k: set_paddle_hz(a, paddle_hz(a) * (shift ? 1.25 : 1.0 / 1.25)); break;
-    case SDLK_l:
-        a->paddle_span *= shift ? 1.25 : 1.0 / 1.25;
-        if (a->paddle_span > 1.0) a->paddle_span = 1.0;
-        if (a->paddle_span < 0.02) a->paddle_span = 0.02;
-        break;
-    /* basin dimensions, 5 % per press; keys auto-repeat, so holding one sweeps smoothly.
-     * The grid stays put, so the cells stretch; the aspect ratio is kept within 4:1. */
-    case SDLK_LEFTBRACKET: case SDLK_RIGHTBRACKET: {
-        double f = (k == SDLK_RIGHTBRACKET) ? 1.05 : 1.0 / 1.05;
-        double Lx = shift ? w->Lx : w->Lx * f, Ly = shift ? w->Ly * f : w->Ly;
-        if (a->shape == WAVE_DISK) Lx = Ly = w->Lx * f;          /* diameter */
-        if (Lx / Ly <= 4.0 && Ly / Lx <= 4.0) { wave_set_pool(w, Lx, Ly, w->depth); pool_changed(a); }
-        break;
-    }
-    case SDLK_COMMA: case SDLK_PERIOD: {
-        const int up = (k == SDLK_PERIOD);
-        if (shift) {                        /* < > slide the paddle along its wall */
-            a->paddle_pos += up ? 0.02 : -0.02;
-            if (a->shape == WAVE_DISK) {    /* the rim has no ends: wrap */
-                if (a->paddle_pos < 0.0) a->paddle_pos += 1.0;
-                if (a->paddle_pos > 1.0) a->paddle_pos -= 1.0;
-            } else {
-                if (a->paddle_pos < 0.0) a->paddle_pos = 0.0;
-                if (a->paddle_pos > 1.0) a->paddle_pos = 1.0;
-            }
-            break;
-        }
-        wave_set_pool(w, w->Lx, w->Ly, up ? w->depth * 1.1 : w->depth / 1.1);
-        pool_changed(a);
-        break;
-    }
+    case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: param_set(a, "preset", k - SDLK_1); break;
     case SDLK_BACKSLASH: {   /* make it square again, keeping the area */
         double L = sqrt(w->Lx * w->Ly);
-        wave_set_pool(w, L, L, w->depth); pool_changed(a); break;
+        wave_set_pool(w, L, L, w->depth); app_pool_changed(a); break;
     }
-    case SDLK_MINUS: case SDLK_KP_MINUS: a->warp /= 1.5; break;
-    case SDLK_EQUALS: case SDLK_PLUS: case SDLK_KP_PLUS: a->warp *= 1.5; break;
-    case SDLK_x: wave_set_damping(w, shift ? w->gamma0 * 2.0 : w->gamma0 / 2.0); break;
-    case SDLK_g: a->rp.gain = a->p3.gain = a->p3.gain * (shift ? 1.5f : 1.0f / 1.5f); break;
     /* the arrows and PgUp/PgDn are read as held keys in camera_keys() */
     default: return;
     }
@@ -574,10 +395,17 @@ static void apply_sources(app *a, double dts)
         }
     }
     if (a->paddle) {
-        /* a fixed stroke driven at omega: the acceleration is stroke * omega^2, so the
-         * waves it makes grow with frequency the way a real wavemaker's do */
-        const double om = wave_omega(w, paddle_k(a));
-        const double accel = a->paddle_gain * 0.0025 * L * om * om * cos(om * w->t);
+        /* A wavemaker run at constant speed rather than constant stroke: peak velocity
+         * u0, so the stroke is u0/omega, longest at the low frequencies, and the
+         * acceleration is u0 * omega.  A fixed stroke would put the radiated height
+         * in proportion to omega and leave the bottom of the dial invisible; at
+         * constant speed the frequency knob changes the wavelength and viscosity
+         * alone decides how the height falls off.  u0 is set so the default -- eight
+         * wavelengths across the basin -- looks exactly as it always did. */
+        const double om = wave_omega(w, app_paddle_k(a));
+        const double om_ref = wave_omega(w, 2.0 * M_PI * 8.0 / L);
+        const double u0 = a->paddle_gain * 0.0025 * L * om_ref;
+        const double accel = u0 * om * cos(om * w->t);
         wave_add_paddle(w, a->paddle_wall, a->paddle_pos, a->paddle_span, 0.006 * L, accel, dts);
     }
     if (a->breeze) {
@@ -648,6 +476,14 @@ static void frame(void *ud)
     wave_realize(a->w);
     if (a->hud_dirty) update_hud(a);
 
+    /* the wavemaker's outline, so its place and size can be seen while they change;
+     * d takes it away with the rest of the writing on the screen */
+    a->p3.paddle = a->paddle && a->show_hud;
+    a->p3.paddle_wall = a->paddle_wall;
+    a->p3.paddle_pos = (float)a->paddle_pos;
+    a->p3.paddle_span = (float)a->paddle_span;
+    a->p3.paddle_width = (float)(0.006 * sqrt(a->w->Lx * a->w->Ly));
+
     if (a->mode3d) {
         int last = (a->frames_left == 1);
         int capture = a->shot_pending || (last && a->snap_path);
@@ -687,12 +523,11 @@ static void frame(void *ud)
     if (a->frames_left > 0 && --a->frames_left == 0) a->running = 0;
 }
 
-static int bench(app *a, int frames, const char *snap, const char *scene)
+static int bench(app *a, int frames, const char *snap)
 {
     const double dt = 1.0 / 60.0;
     a->rain_rate = 3.0;
-    if (!scene || !strcmp(scene, "all")) a->rain = a->paddle = a->breeze = 1;
-    else { a->rain = !!strstr(scene, "rain"); a->paddle = !!strstr(scene, "paddle"); a->breeze = !!strstr(scene, "breeze"); }
+    if (!a->rain && !a->paddle && !a->breeze) a->rain = a->paddle = a->breeze = 1;   /* no --scene: everything */
     Uint64 f = SDL_GetPerformanceFrequency();
     double t_src = 0, t_step = 0, t_real = 0, t_rend = 0;
     for (int i = 0; i < frames; i++) {
@@ -765,7 +600,7 @@ POND_MAIN(int argc, char **argv)
     }
 
     /* argv-only: these are per-run, not preferences */
-    int bench_frames = 0, a_frames = 0;
+    int bench_frames = 0, a_frames = 0, list_params = 0;
     const char *snap = NULL, *snap3d = NULL;
 
 #ifdef __EMSCRIPTEN__
@@ -776,61 +611,37 @@ POND_MAIN(int argc, char **argv)
 #endif
 
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--config") && i + 1 < argc) i++;                 /* handled above */
-        else if (!strcmp(argv[i], "--no-config")) ;                            /* handled above */
-        else if (!strcmp(argv[i], "--write-config")) {
-            write_cfg = (i + 1 < argc && argv[i + 1][0] != '-') ? argv[++i] : config_path(1);
-        }
-        else if (!strcmp(argv[i], "--grid") && i + 1 < argc) cfg.grid = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--window") && i + 1 < argc) config_set(&cfg, "window", argv[++i]);
-        else if (!strcmp(argv[i], "--preset") && i + 1 < argc) config_set(&cfg, "preset", argv[++i]);
-        else if (!strcmp(argv[i], "--bench") && i + 1 < argc) bench_frames = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--snap") && i + 1 < argc) snap = argv[++i];
-        else if (!strcmp(argv[i], "--snap3d") && i + 1 < argc) snap3d = argv[++i];
-        else if (!strcmp(argv[i], "--scene") && i + 1 < argc) config_set(&cfg, "scene", argv[++i]);
-        else if (!strcmp(argv[i], "--frames") && i + 1 < argc) a_frames = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--cam") && i + 1 < argc) config_set(&cfg, "camera", argv[++i]);
-        else if (!strcmp(argv[i], "--basin") && i + 1 < argc) config_set(&cfg, "basin", argv[++i]);
-        else if (!strcmp(argv[i], "--shape") && i + 1 < argc) config_set(&cfg, "shape", argv[++i]);
-        else if (!strcmp(argv[i], "--hos")) cfg.hos_on = 1;
-        else if (!strcmp(argv[i], "--hos-nc") && i + 1 < argc) cfg.hos_nc = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--hos-order") && i + 1 < argc) cfg.hos_order = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--depth") && i + 1 < argc) cfg.depth = atof(argv[++i]);
-        else if (!strcmp(argv[i], "--glass") && i + 1 < argc) config_set(&cfg, "glass", argv[++i]);
-        else if (!strcmp(argv[i], "--floor") && i + 1 < argc) config_set(&cfg, "floor", argv[++i]);
-        else if (!strcmp(argv[i], "--2d")) cfg.mode3d = 0;
-        else if (!strcmp(argv[i], "--fullscreen")) cfg.fullscreen = 1;
-        else if (!strcmp(argv[i], "--overlay")) cfg.show_help = 1;
-        else if (!strcmp(argv[i], "--no-hud")) cfg.show_hud = 0;
-        else if (!strcmp(argv[i], "--nomsaa")) cfg.msaa = 0;
-        else if (!strcmp(argv[i], "--cpu-caustics")) cfg.cpu_caustics = 1;
-        else if (!strcmp(argv[i], "--no-audio")) cfg.no_audio = 1;
-        else if (!strcmp(argv[i], "--mute")) cfg.mute = 1;
-        else if (!strcmp(argv[i], "--volume") && i + 1 < argc) config_set(&cfg, "volume", argv[++i]);
-        else if (!strcmp(argv[i], "--warp") && i + 1 < argc) config_set(&cfg, "warp", argv[++i]);
-        else if (!strcmp(argv[i], "--rain-rate") && i + 1 < argc) config_set(&cfg, "rain-rate", argv[++i]);
-        else if (!strcmp(argv[i], "--paddle-freq") && i + 1 < argc) config_set(&cfg, "paddle-freq", argv[++i]);
-        else if (!strcmp(argv[i], "--paddle-wall") && i + 1 < argc) config_set(&cfg, "paddle-wall", argv[++i]);
-        else if (!strcmp(argv[i], "--paddle-pos") && i + 1 < argc) config_set(&cfg, "paddle-pos", argv[++i]);
-        else if (!strcmp(argv[i], "--paddle-span") && i + 1 < argc) config_set(&cfg, "paddle-span", argv[++i]);
-        else if (!strcmp(argv[i], "--paddle-stroke") && i + 1 < argc) config_set(&cfg, "paddle-stroke", argv[++i]);
-        else if (!strcmp(argv[i], "--sound") && i + 1 < argc) {
-            char tmp[256]; snprintf(tmp, sizeof tmp, "%s", argv[++i]);
-            for (char *tok = strtok(tmp, ","); tok; tok = strtok(NULL, ",")) {
-                char *eq = strchr(tok, '=');
-                if (!eq) continue;
-                *eq = 0;
-                char key[64]; snprintf(key, sizeof key, "sound.%s", tok);
-                if (config_set(&cfg, key, eq + 1) != 0) fprintf(stderr, "unknown sound knob '%s'\n", tok);
+        const char *o = argv[i];
+        if (!strcmp(o, "--config") && i + 1 < argc) i++;                 /* handled above */
+        else if (!strcmp(o, "--no-config")) ;                            /* handled above */
+        else if (!strcmp(o, "--help") || !strcmp(o, "-h")) { print_help(); return 0; }
+        else if (!strcmp(o, "--write-config")) write_cfg = (i + 1 < argc && argv[i + 1][0] != '-') ? argv[++i] : config_path(1);
+        else if (!strcmp(o, "--list-params")) list_params = 1;
+        else if (!strcmp(o, "--bench") && i + 1 < argc) bench_frames = atoi(argv[++i]);
+        else if (!strcmp(o, "--snap") && i + 1 < argc) snap = argv[++i];
+        else if (!strcmp(o, "--snap3d") && i + 1 < argc) snap3d = argv[++i];
+        else if (!strcmp(o, "--frames") && i + 1 < argc) a_frames = atoi(argv[++i]);
+        /* flags from before there was a table */
+        else if (!strcmp(o, "--2d")) config_set(&cfg, "mode", "2d");
+        else if (!strcmp(o, "--nomsaa")) config_set(&cfg, "msaa", "off");
+        else if (!strcmp(o, "--cpu-caustics")) config_set(&cfg, "cpu-caustics", "on");
+        else if (!strcmp(o, "--no-audio")) config_set(&cfg, "no-audio", "on");
+        else if (!strcmp(o, "--hos")) config_set(&cfg, "nonlinear", "on");
+        else if (!strcmp(o, "--overlay")) config_set(&cfg, "help", "on");
+        else if (!strncmp(o, "--", 2)) {
+            /* --name value for any setting; a boolean parameter needs no value,
+             * and --no-name turns it off */
+            const char *name = o + 2, *val = NULL;
+            const param *p = param_find(name);
+            if (!p && !strncmp(name, "no-", 3) && (p = param_find(name + 3)) && p->kind == PK_BOOL) { name += 3; val = "off"; }
+            else if (p && p->kind == PK_BOOL && (i + 1 >= argc || !strncmp(argv[i + 1], "--", 2))) val = "on";
+            else if (i + 1 < argc) val = argv[++i];
+            if (!val || config_set(&cfg, name, val) != 0) {
+                fprintf(stderr, "unknown option %s (--list-params shows every setting)\n", o);
+                return 1;
             }
         }
-        else { print_help(); return !strcmp(argv[i], "--help") ? 0 : 1; }
-    }
-
-    if (write_cfg) {
-        if (config_write(&cfg, write_cfg) != 0) { fprintf(stderr, "cannot write %s\n", write_cfg); return 1; }
-        printf("wrote %s\n", write_cfg);
-        return 0;
+        else { print_help(); return 1; }
     }
     if (cfg.grid < 16 || (cfg.grid & (cfg.grid - 1))) { fprintf(stderr, "grid must be a power of two >= 16\n"); return 1; }
 
@@ -839,48 +650,52 @@ POND_MAIN(int argc, char **argv)
     memset(&a, 0, sizeof a);
     a.nx = a.ny = cfg.grid;
     a.running = 1;
-    a.warp = cfg.warp;
-    a.rain_rate = cfg.rain_rate;
-    a.paddle_div = 8.0;                    /* until a frequency asks for something else */
-    a.paddle_wall = cfg.paddle_wall;
-    a.paddle_pos = cfg.paddle_pos;
-    a.paddle_span = cfg.paddle_span;
-    a.paddle_gain = cfg.paddle_stroke;
-    a.breeze_gain = a.finger_gain = 1.0;
+    a.warp = 1.0;
+    a.rain_rate = 2.0;
+    a.paddle_div = 8.0;                    /* eight wavelengths across, whatever the basin */
+    a.paddle_wall = 0; a.paddle_pos = 0.5; a.paddle_span = 1.0;
+    a.paddle_gain = a.breeze_gain = a.finger_gain = 1.0;
+    a.volume = 0.7; a.mute = 0;
+    a.knob[SND_DROPS] = 1.0; a.knob[SND_BED] = 1.0; a.knob[SND_BROWN] = 0.0; a.knob[SND_BREEZE] = 1.0; a.knob[SND_HARSH] = 0.15;
     a.frames_left = a_frames;
     a.snap_path = snap3d;
     a.mode3d = cfg.mode3d;
-    a.show_help = cfg.show_help;
-    a.show_hud = cfg.show_hud;
+    a.show_hud = 1;
     render_defaults(&a.rp);
     a.p3.gain = 1.0f;
-    a.p3.glass = cfg.glass;
     a.p3.cpu_caustics = cfg.cpu_caustics;
     { float sv[3] = { 0.30f, 0.90f, -0.25f }; float n = 1.0f / sqrtf(sv[0]*sv[0] + sv[1]*sv[1] + sv[2]*sv[2]);
       a.p3.sun[0] = sv[0] * n; a.p3.sun[1] = sv[1] * n; a.p3.sun[2] = sv[2] * n; }
     a.pix = malloc((size_t)cfg.grid * cfg.grid * sizeof(uint32_t));
     a.shape = cfg.shape;
-    a.hos_on = cfg.hos_on; a.hos_nc = cfg.hos_nc; a.hos_order = cfg.hos_order;
+    a.hos_nc = cfg.hos_nc; a.hos_order = cfg.hos_order;
     if (cfg.shape == WAVE_DISK && !cfg.mode3d) { fprintf(stderr, "the disk basin needs the 3-D view\n"); return 1; }
-    a.w = make_wave(cfg.shape, cfg.grid, presets[cfg.preset].L, presets[cfg.preset].L, presets[cfg.preset].depth);
+    a.w = app_make_wave(cfg.shape, cfg.grid, presets[cfg.preset].L, presets[cfg.preset].L, presets[cfg.preset].depth);
     if (!a.pix || !a.w) { fprintf(stderr, "out of memory\n"); return 1; }
     a.preset = cfg.preset;
-    a.rp.floor_style = a.p3.floor_style = cfg.floor_style >= 0 ? cfg.floor_style : presets[cfg.preset].floor;
+    a.rp.floor_style = a.p3.floor_style = presets[cfg.preset].floor;
     if (cfg.Lx > 0 || cfg.depth > 0) {
         double Lx = cfg.Lx > 0 ? cfg.Lx : a.w->Lx, Ly = cfg.Ly > 0 ? cfg.Ly : a.w->Ly;
         double h = cfg.depth > 0 ? cfg.depth : a.w->depth;
+        if (cfg.shape == WAVE_DISK) Ly = Lx;
         wave_set_pool(a.w, Lx, Ly, h);
     }
+    app_reset_camera(&a);
 
-    if (cfg.paddle_freq > 0) set_paddle_hz(&a, cfg.paddle_freq);   /* needs the final basin */
-    if (bench_frames == 0) { a.rain = cfg.rain; a.paddle = cfg.paddle; a.breeze = cfg.breeze; }
-    if (bench_frames > 0) {
-        SDL_Init(0);
-        char sc[32];
-        snprintf(sc, sizeof sc, "%s%s%s", cfg.rain ? "rain," : "", cfg.paddle ? "paddle," : "", cfg.breeze ? "breeze" : "");
-        int rc = bench(&a, bench_frames, snap, *sc ? sc : NULL);
+    /* the headless uses: everything the file and the options asked for, without a window */
+    if (list_params || write_cfg || bench_frames > 0) {
+        config_apply(&cfg, &a);
+        int rc = 0;
+        if (list_params) param_list(&a, stdout);
+        else if (write_cfg) {
+            if (config_write(&cfg, &a, write_cfg) != 0) { fprintf(stderr, "cannot write %s\n", write_cfg); rc = 1; }
+            else printf("wrote %s\n", write_cfg);
+        } else {
+            SDL_Init(0);
+            rc = bench(&a, bench_frames, snap);
+            SDL_Quit();
+        }
         wave_destroy(a.w); free(a.pix);
-        SDL_Quit();
         return rc;
     }
 
@@ -888,11 +703,6 @@ POND_MAIN(int argc, char **argv)
     if (!cfg.no_audio) {
         a.au = audio_open();
         if (!a.au) fprintf(stderr, "no audio device; running silent\n");
-        else {
-            audio_set_volume(a.au, cfg.volume);
-            audio_set_mute(a.au, cfg.mute);
-            for (int k = 0; k < SND_NUM; k++) audio_set_knob(a.au, (snd_knob)k, cfg.knob[k]);
-        }
     }
     Uint32 wflags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | (cfg.mode3d ? SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI : 0);
     if (cfg.mode3d) view3d_gl_attributes(cfg.msaa);
@@ -905,13 +715,11 @@ POND_MAIN(int argc, char **argv)
         a.win = SDL_CreateWindow("pond", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, cfg.winw, cfg.winh, wflags);
     }
     if (!a.win) { fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError()); return 1; }
-    if (cfg.fullscreen) set_fullscreen(&a, 1);
 
     if (cfg.mode3d) {
         a.v3 = view3d_create(a.win, a.w, a.p3.cpu_caustics);
         if (!a.v3) { fprintf(stderr, "3-D view unavailable; try --2d\n"); return 1; }
-        view3d_reset_camera(a.v3, a.w);
-        if (cfg.cam_set) view3d_set_camera(a.v3, cfg.cam_yaw, cfg.cam_pitch, cfg.cam_dist);
+        app_reset_camera(&a);
     } else {
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
         a.ren = SDL_CreateRenderer(a.win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -921,6 +729,13 @@ POND_MAIN(int argc, char **argv)
         if (!a.tex) { fprintf(stderr, "SDL_CreateTexture: %s\n", SDL_GetError()); return 1; }
         print_help();
     }
+
+    /* now everything exists: the sound levels reach the device, the camera the view,
+     * and the config file and command line get their say */
+    param_set(&a, "volume", a.volume);
+    param_set(&a, "mute", a.mute);
+    for (int k = 0; k < SND_NUM; k++) { char nm[32]; snprintf(nm, sizeof nm, "sound.%s", snd_knob_names[k]); param_set(&a, nm, a.knob[k]); }
+    config_apply(&cfg, &a);
 
     a.hud_dirty = 1;
     a.prev = SDL_GetPerformanceCounter();

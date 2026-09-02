@@ -15,47 +15,40 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-/* config.h — every startup setting in one struct, filled in three passes:
- * built-in defaults, then the config file, then the command line.  The same
- * struct is written back out by --write-config, so the file is always a
- * complete, commented picture of what the program is doing.
- */
+/* config.h — the settings that have to be known before the program exists
+ * (the grid, the window, which renderer, whether to open a sound device, and
+ * the basin it starts with), plus a list of everything else the config file
+ * and command line asked for, to be handed to the parameter table once there
+ * is a running program to apply them to.
+ *
+ * Three passes: built-in defaults, then the config file, then the command
+ * line.  --write-config writes the lot back: these creation settings, then
+ * every parameter's current value from a headless app, so the file is always
+ * a complete, commented picture of what the program does. */
 #ifndef POND_CONFIG_H
 #define POND_CONFIG_H
 
-#include "audio.h"      /* SND_NUM */
+#include <stddef.h>
+
+struct app;                    /* the live program, see app.h */
+
+#define CONFIG_MAX_LATE 160
 
 typedef struct {
-    /* window and view */
+    /* before the program exists */
     int    grid;
     int    winw, winh;
-    int    fullscreen;
     int    mode3d;             /* 0: the --2d CPU renderer */
-    int    glass;              /* 0..4, see view3d.h */
-    int    floor_style;        /* -1: whatever the preset asks for */
     int    msaa, cpu_caustics;
-    int    show_hud, show_help;
-    int    cam_set;
-    float  cam_yaw, cam_pitch, cam_dist;
-
-    /* basin */
+    int    no_audio;
     int    preset;             /* 0..3 */
     int    shape;              /* WAVE_RECT / WAVE_DISK */
-    double Lx, Ly, depth;      /* metres; 0 = take the preset's */
-    int    hos_on, hos_nc, hos_order;
+    double Lx, Ly, depth;      /* metres; 0 = the preset's */
+    int    hos_nc, hos_order;
 
-    /* sources */
-    int    rain, breeze, paddle;
-    double rain_rate, warp;
-    double paddle_freq;        /* Hz; 0 = the old default of 8 wavelengths across the basin */
-    double paddle_pos, paddle_span, paddle_stroke;
-    int    paddle_wall;
-
-    /* sound */
-    int    no_audio;           /* do not open a device at all */
-    int    mute;               /* device open, starts muted (m unmutes) */
-    double volume;
-    double knob[SND_NUM];
+    /* everything else: parameter settings, applied in order once it does */
+    struct { char name[32]; char val[64]; } late[CONFIG_MAX_LATE];
+    int    nlate;
 } pond_config;
 
 void config_defaults(pond_config *c);
@@ -66,8 +59,12 @@ void config_defaults(pond_config *c);
  * for_writing = 1 returns where --write-config would put one. */
 const char *config_path(int for_writing);
 
-int  config_load(pond_config *c, const char *path);        /* 0 ok, -1 no such file */
-int  config_set(pond_config *c, const char *key, const char *value);   /* 0 ok, -1 unknown key */
-int  config_write(const pond_config *c, const char *path); /* 0 ok, -1 could not write */
+int  config_load(pond_config *c, const char *path);         /* 0 ok, -1 no such file */
+/* 0 ok, -1 unknown key.  Creation keys land in the struct; parameter names are queued. */
+int  config_set(pond_config *c, const char *key, const char *value);
+/* Push the queued settings through the parameter table.  Returns how many were refused. */
+int  config_apply(const pond_config *c, struct app *a);
+/* Creation settings from c, then every parameter's value from a.  0 ok, -1 could not write. */
+int  config_write(const pond_config *c, const struct app *a, const char *path);
 
 #endif

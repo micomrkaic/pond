@@ -113,6 +113,27 @@ int main(void)
         wave_destroy(w1); wave_destroy(w2);
     }
 
+    /* --- below the basin's lowest mode there is nothing to resonate with --- */
+    {
+        wave *w = wave_create(nx, ny, Lx, Ly, depth);
+        wave_set_damping(w, 0.03);
+        const double f1 = wave_omega(w, M_PI / Lx) / (2.0 * M_PI);   /* the (1,0) mode */
+        drive(w, 0, 0.5, 1.0, 0.5 * f1, 20.0);
+        double below = 0;
+        for (int i = 0; i < nx * ny; i++) below += (double)w->eta[i] * w->eta[i];
+        wave_destroy(w);
+
+        w = wave_create(nx, ny, Lx, Ly, depth);
+        wave_set_damping(w, 0.03);
+        drive(w, 0, 0.5, 1.0, f1, 20.0);
+        double at = 0;
+        for (int i = 0; i < nx * ny; i++) at += (double)w->eta[i] * w->eta[i];
+        printf("the (1,0) mode is at %.3g Hz: 20 s of driving there gives %.2e, half that %.2e ",
+               f1, at / (nx * ny), below / (nx * ny));
+        check(at > 25.0 * below, "");
+        wave_destroy(w);
+    }
+
     /* --- a full-wall paddle makes a wave that does not vary along the wall --- */
     {
         wave *w = wave_create(nx, ny, Lx, Ly, depth);

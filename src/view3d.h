@@ -32,6 +32,12 @@ typedef struct {
                           2 glass walls; 3 glass walls and bottom; 4 no container at all */
     float sun[3];      /* unit vector towards the sun, y up */
     int cpu_caustics;  /* 1: force the CPU splat instead of the GPU pass */
+    /* the wavemaker's footprint, outlined on the water so it can be seen */
+    int   paddle;      /* 0: draw nothing */
+    int   paddle_wall; /* 0 x=0, 1 x=Lx, 2 y=0, 3 y=Ly (disk: the rim) */
+    float paddle_pos;  /* 0..1 along that wall (disk: turns) */
+    float paddle_span; /* 0..1 of it */
+    float paddle_width;/* how far the forcing reaches into the water, metres */
 } view3d_params;
 
 typedef struct view3d view3d;
@@ -46,6 +52,7 @@ void     view3d_reset_camera(view3d *v, const wave *w);
 void     view3d_orbit(view3d *v, float dyaw_deg, float dpitch_deg);
 void     view3d_zoom(view3d *v, float factor);
 void     view3d_set_camera(view3d *v, float yaw_deg, float pitch_deg, float dist_rel);
+void     view3d_get_camera(const view3d *v, float *yaw_deg, float *pitch_deg, float *dist_rel);
 
 /* where a basin point is relative to the listener: pan -1..1 (left..right), att 0..1 (distance) */
 void     view3d_listen(const view3d *v, double x, double z, double *pan, double *att);

@@ -130,6 +130,7 @@ typedef void          GLvoid;
     X(void,          glDeleteBuffers,           (GLsizei, const GLuint*)) \
     X(void,          glBindBuffer,              (GLenum, GLuint)) \
     X(void,          glBufferData,              (GLenum, GLsizeiptr, const void*, GLenum)) \
+    X(void,          glBufferSubData,           (GLenum, GLintptr, GLsizeiptr, const void*)) \
     X(void,          glGenVertexArrays,         (GLsizei, GLuint*)) \
     X(void,          glDeleteVertexArrays,      (GLsizei, const GLuint*)) \
     X(void,          glBindVertexArray,         (GLuint)) \
