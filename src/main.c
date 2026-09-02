@@ -36,43 +36,43 @@
 #define SUBSTEPS_PER_SEC 240.0   /* rotor table granularity at time warp 1 */
 
 static const char *const help_lines[] = {
-    "pond - dispersive waves in a rectangular basin",
+    "pond - dispersive waves in a basin",
     "",
-    "click / shift-click on water   drop / big drop",
-    "drag on water                  finger",
-    "drag elsewhere, ctrl+drag,     orbit",
-    "  right/middle drag, two fingers",
-    "arrows (or keypad 4/6/8/2)     orbit",
-    "PgUp/PgDn                      zoom",
-    "  hold to sweep; shift 3x faster, ctrl finer",
-    "wheel                          zoom",
-    "o / Home                       reset camera",
-    "t         container: opaque, floor only,",
-    "          glass, glass+bottom, none",
+    "click / shift-click       drop / big drop",
+    "drag on the water         finger",
+    "drag off it, right drag   orbit  (ctrl+drag, two fingers too)",
+    "wheel, pinch              zoom",
+    "arrows, keypad 4 6 8 2    orbit  (hold; shift faster, ctrl finer)",
+    "PgUp / PgDn               zoom   (hold)",
+    "o / Home                  reset camera",
     "",
-    "n         basin shape: rectangle / disk",
-    "y         nonlinear (HOS) on / off",
-    "m  a/A    sound on/off, volume down/up",
-    "j/J u/U   drop level, rain-bed level",
-    "z/Z w/W   brown noise, breeze level",
-    "e/E       breeze harshness (gusts, rustle)",
-    "1-4       tray 30 cm, pond 3 m, pool 12 m, sea 80 m",
-    "[ ]  { }  width, length (5%; hold to sweep)",
-    ", .  \\    depth;  square it up (same area)",
-    "r i/I     rain on/off, rate",
-    "b         breeze (wind sea)",
-    "p / P     wavemaker on/off, next wall",
-    "k/K l/L   its frequency, its span (size)",
-    "< >       slide it along the wall",
-    "          (its outline is drawn on the water)",
-    "- =       time warp        x/X   damping",
-    "g/G f     display gain, floor pattern",
-    "d         hide / show this settings box",
-    "F11 / alt+enter                full screen",
-    "c space   clear, pause     s     screenshot",
-    "h / F1    help             q/esc quit",
+    "1 2 3 4                   tray 30 cm, pond 3 m, pool 12 m, sea 80 m",
+    "n                         basin shape: rectangle / disk",
+    "[ ]   { }                 width, length  (5% a press; hold to sweep)",
+    ", .   \\                   depth;  square it up, same area",
+    "y                         nonlinear (HOS) on / off",
+    "- =   x / X               time warp;  damping",
+    "g / G   f                 display gain;  floor pattern",
+    "t                         container: opaque, floor, glass, +bottom, none",
     "",
-    "w^2 = (gk + sk^3/rho) tanh(kh)   gamma = 2nuk^2 + g0",
+    "r   i / I                 rain on / off;  rain rate",
+    "b                         breeze (wind sea)",
+    "p / P                     wavemaker on / off;  next wall",
+    "k / K   l / L             its frequency;  its span",
+    "< >                       slide it along the wall",
+    "D                         its outline on the water",
+    "",
+    "m   a / A                 sound on / off;  volume",
+    "j / J   u / U             drop plinks;  rain bed",
+    "z / Z   w / W             brown noise;  breeze",
+    "e / E                     breeze harshness (gusts, rustle)",
+    "",
+    "d                         hide / show the settings box",
+    "F11, alt+enter            full screen",
+    "c   space   s             clear;  pause;  screenshot",
+    "h / F1   esc   q          help;  back out;  quit",
+    "",
+    "w^2 = (gk + sk^3/rho) tanh(kh)      gamma = 2 nu k^2 + g0",
 };
 #define NHELP ((int)(sizeof help_lines / sizeof help_lines[0]))
 
@@ -240,7 +240,7 @@ static const keybind keybinds[] = {
     { SDLK_g,  0, "gain", -1 },           { SDLK_g, 1, "gain", +1 },
     { SDLK_f, -1, "floor", +1 },
     { SDLK_t, -1, "glass", +1 },
-    { SDLK_d, -1, "hud", 0 },
+    { SDLK_d,  0, "hud", 0 },             { SDLK_d, 1, "paddle-mark", 0 },
     { SDLK_v, -1, "view", 0 },
     { SDLK_SPACE, -1, "paused", 0 },
     { SDLK_F11, -1, "fullscreen", 0 },
@@ -473,9 +473,8 @@ static void frame(void *ud)
     wave_realize(a->w);
     if (a->hud_dirty) update_hud(a);
 
-    /* the wavemaker's outline, so its place and size can be seen while they change;
-     * d takes it away with the rest of the writing on the screen */
-    a->p3.paddle = a->paddle && a->show_hud;
+    /* the wavemaker's outline, so its place and size can be seen while they change */
+    a->p3.paddle = a->paddle && a->paddle_mark;
     a->p3.paddle_wall = a->paddle_wall;
     a->p3.paddle_pos = (float)a->paddle_pos;
     a->p3.paddle_span = (float)a->paddle_span;
@@ -651,7 +650,7 @@ POND_MAIN(int argc, char **argv)
     a.warp = 1.0;
     a.rain_rate = 2.0;
     a.paddle_div = 8.0;                    /* eight wavelengths across, whatever the basin */
-    a.paddle_wall = 0; a.paddle_pos = 0.5; a.paddle_span = 1.0;
+    a.paddle_wall = 0; a.paddle_pos = 0.5; a.paddle_span = 1.0; a.paddle_mark = 1;
     a.paddle_gain = a.breeze_gain = a.finger_gain = 1.0;
     a.volume = 0.7; a.mute = 0;
     a.knob[SND_DROPS] = 1.0; a.knob[SND_BED] = 1.0; a.knob[SND_BROWN] = 0.0; a.knob[SND_BREEZE] = 1.0; a.knob[SND_HARSH] = 0.15;

@@ -75,6 +75,7 @@ typedef struct app {
     int    paddle_wall;        /* 0 x=0, 1 x=Lx, 2 y=0, 3 y=Ly */
     double paddle_pos;         /* 0..1 along that wall (disk: turns around the rim) */
     double paddle_span;        /* 0..1 of the wall; 1 = the whole wall */
+    int    paddle_mark;        /* outline it on the water */
     double paddle_gain, breeze_gain, finger_gain;
     int preset;
 

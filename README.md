@@ -77,13 +77,18 @@ screen, one finger is the finger, two fingers orbit and pinch-zoom.
 | `k`/`K` | its frequency (the wavelength follows from the dispersion relation) |
 | `l`/`L` | its span: the fraction of the wall it occupies, down to a point source |
 | `<` `>` | slide it along that wall (on the disk, round the rim) |
+| `D` | its outline on the water, on / off (`paddle-mark`) |
 
 While the wavemaker is running its footprint is outlined on the water in
-amber, so its place and size are visible as you change them; `d` takes that
-away along with the rest of the writing on the screen. The strip of forcing
-is a fraction of a percent of the basin deep, which would draw as a single
-line, so the outline is given a floor of 2 % of the basin — it marks where
-the paddle is, not the exact contour of the forcing.
+amber, so its place and size are visible as you change them. The outline
+rides the water — it is lifted onto the surface in the vertex shader, from
+the same height field the surface is drawn from — so a crest never buries
+it, and a faint ghost of it is drawn through whatever does stand in the way,
+a wave in front or the near wall from a low camera, so it is never simply
+gone. The strip of forcing is a fraction of a percent of the basin deep,
+which would draw as a single line, so the outline is given a floor of 2 %
+of the basin — it marks where the paddle is, not the exact contour of the
+forcing.
 
 The frequency is held inside the band the basin can answer: from its lowest
 mode ($k=\pi/L$) up to eight cells per wavelength. Below the first mode
@@ -93,7 +98,7 @@ water than driving at it.
 | `-` `=` | time warp |
 | `x`/`X` | extra uniform damping |
 | `g`/`G` `f` | display gain, floor pattern |
-| `d` | hide / show the settings box (the help hint goes with it: a clean frame for screenshots) |
+| `d` | hide / show the settings box (the help hint goes with it; with `D` off too, a clean frame for screenshots) |
 | `F11`, `alt`+`enter` | full screen; `esc` leaves it before it quits |
 | `c` `space` `s` `q` | clear, pause, screenshot (bmp), quit |
 

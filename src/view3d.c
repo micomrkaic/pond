@@ -402,13 +402,44 @@ static const char *fs_blur = GLSL(
 /* --- flat marker geometry (the wavemaker outline): world space, one colour --- */
 static const char *vs_mark = GLSL(
     in vec3 a_pos;
+    uniform sampler2D u_height;
+    uniform ivec2 u_n;
+    uniform vec2 u_L;
+    uniform float u_gain;
+    uniform float u_lift;
+    uniform int u_shape;
     uniform mat4 u_vp;
-    void main() { gl_Position = u_vp * vec4(a_pos, 1.0); }
+    float H(int i, int j) {
+        i = clamp(i, 0, u_n.x - 1); j = clamp(j, 0, u_n.y - 1);
+        return texelFetch(u_height, ivec2(i, j), 0).r * u_gain;
+    }
+    void main() {
+        /* the marker sits on the water, a little above it, whatever the water does:
+         * the same height field the surface is drawn from, at this vertex */
+        float h;
+        if (u_shape == 1) {
+            float R = 0.5 * u_L.x;
+            vec2 c = a_pos.xz - vec2(R, R);
+            float r = length(c), th = atan(c.y, c.x);
+            if (th < 0.0) th += 6.28318530718;
+            int nt = u_n.x, nr = u_n.y;
+            float dr = R / float(nr), dth = 6.28318530718 / float(nt);
+            int i = int(clamp(r / dr - 0.5, 0.0, float(nr - 1)));
+            int j = int(th / dth) % nt;
+            h = H(j, i);
+        } else {
+            int i = int(a_pos.x / u_L.x * float(u_n.x - 1) + 0.5);
+            int j = int(a_pos.z / u_L.y * float(u_n.y - 1) + 0.5);
+            h = H(i, j);
+        }
+        gl_Position = u_vp * vec4(a_pos.x, a_pos.y + h + u_lift, a_pos.z, 1.0);
+    }
 );
 static const char *fs_mark = GLSL(
     uniform vec3 u_col;
+    uniform float u_alpha;
     out vec4 o;
-    void main() { o = vec4(gam(u_col), 1.0); }
+    void main() { o = vec4(gam(u_col), u_alpha); }
 );
 
 static const char *vs_fill = GLSL(
@@ -564,7 +595,7 @@ static const char *fs_ovl = GLSL(
     void main() { o = texture(u_tex, v_uv); }
 );
 
-#define MARK_MAX 768        /* vertices for the wavemaker outline: 6 per segment */
+#define MARK_MAX 2048       /* vertices for the wavemaker outline: 6 per piece */
 
 /* ------------------------------------------------------------------ state */
 struct view3d {
@@ -1577,8 +1608,9 @@ static void draw_overlay(view3d *v)
         if (base < 1) base = 1;
         if (base > 4) base = 4;
 
-        /* HUD: one or more lines separated by newlines; d hides it */
-        if (v->show_hud) {
+        /* HUD: one or more lines separated by newlines; d hides it, and the help
+         * panel stands in for it while that is up */
+        if (v->show_hud && !(v->show_help && v->help)) {
             char tmp[640];
             strncpy(tmp, v->hud, sizeof tmp - 1); tmp[sizeof tmp - 1] = 0;
             int nl = 1, maxlen = 0;
@@ -1644,7 +1676,7 @@ static void draw_overlay(view3d *v)
  * A closed strip of thin quads lying just above the mean surface: the footprint
  * of the forcing, out to its 1/e contour in both directions.  Rebuilt each frame
  * from a few dozen vertices, which is nothing. */
-static void mark_seg(float *b, int *n, float x0, float z0, float x1, float z1, float h, float y)
+static void mark_piece(float *b, int *n, float x0, float z0, float x1, float z1, float h, float y)
 {
     float dx = x1 - x0, dz = z1 - z0;
     const float l = sqrtf(dx * dx + dz * dz);
@@ -1664,13 +1696,26 @@ static void mark_seg(float *b, int *n, float x0, float z0, float x1, float z1, f
     }
 }
 
+/* a segment in short pieces, so the strip can follow the water it is lifted onto
+ * (a long straight piece would cut through the crests between its ends) */
+static void mark_seg(float *b, int *n, float x0, float z0, float x1, float z1, float h, float y)
+{
+    const float l = sqrtf((x1 - x0) * (x1 - x0) + (z1 - z0) * (z1 - z0));
+    int k = (int)(l / (6.0f * h)) + 1;
+    if (k > 24) k = 24;
+    for (int i = 0; i < k; i++) {
+        const float a = (float)i / k, c = (float)(i + 1) / k;
+        mark_piece(b, n, x0 + (x1 - x0) * a, z0 + (z1 - z0) * a, x0 + (x1 - x0) * c, z0 + (z1 - z0) * c, h, y);
+    }
+}
+
 static void build_paddle_mark(view3d *v, const view3d_params *p)
 {
     static float buf[MARK_MAX * 3];
     int n = 0;
     const float Lmax = v->Lx > v->Ly ? v->Lx : v->Ly;
     const float h = 0.004f * Lmax;                  /* half the line thickness */
-    const float y = 0.006f * Lmax;                  /* just clear of the mean surface */
+    const float y = 0.0f;                           /* the shader lifts it onto the water */
     /* the forcing strip is a fraction of a percent of the basin deep, which would
      * draw as one line: give the outline a floor so it reads as a bar at the wall */
     float wd = p->paddle_width;
@@ -1723,10 +1768,21 @@ static void draw_paddle_mark(view3d *v, const view3d_params *p, const float *vp)
     build_paddle_mark(v, p);
     if (v->n_mark <= 0) return;
     glUseProgram(v->p_mark);
-    glUniformMatrix4fv(U(v->p_mark, "u_vp"), 1, GL_FALSE, vp);
+    set_common(v, v->p_mark, p, vp);
+    glUniform1f(U(v->p_mark, "u_lift"), 0.004f * (v->Lx > v->Ly ? v->Lx : v->Ly));
     glUniform3f(U(v->p_mark, "u_col"), 1.0f, 0.45f, 0.10f);
     glBindVertexArray(v->vao_mark);
+    /* solid where it can be seen; and a ghost of it through whatever is in the way --
+     * a wave crest, the near wall -- so it is never simply gone */
+    glUniform1f(U(v->p_mark, "u_alpha"), 1.0f);
     glDrawArrays(GL_TRIANGLES, 0, v->n_mark);
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUniform1f(U(v->p_mark, "u_alpha"), 0.3f);
+    glDrawArrays(GL_TRIANGLES, 0, v->n_mark);
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
 }
 
 static void set_common(view3d *v, GLuint p, const view3d_params *prm, const float *vp)

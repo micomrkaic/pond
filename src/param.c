@@ -211,6 +211,7 @@ static void s_ppos(app *a, double v)
     a->paddle_pos = v;
 }
 G(g_pspan, a->paddle_span)          S(s_pspan, a->paddle_span = v)
+G(g_pmark, a->paddle_mark)          S(s_pmark, a->paddle_mark = v > 0.5)
 G(g_pstroke, a->paddle_gain)        S(s_pstroke, a->paddle_gain = v)
 G(g_bgain, a->breeze_gain)          S(s_bgain, a->breeze_gain = v)
 G(g_fgain, a->finger_gain)          S(s_fgain, a->finger_gain = v)
@@ -283,6 +284,7 @@ static const param params[] = {
     E("paddle-wall", "wavemaker", "which wall it is on (disk: the rim)", wall_names, g_pwall, s_pwall),
     RA("paddle-pos", "wavemaker", "where along that wall, 0..1 (disk: turns round the rim)", 0, 1, 0.02, 2, g_ppos, s_ppos),
     RM("paddle-span", "wavemaker", "how much of the wall it covers, 0..1", 0.02, 1, 1.25, 0, g_pspan, s_pspan),
+    B("paddle-mark", "wavemaker", "outline the wavemaker on the water (key: D)", g_pmark, s_pmark),
     RM("paddle-stroke", "wavemaker", "multiplier on the wavemaker's speed", 0.01, 100, 1.5, 0, g_pstroke, s_pstroke),
     /* display */
     E("glass", "display",   "the container: opaque, floor only, glass, glass+bottom, none", glass_names, g_glass, s_glass),
