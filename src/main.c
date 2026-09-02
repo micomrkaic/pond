@@ -20,6 +20,7 @@
 #include "app.h"
 #include "param.h"
 #include "config.h"
+#include "script.h"
 
 #include <SDL.h>
 #include <math.h>
@@ -96,6 +97,7 @@ static void print_help(void)
          "  --sound K=V,... the five sound levels           --hos         nonlinear correction on\n"
          "\n"
          "Per run:\n"
+         "  --script F      run a script: timed parameter settings, see demos/ and README\n"
          "  --frames N      quit after N displayed frames;  --snap3d F  save the last 3-D frame to F (bmp)\n"
          "  --bench N       run N headless frames of the CPU path, print timings, exit;  --snap F  save the last\n"
          "  --config F      read F instead of the default config file;  --no-config  ignore it\n"
@@ -140,8 +142,13 @@ static void update_hud(app *a)
                  a->shape == WAVE_DISK ? "rim" : wall_names[a->paddle_wall],
                  100.0 * a->paddle_pos, 100.0 * a->paddle_span);
     }
-    snprintf(buf, sizeof buf, "%s  %s  h=%.3g m  %s\n%s%s%s",
-             presets[a->preset].name, dims, a->w->depth, glass_names[a->p3.glass], line2, line3, line4);
+    char line5[200] = "";
+    if (a->sc && script_running(a->sc))
+        snprintf(line5, sizeof line5, "\nscript %s  %.0f s%s%s", script_name(a->sc), script_time(a->sc),
+                 a->caption[0] ? "  -  " : "", a->caption);
+    else if (a->caption[0]) snprintf(line5, sizeof line5, "\n%s", a->caption);
+    snprintf(buf, sizeof buf, "%s  %s  h=%.3g m  %s\n%s%s%s%s",
+             presets[a->preset].name, dims, a->w->depth, glass_names[a->p3.glass], line2, line3, line4, line5);
     if (a->v3) view3d_set_overlay(a->v3, buf, help_lines, NHELP, a->show_help, a->show_hud);
     char title[300];
     snprintf(title, sizeof title, "pond  |  %s  %s  h=%.3g m  |  %s",
@@ -165,25 +172,12 @@ static int to_basin(const app *a, int mx, int my, double *x, double *y)
     return 1;
 }
 
-/* a drop into the water, seen and heard */
-static void splash(app *a, double x, double y, double s, double amp)
-{
-    wave_add_drop(a->w, x, y, s, amp);
-    if (!a->au) return;
-    double pan = 0, att = 1;
-    if (a->v3) view3d_listen(a->v3, x, y, &pan, &att);
-    /* drops are drawn at a size relative to the basin so they can be seen; for the ear,
-     * rain should plink like rain whatever the basin, so the acoustic size is the drop as it
-     * would be in the 30 cm tray: a raindrop's few millimetres, a click a small stone */
-    audio_splash(a->au, s * 0.3 / sqrt(a->w->Lx * a->w->Ly), pan, att);
-}
-
 static void drop_at(app *a, int mx, int my, double rel_size)
 {
     double x, y;
     if (!to_basin(a, mx, my, &x, &y)) return;
     double s = rel_size * sqrt(a->w->Lx * a->w->Ly);
-    splash(a, x, y, s, -0.15 * s);
+    app_splash(a, x, y, s, -0.15 * s);
 }
 
 static void save_bmp_rgba(const char *name, uint8_t *rgba, int w, int h)
@@ -271,8 +265,10 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
         }
     switch (k) {
     case SDLK_q: a->running = 0; break;
-    case SDLK_ESCAPE:                       /* leave full screen first, then quit */
-        if (a->fullscreen) param_set(a, "fullscreen", 0); else a->running = 0;
+    case SDLK_ESCAPE:                       /* one layer at a time: script, full screen, program */
+        if (a->sc && script_running(a->sc)) { script_stop(a->sc); a->caption[0] = 0; }
+        else if (a->fullscreen) param_set(a, "fullscreen", 0);
+        else a->running = 0;
         break;
     case SDLK_RETURN: case SDLK_KP_ENTER:
         if (alt) param_nudge(a, "fullscreen", 0);
@@ -314,7 +310,7 @@ static void handle_events(app *a)
             if (e.button.button == SDL_BUTTON_LEFT && !modifier && to_basin(a, e.button.x, e.button.y, &x, &y)) {
                 /* on the water: drop, or a finger if the button stays down */
                 double sz = (shift ? 0.06 : 0.03) * sqrt(a->w->Lx * a->w->Ly);
-                splash(a, x, y, sz, -0.15 * sz);
+                app_splash(a, x, y, sz, -0.15 * sz);
                 a->dragging = !shift;
             } else if (a->mode3d) {
                 /* off the water, with a modifier, or any other button: orbit */
@@ -391,7 +387,7 @@ static void apply_sources(app *a, double dts)
                 x = rand() / (RAND_MAX + 1.0) * w->Lx; y = rand() / (RAND_MAX + 1.0) * w->Ly;
             } while (w->shape == WAVE_DISK && (x - w->R) * (x - w->R) + (y - w->R) * (y - w->R) > w->R * w->R);
             double s = 0.02 * L * (0.5 + rand() / (RAND_MAX + 1.0));
-            splash(a, x, y, s, -0.15 * s);
+            app_splash(a, x, y, s, -0.15 * s);
         }
     }
     if (a->paddle) {
@@ -472,6 +468,7 @@ static void frame(void *ud)
     }
 
     camera_keys(a, dt);
+    if (a->sc) script_update(a->sc, a, dt);
     advance(a, dt);
     wave_realize(a->w);
     if (a->hud_dirty) update_hud(a);
@@ -601,7 +598,7 @@ POND_MAIN(int argc, char **argv)
 
     /* argv-only: these are per-run, not preferences */
     int bench_frames = 0, a_frames = 0, list_params = 0;
-    const char *snap = NULL, *snap3d = NULL;
+    const char *snap = NULL, *snap3d = NULL, *script_path = NULL;
 
 #ifdef __EMSCRIPTEN__
     cfg.grid = emscripten_run_script_int("(function(){var v=new URLSearchParams(location.search).get('grid');return v?(v|0):0;})()");
@@ -621,6 +618,7 @@ POND_MAIN(int argc, char **argv)
         else if (!strcmp(o, "--snap") && i + 1 < argc) snap = argv[++i];
         else if (!strcmp(o, "--snap3d") && i + 1 < argc) snap3d = argv[++i];
         else if (!strcmp(o, "--frames") && i + 1 < argc) a_frames = atoi(argv[++i]);
+        else if (!strcmp(o, "--script") && i + 1 < argc) script_path = argv[++i];
         /* flags from before there was a table */
         else if (!strcmp(o, "--2d")) config_set(&cfg, "mode", "2d");
         else if (!strcmp(o, "--nomsaa")) config_set(&cfg, "msaa", "off");
@@ -737,16 +735,24 @@ POND_MAIN(int argc, char **argv)
     for (int k = 0; k < SND_NUM; k++) { char nm[32]; snprintf(nm, sizeof nm, "sound.%s", snd_knob_names[k]); param_set(&a, nm, a.knob[k]); }
     config_apply(&cfg, &a);
 
+    if (script_path) {
+        char err[256];
+        a.sc = script_load(script_path, err, sizeof err);
+        if (!a.sc) { fprintf(stderr, "%s\n", err); return 1; }
+        script_start(a.sc, &a);
+    }
+
     a.hud_dirty = 1;
     a.prev = SDL_GetPerformanceCounter();
 
     /* something to look at right away */
-    splash(&a, 0.5 * a.w->Lx, 0.5 * a.w->Ly, 0.03 * a.w->Lx, -0.15 * 0.03 * a.w->Lx);
+    app_splash(&a, 0.5 * a.w->Lx, 0.5 * a.w->Ly, 0.03 * a.w->Lx, -0.15 * 0.03 * a.w->Lx);
 
 #ifdef __EMSCRIPTEN__
     emscripten_set_main_loop_arg(frame, &a, 0, 1);
 #else
     while (a.running) frame(&a);
+    if (a.sc) script_free(a.sc);
     if (a.au) audio_close(a.au);
     if (a.hs) hos_destroy(a.hs);
     if (a.v3) view3d_destroy(a.v3);

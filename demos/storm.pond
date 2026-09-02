@@ -1,0 +1,19 @@
+# the sea.                             ./pond --script demos/storm.pond
+
+at 0    clear  preset 4  glass opaque  rain off  paddle off
+at 0    breeze on  breeze-gain 1  sound.breeze 1.5  sound.harsh 0.6
+at 0    camera 40,20,0.9
+at 0    say "the sea, eighty metres of it, under a breeze"
+at 2    yaw += 60 over 60
+
+at 30   say "the wind rises"
+at 30   breeze-gain 3 over 30   sound.harsh 1.5 over 30
+at 70   say "and drops"
+at 70   breeze-gain 0.3 over 40   sound.harsh 0.3 over 40
+at 100  pitch 45 over 30   dist 1.4 over 30
+
+at 130  say "swell: the long waves that outlast the wind"
+at 130  breeze off
+
+at 175  say ""
+at 175  loop

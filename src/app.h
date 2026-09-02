@@ -84,9 +84,16 @@ typedef struct app {
     int shots, shot_pending;
     const char *snap_path;     /* --snap3d: save the last frame here */
     int frames_left;           /* --frames N: quit after N frames (0 = never) */
+
+    struct script *sc;         /* a running script, or NULL */
+    int in_script;             /* set while the script itself is applying parameters */
+    char caption[160];         /* what the script says, shown under the HUD */
 } app;
 
+struct script;
+
 /* param.c: the setters with side effects, used by the parameter table and by main */
+void  app_splash(app *a, double x, double y, double s, double amp);   /* a drop, seen and heard */
 wave *app_make_wave(int shape, int grid, double Lx, double Ly, double depth);
 int   app_set_shape(app *a, int shape);
 void  app_set_preset(app *a, int p);

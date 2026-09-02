@@ -16,6 +16,7 @@
  */
 
 #include "param.h"
+#include "script.h"
 
 #include <ctype.h>
 #include <math.h>
@@ -108,6 +109,19 @@ void app_set_fullscreen(app *a, int on)
     if (SDL_SetWindowFullscreen(a->win, on ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) != 0)
         fprintf(stderr, "full screen: %s\n", SDL_GetError());
 #endif
+}
+
+/* a drop into the water, seen and heard */
+void app_splash(app *a, double x, double y, double s, double amp)
+{
+    wave_add_drop(a->w, x, y, s, amp);
+    if (!a->au) return;
+    double pan = 0, att = 1;
+    if (a->v3) view3d_listen(a->v3, x, y, &pan, &att);
+    /* drops are drawn at a size relative to the basin so they can be seen; for the ear,
+     * rain should plink like rain whatever the basin, so the acoustic size is the drop as it
+     * would be in the 30 cm tray: a raindrop's few millimetres, a click a small stone */
+    audio_splash(a->au, s * 0.3 / sqrt(a->w->Lx * a->w->Ly), pan, att);
 }
 
 /* The wavemaker is driven at a frequency; the wavelength it radiates is whatever
@@ -346,6 +360,7 @@ int param_set(app *a, const char *name, double v)
     else if (p->kind == PK_ENUM || p->kind == PK_INT) v = floor(v + 0.5);
     p->set(a, clamp_to(p, v));
     a->hud_dirty = 1;
+    if (a->sc && !a->in_script) script_user_set(a->sc, p->name);   /* the person wins */
     return 0;
 }
 

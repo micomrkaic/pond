@@ -1,0 +1,23 @@
+# dispersion: one drop, and the long waves outrun the short ones.
+#                                      ./pond --script demos/dispersion.pond
+
+at 0    clear  preset 3  glass none  damping 0.01  warp 1  rain off  paddle off  breeze off
+at 0    camera 30,60,1.6
+at 0    say "one drop in a still pool"
+at 2    drop 0.5,0.5 0.05
+at 3    say "the long waves run ahead and the short ones lag: gravity waves disperse"
+at 3    dist 2.2 over 20
+
+at 25   say "the same, eight times slower"
+at 25   warp 0.125
+at 26   drop 0.3,0.7 0.04
+at 50   warp 1
+
+at 50   say "the tray: capillary waves, where the short ones are the fast ones"
+at 50   clear  preset 1  glass none  damping 0.05
+at 51   camera 30,60,1.6
+at 53   drop 0.5,0.5 0.05
+at 54   warp 0.25
+
+at 75   warp 1   say ""
+at 75   loop

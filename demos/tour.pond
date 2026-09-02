@@ -1,0 +1,35 @@
+# pond: a tour.                        ./pond --script demos/tour.pond
+#
+# One event per line: a time ("at 20", or "+5" after the line before), then
+# parameter settings.  "over T" tweens a number there.  Escape stops it.
+
+at 0     clear  preset 2  glass opaque  rain on  rain-rate 1.5  paddle off  breeze off
+at 0     camera 35,42,1.5
+at 0     say "a pond, three metres across, in the rain"
+at 2     yaw += 90 over 30
+
+at 20    say "a wavemaker at 1.2 Hz: the water chooses the wavelength"
+at 20    rain off  paddle on  paddle-freq 1.2  paddle-span 1  paddle-wall x=0  paddle-pos 0.5
+at 35    say "twice the frequency: a shorter, slower wave"
+at 35    paddle-freq 2.4 over 8
+at 50    say "a short paddle radiates a fan"
+at 50    paddle-span 0.12 over 6
+at 58    paddle-pos 0.15 over 12   pitch 60 over 12
+at 72    paddle-pos 0.85 over 14
+
+at 88    say "glass walls, and the light that comes through them"
+at 88    glass glass   yaw += 120 over 40   pitch 30 over 20
+
+at 110   say "a disk, with the whole rim as the wavemaker"
+at 110   clear  paddle off
+at 111   shape disk  paddle-span 1  paddle-freq 1.0  paddle on
+at 112   camera 20,55,1.3 over 20
+
+at 140   say "the sea: eighty metres, with a breeze"
+at 140   paddle off  clear
+at 141   shape rect  preset 4  breeze on  glass opaque
+at 142   camera 40,25,1.0 over 30
+at 175   breeze off
+
+at 180   say ""
+at 180   loop

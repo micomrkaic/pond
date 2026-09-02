@@ -27,6 +27,7 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     ./pond --hos --preset 3 --scene paddle # nonlinear, order 3 on the lowest 64x64 modes
     ./pond --scene paddle --paddle-freq 1.2      # a wavemaker at 1.2 Hz: the water picks the wavelength
     ./pond --scene paddle --paddle-span 0.12 --paddle-pos 0.25 --paddle-wall y=0
+    ./pond --script demos/tour.pond        # three minutes of everything, on a loop; Escape stops it
     ./pond --cpu-caustics                  # if the GPU pass is unavailable or suspect
     ./pond --mute                          # starts silent; --no-audio opens no device at all
                                            # POND_WAV=take.wav records what you hear
@@ -164,6 +165,47 @@ names or a number, reals accept `%`, and `-` and `_` are the same character
 in a key. Unknown keys are reported with their line number and skipped, so
 an old file still starts the program. The browser build has no file to read:
 there `?grid=N` in the URL is the only setting.
+
+## Scripts
+
+A script is the config file with a time axis: one event per line, a time and
+then parameter settings, run against the same table the keys nudge.
+
+    # demos/tour.pond, abridged
+    at 0     clear  preset 2  rain on  rain-rate 1.5
+    at 0     camera 35,42,1.5
+    at 0     say "a pond, three metres across, in the rain"
+    at 2     yaw += 90 over 30             # a quarter turn, taking thirty seconds
+    at 20    rain off  paddle on  paddle-freq 1.2
+    at 35    paddle-freq 2.4 over 8        # tweened, eased
+    at 50    paddle-span 0.12 over 6
+    +8       paddle-pos 0.15 over 12       # eight seconds after the line before
+    at 110   clear  shape disk  paddle-span 1
+    at 180   loop
+
+`at T` is seconds from the start, `+T` seconds after the previous line, and
+a line with no time shares the previous line's. Every parameter name is a
+verb; a value may be absolute or relative (`+=`, `-=`), and a number may take
+`over T` to get there smoothly. The other verbs: `drop X,Y [SIZE]` or
+`drop random`, `clear`, `camera Y,P,D [over T]`, `say "text"` (shown under
+the HUD), `loop`, `end`. Times are wall-clock, so a script can change the
+time warp itself. `#` starts a comment.
+
+    ./pond --script demos/tour.pond
+
+Two rules. The person wins: a key on a parameter the script is tweening
+cancels that tween, and everything else the script does carries on.
+And `Escape` backs out one layer at a time — the script, then full screen,
+then the program. Scripts do not clear the water between events unless told
+to; the old waves decaying under the new ones is the good part. (Do clear
+before shrinking a basin, though: 80 m of sea in a 3 m pond is a tsunami.)
+
+`demos/` has five: `tour` (a bit of everything, three minutes, loops),
+`wavemaker` (frequency, span, position, walls), `rings` (the disk with its
+rim as the wavemaker), `storm` (the sea under a rising and falling wind),
+`dispersion` (one drop in a still pool, then the same in the tray where the
+short waves are the fast ones). `tests/test_script.c` runs every one of them
+headless, twice round.
 
 ## What it computes
 
@@ -663,6 +705,8 @@ map with additive blending, which is the same forward map).
     src/app.h         the running program's state
     src/param.[ch]    the named parameters: setters, ranges, nudges; --list-params
     src/config.[ch]   creation settings, the config file, --write-config
+    src/script.[ch]   scripts: the parser, the clock, the tweens
+    demos/            scripts to run with --script
     src/dct.[ch]      radix-2 FFT, DCT-II/III, 2-D row–column
     src/wave.[ch]     dispersion tables, rotor propagation, sources
     src/hos.[ch]      nonlinear (HOS) correction on the coarse modes
@@ -673,7 +717,7 @@ map with additive blending, which is the same forward map).
     src/dsp.[ch]      noise-suite synthesis library, unchanged
     src/render.[ch]   top-down CPU shading (--2d)
     src/main.c        SDL2 window, input, timing, bench, Emscripten loop
-    tests/            dct, wave, disk, hos and paddle tests (run with `make test`)
+    tests/            dct, wave, disk, hos, paddle and script tests (run with `make test`)
     web/shell.html    Emscripten shell
 
 The 3-D path was exercised under Xvfb with Mesa's llvmpipe (OpenGL 4.5 core).

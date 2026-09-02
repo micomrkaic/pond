@@ -1,0 +1,29 @@
+# the wavemaker.                       ./pond --script demos/wavemaker.pond
+
+at 0    clear  preset 3  glass floor  breeze off  rain off
+at 0    paddle on  paddle-wall x=0  paddle-pos 0.5  paddle-span 1  paddle-freq 0.9
+at 0    camera 30,52,1.7
+at 0    say "a wall-wide wavemaker at 0.9 Hz: plane waves"
+
+at 12   say "the frequency sweeps up: shorter waves, travelling slower"
+at 12   paddle-freq 2.5 over 25
+at 40   say "and down.  it stops at the tank's lowest mode: below that, nothing can answer"
+at 40   paddle-freq 0.3 over 20
+
+at 65   say "the same drive on a fifth of the wall"
+at 65   paddle-freq 1.2   paddle-span 0.2 over 8
+at 80   say "a point source, sliding along the wall"
+at 80   paddle-span 0.05 over 5
+at 86   paddle-pos 0.1 over 10
+at 97   paddle-pos 0.9 over 14
+
+at 113  say "the next wall"
+at 113  paddle-wall y=0  paddle-pos 0.5  paddle-span 0.3
+at 114  yaw += 90 over 20
+
+at 135  say "wall-wide again: the reflection off the far wall makes a standing wave"
+at 135  paddle-span 1  paddle-freq 1.6
+at 136  pitch 70 over 20
+
+at 160  say ""
+at 160  loop

@@ -1,0 +1,19 @@
+# the ring maker.                      ./pond --script demos/rings.pond
+
+at 0    clear  shape disk  preset 3  glass glass+bottom  rain off  breeze off
+at 0    paddle on  paddle-span 1  paddle-freq 1.0  paddle-pos 0.5
+at 0    camera 0,70,1.2
+at 0    say "a disk with its whole rim as the wavemaker: rings that converge on the centre"
+at 3    yaw += 360 over 120
+
+at 20   say "lower down: the rings pile up where they meet"
+at 20   pitch 25 over 25
+at 50   say "faster: the pattern tightens"
+at 50   paddle-freq 1.8 over 20
+at 80   say "a sector of the rim instead: a fan, and its echo off the far side"
+at 80   paddle-span 0.15 over 6
+at 90   paddle-pos += 1 over 30
+
+at 125  say ""
+at 125  paddle-span 1  paddle-freq 1.0
+at 125  loop
