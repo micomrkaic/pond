@@ -182,6 +182,38 @@ int main(void)
         wave_destroy(q);
     }
 
+    /* --- and in shallow water the wedge opens out as the hull nears the critical
+     *     speed sqrt(g h): the same run at depth 13 cm, Froude_h = 0.89 --- */
+    {
+        const double U = 1.0, L = 24.0, W = 8.0, h = 0.13;
+        wave *q = wave_create(512, 128, L, W, h);
+        wave_set_damping(q, 0.05);
+        const double dt = 1.0 / 120.0, s = 0.12, p0 = 200.0;
+        double x = 2.0;
+        for (int it = 0; it < 120 * 16; it++) { wave_add_pressure(q, x, 0.5 * W, s, p0 * dt); wave_step(q, dt, 1); x += U * dt; }
+        wave_realize(q);
+        const double dxc = L / 512;
+        double best = 0; int ang_peak = 0;
+        for (int a = 0; a <= 60; a++) {
+            const double th = a * M_PI / 180.0;
+            double rms = 0; int n = 0;
+            for (double d = 3.0; d <= 6.0; d += 0.05) {
+                const double px = x - d * cos(th), py = 0.5 * W + d * sin(th);
+                const int i = (int)(px / dxc), jj = (int)(py / (W / 128));
+                if (i < 0 || i >= 512 || jj < 0 || jj >= 128) continue;
+                const double e = q->eta[i + 512 * jj];
+                rms += e * e; n++;
+            }
+            rms = n ? sqrt(rms / n) : 0;
+            if (rms > best) { best = rms; ang_peak = a; }
+        }
+        ok = ang_peak >= 23 && ang_peak <= 35;
+        printf("shallow, Froude_h %.2f: the caustic has moved out to %d degrees (wider than Kelvin's, on its way to 90 at the critical speed)  %s\n",
+               U / sqrt(9.81 * h), ang_peak, ok ? "ok" : "FAIL");
+        fails += !ok;
+        wave_destroy(q);
+    }
+
     printf("%s\n", fails ? "SOME TESTS FAILED" : "all wave tests passed");
     return fails ? 1 : 0;
 }

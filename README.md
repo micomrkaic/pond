@@ -423,9 +423,12 @@ $19.47°$ in deep water, which the test finds as the caustic where the
 amplitude peaks before collapsing — 18° on a grid, and nothing in the code
 knows the number. The boat (`e`) is three such patches along its length,
 hydrostatic for a draft of a twentieth of the hull, driven at a Froude number
-$U/\sqrt{gL}$ so the picture is the same in a tray and at sea. Shallow water
-narrows the wake, and the solver does that too, since it is only the
-dispersion relation.
+$U/\sqrt{gL}$ so the picture is the same in a tray and at sea. In shallow
+water the wedge opens out as the hull nears the critical speed $\sqrt{gh}$
+(the test finds 26° at a depth Froude number of 0.89, against 18° in deep
+water) and beyond it closes down again into a Mach wedge of half-angle
+$\arcsin(\sqrt{gh}/U)$; the solver does all of that unasked, since it is
+only the dispersion relation.
 
 The wind (`w`) is the breeze band given a physical knob: a fetch-limited sea
 after JONSWAP/SMB for wind speed $U$ over the basin's length $F$, peak at
