@@ -79,6 +79,18 @@ typedef struct app {
     double paddle_gain, breeze_gain, finger_gain;
     int preset;
 
+    /* the boat: a hull pressed on the water, driven round the basin */
+    int    boat;
+    double boat_x, boat_y, boat_hdg;   /* metres from the top-left corner; radians, 0 = +x */
+    double boat_froude;                /* speed as U / sqrt(g len): the picture is the same in any basin */
+    double boat_weave;                 /* phase of its wandering */
+    /* floats: small things riding the surface, sliding down the slopes */
+    #define NFLOAT_MAX 12
+    int    nfloat;
+    double fl_x[NFLOAT_MAX], fl_y[NFLOAT_MAX], fl_vx[NFLOAT_MAX], fl_vy[NFLOAT_MAX];
+    /* wind: m/s, 0 leaves the breeze on its own knobs */
+    double wind;
+
     int dragging, orbiting, mx, my;
     int touch_active; float tx, ty;   /* two-finger gesture (touch screens, browsers) */
     Uint64 prev;
@@ -105,5 +117,9 @@ double app_paddle_hz(const app *a);
 void  app_set_paddle_hz(app *a, double f);
 void  app_clamp_paddle(app *a);
 void  app_reset_camera(app *a);
+double app_boat_len(const app *a);      /* the hull's length: a twelfth of the basin */
+double app_boat_speed(const app *a);    /* m/s */
+void  app_add_float(app *a);            /* one more, somewhere not too near a wall */
+void  app_clear_floats(app *a);
 
 #endif

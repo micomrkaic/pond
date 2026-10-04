@@ -38,6 +38,11 @@ typedef struct {
     float paddle_pos;  /* 0..1 along that wall (disk: turns) */
     float paddle_span; /* 0..1 of it */
     float paddle_width;/* how far the forcing reaches into the water, metres */
+    /* things on the water: drawn riding the surface, vertex by vertex */
+    int   boat;        /* 0: none */
+    float boat_x, boat_z, boat_hdg, boat_len;   /* metres, radians (0 = +x) */
+    int   nfloat;
+    float float_x[12], float_z[12], float_size;
 } view3d_params;
 
 typedef struct view3d view3d;

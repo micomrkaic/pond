@@ -56,6 +56,9 @@ static const char *const help_lines[] = {
     "t                         container: opaque, floor, glass, +bottom, none",
     "",
     "r   i / I                 rain on / off;  rain rate",
+    "w / W                     wind, m/s: a fetch-limited sea (0: the breeze as before)",
+    "e   z / Z                 a boat and its Kelvin wake;  its speed (Froude number)",
+    "E                         one more float (they ride the waves; --floats N)",
     "b                         breeze (wind sea)",
     "p / P                     wavemaker on / off;  next wall",
     "k / K   l / L             its frequency;  its span",
@@ -64,8 +67,7 @@ static const char *const help_lines[] = {
     "",
     "m   a / A                 sound on / off;  volume",
     "j / J   u / U             drop plinks;  rain bed",
-    "z / Z   w / W             brown noise;  breeze",
-    "e / E                     breeze harshness (gusts, rustle)",
+    "F5 F6 F7 (shift: up)      brown noise;  breeze;  its harshness (gusts, rustle)",
     "",
     "d                         hide / show the settings box",
     "F11, alt+enter            full screen",
@@ -113,7 +115,7 @@ static void print_help(void)
 static void update_hud(app *a)
 {
     static const char *glass_names[] = { "opaque", "floor only", "glass walls", "glass walls + bottom", "no walls" };
-    char buf[640], line2[200];
+    char buf[800], line2[320];
     char nl[48];
     if (a->hos_on && a->hs) snprintf(nl, sizeof nl, "  HOS M=%d nc=%d%s", hos_order(a->hs), hos_nc(a->hs), a->hos_skipped ? " (too steep)" : "");
     else if (a->hos_on) snprintf(nl, sizeof nl, "  HOS: rectangle only");
@@ -125,6 +127,14 @@ static void update_hud(app *a)
     snprintf(line2, sizeof line2, "warp %.2gx  gain %.2g  damp %.3g/s%s%s%s%s%s%s",
              a->warp, (double)a->p3.gain, a->w->gamma0, nl, snd,
              a->rain ? "  rain" : "", a->breeze ? " breeze" : "", a->paddle ? " paddle" : "", a->paused ? "  PAUSED" : "");
+    if (a->wind > 0 || a->boat || a->nfloat) {
+        char ex[120];
+        int k = 0;
+        if (a->wind > 0) k += snprintf(ex + k, sizeof ex - k, "  wind %.0f m/s", a->wind);
+        if (a->boat) k += snprintf(ex + k, sizeof ex - k, "  boat %.2f m/s", app_boat_speed(a));
+        if (a->nfloat) k += snprintf(ex + k, sizeof ex - k, "  floats %d", a->nfloat);
+        strncat(line2, ex, sizeof line2 - strlen(line2) - 1);
+    }
     char dims[64];
     if (a->shape == WAVE_DISK) snprintf(dims, sizeof dims, "disk D=%.3g m", a->w->Lx);
     else snprintf(dims, sizeof dims, "%.3g x %.3g m", a->w->Lx, a->w->Ly);
@@ -225,6 +235,9 @@ static const keybind keybinds[] = {
     { SDLK_r, -1, "rain", 0 },
     { SDLK_i,  0, "rain-rate", -1 },      { SDLK_i, 1, "rain-rate", +1 },
     { SDLK_b, -1, "breeze", 0 },
+    { SDLK_w,  0, "wind", -1 },           { SDLK_w, 1, "wind", +1 },
+    { SDLK_e,  0, "boat", 0 },            { SDLK_e, 1, "floats", +1 },
+    { SDLK_z,  0, "boat-speed", -1 },     { SDLK_z, 1, "boat-speed", +1 },
     { SDLK_p,  0, "paddle", 0 },          { SDLK_p, 1, "paddle-wall", +1 },
     { SDLK_k,  0, "paddle-freq", -1 },    { SDLK_k, 1, "paddle-freq", +1 },
     { SDLK_l,  0, "paddle-span", -1 },    { SDLK_l, 1, "paddle-span", +1 },
@@ -248,9 +261,9 @@ static const keybind keybinds[] = {
     { SDLK_a,  0, "volume", -1 },         { SDLK_a, 1, "volume", +1 },
     { SDLK_j,  0, "sound.drops", -1 },    { SDLK_j, 1, "sound.drops", +1 },
     { SDLK_u,  0, "sound.bed", -1 },      { SDLK_u, 1, "sound.bed", +1 },
-    { SDLK_z,  0, "sound.brown", -1 },    { SDLK_z, 1, "sound.brown", +1 },
-    { SDLK_w,  0, "sound.breeze", -1 },   { SDLK_w, 1, "sound.breeze", +1 },
-    { SDLK_e,  0, "sound.harsh", -1 },    { SDLK_e, 1, "sound.harsh", +1 },
+    { SDLK_F5, 0, "sound.brown", -1 },    { SDLK_F5, 1, "sound.brown", +1 },
+    { SDLK_F6, 0, "sound.breeze", -1 },   { SDLK_F6, 1, "sound.breeze", +1 },
+    { SDLK_F7, 0, "sound.harsh", -1 },    { SDLK_F7, 1, "sound.harsh", +1 },
 };
 #define NKEYBINDS ((int)(sizeof keybinds / sizeof keybinds[0]))
 
@@ -358,10 +371,107 @@ static void handle_events(app *a)
 }
 
 /* Sources for one frame of simulated duration dts. */
+/* the realised surface at a point, both shapes; 0 off the water */
+static double eta_at(const wave *w, double x, double y)
+{
+    if (w->shape == WAVE_DISK) {
+        const double px = x - w->R, py = y - w->R, r = sqrt(px * px + py * py);
+        if (r >= w->R) return 0.0;
+        double th = atan2(py, px);
+        if (th < 0) th += 2.0 * M_PI;
+        int i = (int)(r / w->dr - 0.5), j = (int)(th / w->dth) % w->nt;
+        if (i < 0) i = 0;
+        if (i > w->nr - 1) i = w->nr - 1;
+        return w->eta[(size_t)j + (size_t)w->nt * i];
+    }
+    int i = (int)(x / w->dx), j = (int)(y / w->dy);
+    if (i < 0 || j < 0 || i >= w->nx || j >= w->ny) return 0.0;
+    return w->eta[(size_t)i + (size_t)w->nx * j];
+}
+
+/* keep a point inside the basin, a margin off the wall, turning its velocity back */
+static void keep_in(const wave *w, double margin, double *x, double *y, double *vx, double *vy)
+{
+    if (w->shape == WAVE_DISK) {
+        const double px = *x - w->R, py = *y - w->R, r = sqrt(px * px + py * py), rmax = w->R - margin;
+        if (r > rmax && r > 0) {
+            const double nx = px / r, ny = py / r, vn = *vx * nx + *vy * ny;
+            *x = w->R + nx * rmax; *y = w->R + ny * rmax;
+            if (vn > 0) { *vx -= 2 * vn * nx; *vy -= 2 * vn * ny; }
+        }
+        return;
+    }
+    if (*x < margin) { *x = margin; if (*vx < 0) *vx = -*vx; }
+    if (*x > w->Lx - margin) { *x = w->Lx - margin; if (*vx > 0) *vx = -*vx; }
+    if (*y < margin) { *y = margin; if (*vy < 0) *vy = -*vy; }
+    if (*y > w->Ly - margin) { *y = w->Ly - margin; if (*vy > 0) *vy = -*vy; }
+}
+
+/* the boat: drives at its Froude speed, weaves a little, and turns for the middle
+ * when a wall comes near.  The hull is three Gaussian patches of hydrostatic
+ * pressure along its length, pressed on the water through the solver's
+ * pressure source: that is what leaves the Kelvin wake. */
+static void drive_boat(app *a, double dts)
+{
+    wave *w = a->w;
+    const double len = app_boat_len(a), U = app_boat_speed(a);
+    const double cx = 0.5 * w->Lx, cy = 0.5 * w->Ly;
+    if (a->boat_x <= 0 && a->boat_y <= 0) { a->boat_x = cx; a->boat_y = cy; a->boat_hdg = 0.3; }
+    /* how close a wall is ahead */
+    double room;
+    if (w->shape == WAVE_DISK) {
+        const double px = a->boat_x - w->R, py = a->boat_y - w->R;
+        room = w->R - sqrt(px * px + py * py);
+    } else {
+        room = fmin(fmin(a->boat_x, w->Lx - a->boat_x), fmin(a->boat_y, w->Ly - a->boat_y));
+    }
+    a->boat_weave += dts * 0.15 * U / len;
+    double turn = 0.25 * sin(a->boat_weave) * U / len;           /* a gentle wander */
+    if (room < 3.0 * len) {
+        /* turn towards the middle, the short way round, harder the closer the wall */
+        double want = atan2(cy - a->boat_y, cx - a->boat_x), d = want - a->boat_hdg;
+        while (d > M_PI) d -= 2 * M_PI;
+        while (d < -M_PI) d += 2 * M_PI;
+        turn += (d > 0 ? 1.0 : -1.0) * 1.2 * U / len * (1.0 - room / (3.0 * len));
+    }
+    a->boat_hdg += turn * dts;
+    a->boat_x += U * cos(a->boat_hdg) * dts;
+    a->boat_y += U * sin(a->boat_hdg) * dts;
+    double vx = 0, vy = 0;
+    keep_in(w, 0.6 * len, &a->boat_x, &a->boat_y, &vx, &vy);
+    /* the hull: draft a twentieth of the length, bow and stern pressing less than the middle */
+    const double draft = 0.05 * len, p = w->rho * w->g * draft, sx = 0.18 * len;
+    const double ex = cos(a->boat_hdg), ey = sin(a->boat_hdg);
+    wave_add_pressure(w, a->boat_x, a->boat_y, sx, p * dts);
+    wave_add_pressure(w, a->boat_x + 0.3 * len * ex, a->boat_y + 0.3 * len * ey, 0.7 * sx, 0.6 * p * dts);
+    wave_add_pressure(w, a->boat_x - 0.3 * len * ex, a->boat_y - 0.3 * len * ey, 0.8 * sx, 0.7 * p * dts);
+}
+
+/* the floats: they ride the surface (the view lifts them), and slide down its
+ * slope with some drag -- a crude stand-in for the orbital motion, but it
+ * sloshes them about believably and gathers them where the water gathers */
+static void drift_floats(app *a, double dts)
+{
+    wave *w = a->w;
+    const double L = sqrt(w->Lx * w->Ly), size = L / 60.0, h = 2.0 * w->dx;
+    for (int i = 0; i < a->nfloat; i++) {
+        const double sx = (eta_at(w, a->fl_x[i] + h, a->fl_y[i]) - eta_at(w, a->fl_x[i] - h, a->fl_y[i])) / (2 * h);
+        const double sy = (eta_at(w, a->fl_x[i], a->fl_y[i] + h) - eta_at(w, a->fl_x[i], a->fl_y[i] - h)) / (2 * h);
+        a->fl_vx[i] += (-w->g * sx * (double)a->p3.gain - 2.0 * a->fl_vx[i]) * dts;
+        a->fl_vy[i] += (-w->g * sy * (double)a->p3.gain - 2.0 * a->fl_vy[i]) * dts;
+        a->fl_x[i] += a->fl_vx[i] * dts;
+        a->fl_y[i] += a->fl_vy[i] * dts;
+        keep_in(w, size, &a->fl_x[i], &a->fl_y[i], &a->fl_vx[i], &a->fl_vy[i]);
+    }
+}
+
 static void apply_sources(app *a, double dts)
 {
     wave *w = a->w;
     const double L = sqrt(w->Lx * w->Ly);     /* size scale for drops, paddle, breeze */
+
+    if (a->boat && dts > 0) drive_boat(a, dts);
+    if (a->nfloat && dts > 0) drift_floats(a, dts);
 
     if (a->dragging) {
         double x, y;
@@ -406,8 +516,24 @@ static void apply_sources(app *a, double dts)
     }
     if (a->breeze) {
         double k0 = 2.0 * M_PI * 8.0 / L;        /* spectral peak at L/8 */
+        double amp = a->breeze_gain * 3.0e-4 * L;
+        if (a->wind > 0) {
+            /* a fetch-limited sea (JONSWAP / SMB) for wind U over the basin's length F:
+             * peak at omega_p = 22 (g^2 / (U F))^(1/3), significant height
+             * H_s = 0.0016 U sqrt(F / g); the forcing's steady state is amp / sqrt(2 gamma),
+             * so amp is set to leave the rms at H_s / 4.  The peak is held inside what the
+             * grid can carry, which is all a coarse sea preset can do. */
+            const double U = a->wind, F = w->Lx;
+            const double om_p = 22.0 * cbrt(w->g * w->g / (U * F));
+            k0 = wave_k_of_omega(w, om_p);
+            const double kmax = M_PI / (4.0 * fmin(w->dx, w->dy));
+            if (k0 > kmax) k0 = kmax;
+            const double Hs = 0.0016 * U * sqrt(F / w->g);
+            const double gam = w->gamma0 + 2.0 * w->nu * k0 * k0;
+            amp = a->breeze_gain * 0.25 * Hs * sqrt(2.0 * gam);
+        }
         double gust = a->au ? 0.5 + audio_gust(a->au) : 1.0;   /* the gusts you hear roughen the water */
-        wave_breeze(w, k0, a->breeze_gain * 3.0e-4 * L * gust, dts);
+        wave_breeze(w, k0, amp * gust, dts);
     }
     /* continuous layers */
     if (a->au) {
@@ -472,6 +598,14 @@ static void frame(void *ud)
     advance(a, dt);
     wave_realize(a->w);
     if (a->hud_dirty) update_hud(a);
+
+    /* the boat and the floats, where the sources put them this frame */
+    a->p3.boat = a->boat;
+    a->p3.boat_x = (float)a->boat_x; a->p3.boat_z = (float)a->boat_y;
+    a->p3.boat_hdg = (float)a->boat_hdg; a->p3.boat_len = (float)app_boat_len(a);
+    a->p3.nfloat = a->nfloat;
+    for (int i = 0; i < a->nfloat; i++) { a->p3.float_x[i] = (float)a->fl_x[i]; a->p3.float_z[i] = (float)a->fl_y[i]; }
+    a->p3.float_size = (float)(sqrt(a->w->Lx * a->w->Ly) / 60.0);
 
     /* the wavemaker's outline, so its place and size can be seen while they change */
     a->p3.paddle = a->paddle && a->paddle_mark;
@@ -649,6 +783,7 @@ POND_MAIN(int argc, char **argv)
     a.running = 1;
     a.warp = 1.0;
     a.rain_rate = 2.0;
+    a.boat_froude = 0.4;
     a.paddle_div = 8.0;                    /* eight wavelengths across, whatever the basin */
     a.paddle_wall = 0; a.paddle_pos = 0.5; a.paddle_span = 1.0; a.paddle_mark = 1;
     a.paddle_gain = a.breeze_gain = a.finger_gain = 1.0;

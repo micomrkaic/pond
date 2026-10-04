@@ -1,0 +1,23 @@
+# pond: a wind sea.                        ./pond --script demos/wind.pond
+#
+# A fetch-limited sea for a wind over the basin's length (JONSWAP): the peak
+# wavelength and the significant height both come from the wind speed alone.
+
+at 0     clear  preset pond  rain off  paddle off  boat off  floats 0
+at 0     wind 3  gain 1
+at 0     camera 30,30,1.3
+at 0     say "a 3 m/s breeze over a 3 m pond: the ripples a breath makes"
+at 20    wind 6 over 20
+at 20    say "6 m/s"
+at 50    wind 10 over 20
+at 50    say "10 m/s: height goes with the wind, wavelength with its 2/3 power"
+at 80    floats 8
+at 80    say "floats drift down the slopes and gather where the water does"
+at 85    yaw += 120 over 40
+at 130   preset sea  wind 12  camera 30,18,0.8
+at 130   say "the sea preset, 12 m/s: as short a chop as the grid can hold"
+at 140   boat on  boat-speed 0.5
+at 140   say "and a boat through it"
+at 150   yaw += 90 over 60
+at 220   say ""
+at 220   loop

@@ -67,12 +67,15 @@ screen, one finger is the finger, two fingers orbit and pinch-zoom.
 | `y` | nonlinear (HOS) correction on/off (rectangle only) |
 | `m` `a`/`A` | sound on/off, volume down/up |
 | `j`/`J` `u`/`U` | drop level, rain-bed level |
-| `z`/`Z` `w`/`W` `e`/`E` | brown noise, breeze level, breeze harshness |
+| `F5` `F6` `F7` (shift: up) | brown noise, breeze level, breeze harshness |
 | `1` `2` `3` `4` | presets: tray 30 cm · pond 3 m · pool 12 m · sea 80 m |
 | `[` `]` / `{` `}` | width / length (disk: diameter), 5 % per press, hold to sweep (live: the physics changes, the field is kept; aspect kept within 4:1) |
 | `,` `.` / `\` | depth / make it square again at the same area |
 | `r` `i`/`I` | rain on/off, rate |
 | `b` | breeze (directional wind sea) on/off |
+| `w`/`W` | wind, m/s: a fetch-limited sea for that wind over the basin's length (0: the breeze on its own knobs) |
+| `e` `z`/`Z` | a boat driving round the basin, leaving its Kelvin wake; its speed, as a Froude number |
+| `E` | one more float riding the surface (up to 12; `--floats N`) |
 | `p` / `P` | wavemaker on/off / move it to the next wall (its position along the wall is kept) |
 | `k`/`K` | its frequency (the wavelength follows from the dispersion relation) |
 | `l`/`L` | its span: the fraction of the wall it occupies, down to a point source |
@@ -205,11 +208,13 @@ then the program. Scripts do not clear the water between events unless told
 to; the old waves decaying under the new ones is the good part. (Do clear
 before shrinking a basin, though: 80 m of sea in a 3 m pond is a tsunami.)
 
-`demos/` has five: `tour` (a bit of everything, three minutes, loops),
+`demos/` has seven: `tour` (a bit of everything, three minutes, loops),
 `wavemaker` (frequency, span, position, walls), `rings` (the disk with its
 rim as the wavemaker), `storm` (the sea under a rising and falling wind),
 `dispersion` (one drop in a still pool, then the same in the tray where the
-short waves are the fast ones). `tests/test_script.c` runs every one of them
+short waves are the fast ones), `boat` (a hull and its Kelvin wake, at three
+speeds, with floats), `wind` (a fetch-limited sea from a breath to a gale,
+then the sea preset with a boat through it). `tests/test_script.c` runs every one of them
 headless, twice round.
 
 ## What it computes
@@ -394,6 +399,48 @@ the sheets and produces the folds automatically. Reflectance is Schlick's
 approximation to Fresnel, $R = R_0 + (1-R_0)(1-\cos\theta)^5$ with
 $R_0 = ((n-1)/(n+1))^2 = 0.02$; absorption along a path $s$ in water is
 Beer–Lambert, $e^{-\mu s}$ per channel.
+
+### Sources: a hull, a wind
+
+Drops and the wavemaker stamp displacement and velocity into real space and
+transform once. A hull is different: it presses on the surface, and a pressure
+$p(\mathbf x, t)$ enters the dynamic condition as $\phi_t + g\eta = -p/\rho$.
+Taking $\partial_t$ of the kinematic condition, each mode obeys
+
+$$
+\ddot{\hat\eta}_n + \omega_n^2 \hat\eta_n = -\frac{k_n \tanh k_n h}{\rho}\,\hat p_n ,
+$$
+
+with the Dirichlet-to-Neumann factor $k\tanh kh$ that no real-space stamp
+could supply, so `wave_add_pressure` transforms the patch and kicks the modes
+through it. At rest a steady patch settles to the hydrostatic dent
+$\eta = -p/\rho g$ (the basin keeps its volume, so the rest of the water
+rises by the dent's mean); `tests/test_wave.c` checks it to 1 %. Dragged
+along at $U$ it leaves a Kelvin wake: transverse waves of length
+$2\pi U^2/g$ behind it (the test gets 0.640 m for 1 m/s, which is
+$2\pi U^2/g$ to three figures) and the whole pattern inside a half-angle of
+$19.47°$ in deep water, which the test finds as the caustic where the
+amplitude peaks before collapsing — 18° on a grid, and nothing in the code
+knows the number. The boat (`e`) is three such patches along its length,
+hydrostatic for a draft of a twentieth of the hull, driven at a Froude number
+$U/\sqrt{gL}$ so the picture is the same in a tray and at sea. Shallow water
+narrows the wake, and the solver does that too, since it is only the
+dispersion relation.
+
+The wind (`w`) is the breeze band given a physical knob: a fetch-limited sea
+after JONSWAP/SMB for wind speed $U$ over the basin's length $F$, peak at
+$\omega_p = 22\,(g^2/UF)^{1/3}$ and significant height
+$H_s = 0.0016\,U\sqrt{F/g}$ — 8 mm ripples of 8 cm for 5 m/s over a 3 m pond.
+The stochastic forcing's steady rms under damping $\gamma$ is
+$\text{amp}/\sqrt{2\gamma}$, so the amplitude is set to leave $H_s/4$. The
+peak is held inside what the grid can carry, which on the 80 m sea preset
+means a 2.5 m chop stands in for the 60 cm one a 12 m/s wind would make.
+
+Floats (`E`) are drawn riding the surface — the view lifts every vertex onto
+the water under it, so a hull heaves and tilts for free — and move
+horizontally by sliding down the local slope against drag. That is a
+stand-in for the orbital motion, not a derivation of it; it sloshes them
+about believably and gathers them where the water gathers.
 
 ### Validity
 

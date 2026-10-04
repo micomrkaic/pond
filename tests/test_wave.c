@@ -106,6 +106,82 @@ int main(void)
     fails += !ok;
 
     wave_destroy(w);
+
+    /* --- a steady pressure patch settles to its hydrostatic dent, eta = -p / (rho g) --- */
+    {
+        wave *q = wave_create(128, 128, 2.0, 2.0, 1.0);
+        /* (the rotor's damping acts on both components, so a static load sees a
+         * stiffness omega^2 + gamma^2: at the real default of 0.03/s that is 1e-4,
+         * but a test in a hurry with 1.5/s would be 5% low) */
+        wave_set_damping(q, 0.3);
+        const double p0 = 10.0, s = 0.25, dt = 1.0 / 120.0;
+        for (int it = 0; it < 120 * 40; it++) {
+            wave_add_pressure(q, 1.0, 1.0, s, p0 * dt);
+            wave_step(q, dt, 1);
+        }
+        wave_realize(q);
+        /* the basin keeps its volume, so the dent's volume lifts the rest of the
+         * surface by its mean: measure the dent against the far corner */
+        const double got = q->eta[64 + 128 * 64] - q->eta[4 + 128 * 4], ref = -p0 / (q->rho * q->g);
+        ok = fabs(got - ref) / fabs(ref) < 0.03;
+        printf("steady 10 Pa patch: dent %.3f mm below the far water, hydrostatic -p/(rho g) = %.3f mm  %s\n", got * 1e3, ref * 1e3, ok ? "ok" : "FAIL");
+        fails += !ok;
+        const double lift = p0 / (q->rho * q->g) * 2.0 * M_PI * s * s / (2.0 * 2.0);
+        ok = fabs(q->eta[4 + 128 * 4] - lift) < 0.1 * lift;
+        printf("   far water lifted %.4f mm, the dent's volume over the basin %.4f mm  %s\n", q->eta[4 + 128 * 4] * 1e3, lift * 1e3, ok ? "ok" : "FAIL");
+        fails += !ok;
+        wave_destroy(q);
+    }
+
+    /* --- a patch dragged along at U leaves a Kelvin wake: transverse waves of
+     *     wavelength 2 pi U^2 / g on the track behind it, deep water --- */
+    {
+        const double U = 1.0, L = 24.0, W = 8.0;
+        wave *q = wave_create(512, 128, L, W, 20.0);    /* deep: kh >> 1 for the wake's k = g/U^2 */
+        wave_set_damping(q, 0.05);
+        const double dt = 1.0 / 120.0, s = 0.12, p0 = 200.0;
+        double x = 2.0;
+        for (int it = 0; it < 120 * 16; it++) {
+            wave_add_pressure(q, x, 0.5 * W, s, p0 * dt);
+            wave_step(q, dt, 1);
+            x += U * dt;
+        }
+        wave_realize(q);
+        /* zero crossings of eta along the track, from 1.5 m to 8 m behind the hull */
+        const int j = 64;
+        const double dxc = L / 512;
+        double first = -1, last = -1; int nzc = 0;
+        for (int i = (int)((x - 8.0) / dxc); i < (int)((x - 1.5) / dxc); i++) {
+            const float a = q->eta[i + 512 * j], b = q->eta[i + 1 + 512 * j];
+            if ((a < 0) != (b < 0)) { const double xc = (i + 0.5) * dxc + dxc * a / (a - b); if (first < 0) first = xc; last = xc; nzc++; }
+        }
+        const double lam = nzc > 1 ? 2.0 * (last - first) / (nzc - 1) : 0.0, lam_ref = 2.0 * M_PI * U * U / 9.81;
+        ok = nzc >= 6 && fabs(lam - lam_ref) / lam_ref < 0.12;
+        printf("hull at %.1f m/s: %d zero crossings on the track, transverse wavelength %.3f m vs 2 pi U^2/g = %.3f m  %s\n",
+               U, nzc, lam, lam_ref, ok ? "ok" : "FAIL");
+        fails += !ok;
+        /* the wake's half-angle: the amplitude 3-6 m astern rises to a caustic at the
+         * cusp line and collapses beyond it.  Kelvin: 19.47 degrees in deep water */
+        double best = 0; int ang_peak = 0;
+        for (int a = 0; a <= 40; a++) {
+            const double th = a * M_PI / 180.0;
+            double rms = 0; int n = 0;
+            for (double d = 3.0; d <= 6.0; d += 0.05) {
+                const double px = x - d * cos(th), py = 0.5 * W + d * sin(th);
+                const int i = (int)(px / dxc), jj = (int)(py / (W / 128));
+                if (i < 0 || i >= 512 || jj < 0 || jj >= 128) continue;
+                const double e = q->eta[i + 512 * jj];
+                rms += e * e; n++;
+            }
+            rms = n ? sqrt(rms / n) : 0;
+            if (rms > best) { best = rms; ang_peak = a; }
+        }
+        ok = ang_peak >= 16 && ang_peak <= 22;
+        printf("   the caustic peaks at %d degrees (Kelvin's cusp line: 19.5)  %s\n", ang_peak, ok ? "ok" : "FAIL");
+        fails += !ok;
+        wave_destroy(q);
+    }
+
     printf("%s\n", fails ? "SOME TESTS FAILED" : "all wave tests passed");
     return fails ? 1 : 0;
 }

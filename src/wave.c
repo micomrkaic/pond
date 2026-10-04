@@ -140,7 +140,7 @@ static wave *alloc_common(int nx, int ny, int nmodes)
     w->kmag = malloc(NM * sizeof(float));
     w->Rr = malloc(NM * sizeof(float)); w->Ri = malloc(NM * sizeof(float));
     w->eta = calloc(N, sizeof(float));
-    w->src_d = calloc(N, sizeof(float)); w->src_v = calloc(N, sizeof(float));
+    w->src_d = calloc(N, sizeof(float)); w->src_v = calloc(N, sizeof(float)); w->src_p = calloc(N, sizeof(float));
     w->tmp = malloc((size_t)(nx > ny ? nx : ny) * sizeof(float));
     int ok = 1;
     for (int p = 2; p <= WAVE_MAXPOW; p++) {
@@ -151,7 +151,7 @@ static wave *alloc_common(int nx, int ny, int nmodes)
     w->bz_k0 = -1.0;
     if (!ok || !w->bz_idx || !w->bz_w ||
         !w->A || !w->B || !w->omega || !w->gamma || !w->kmag || !w->Rr || !w->Ri ||
-        !w->eta || !w->src_d || !w->src_v || !w->tmp) {
+        !w->eta || !w->src_d || !w->src_v || !w->src_p || !w->tmp) {
         wave_destroy(w);
         return NULL;
     }
@@ -206,7 +206,7 @@ void wave_destroy(wave *w)
 {
     if (!w) return;
     free(w->A); free(w->B); free(w->omega); free(w->gamma); free(w->kmag);
-    free(w->Rr); free(w->Ri); free(w->eta); free(w->src_d); free(w->src_v); free(w->tmp);
+    free(w->Rr); free(w->Ri); free(w->eta); free(w->src_d); free(w->src_v); free(w->src_p); free(w->tmp);
     for (int p = 2; p <= WAVE_MAXPOW; p++) { free(w->Rpr[p]); free(w->Rpi[p]); }
     free(w->bz_idx); free(w->bz_w);
     free(w->G); free(w->kappa); free(w->sq_rho); free(w->isq_rho);
@@ -246,7 +246,8 @@ void wave_clear(wave *w)
     memset(w->B, 0, NM * sizeof(float));
     memset(w->src_d, 0, N * sizeof(float));
     memset(w->src_v, 0, N * sizeof(float));
-    w->dirty_d = w->dirty_v = 0;
+    memset(w->src_p, 0, N * sizeof(float));
+    w->dirty_d = w->dirty_v = w->dirty_p = 0;
     w->t = 0;
 }
 
@@ -275,6 +276,25 @@ static void flush_sources(wave *w)
         }
         memset(w->src_v, 0, N * sizeof(float));
         w->dirty_v = 0;
+    }
+    if (w->dirty_p) {
+        /* eta_hat_t += -(k tanh kh / rho) p_hat dt, then into B through 1/omega */
+        float *modes;
+        if (w->shape == WAVE_DISK) {
+            memset(w->tmpm, 0, NM * sizeof(float));
+            disk_forward_add(w, w->src_p, w->tmpm);
+            modes = w->tmpm;
+        } else {
+            dct2_forward(&w->px, &w->py, w->src_p, w->tmp);
+            modes = w->src_p;
+        }
+        for (size_t i = 0; i < NM; i++) {
+            const double k = w->kmag[i], om = w->omega[i];
+            if (om <= 0.0f || k <= 0.0) continue;
+            w->B[i] += (float)(-k * tanh(k * w->depth) / (w->rho * om)) * modes[i];
+        }
+        memset(w->src_p, 0, N * sizeof(float));
+        w->dirty_p = 0;
     }
     /* the pool does not change its mean level: pin the k = 0 mode(s) */
     for (size_t i = 0; i < NM; i++) if (w->omega[i] <= 0.0f) w->A[i] = w->B[i] = 0.0f;
@@ -367,6 +387,51 @@ void wave_add_drop(wave *w, double x, double y, double s, double amp)
         }
     }
     w->dirty_d = 1;
+}
+
+/* a plain Gaussian stamp, amp * exp(-q), onto any real-space buffer */
+static void stamp_gauss(wave *w, float *buf, double x, double y, double s, double amp)
+{
+    const double reach = 5.0 * s, dx = w->dx, dy = w->dy;
+    const double inv2s2 = 1.0 / (2.0 * s * s);
+    if (w->shape == WAVE_DISK) {
+        const double px = x - w->R, py = y - w->R, rc = sqrt(px * px + py * py);
+        int i0 = (int)floor((rc - reach) / w->dr), i1 = (int)ceil((rc + reach) / w->dr);
+        if (i0 < 0) i0 = 0;
+        if (i1 > w->nr - 1) i1 = w->nr - 1;
+        for (int i = i0; i <= i1; i++) {
+            const double r = (i + 0.5) * w->dr;
+            for (int j = 0; j < w->nt; j++) {
+                const double th = j * w->dth;
+                const double xx = r * cos(th) - px, yy = r * sin(th) - py;
+                const double q = (xx * xx + yy * yy) * inv2s2;
+                if (q < 12.0) buf[(size_t)j + (size_t)w->nt * i] += (float)(amp * exp(-q));
+            }
+        }
+        return;
+    }
+    int i0 = (int)floor((x - reach) / dx), i1 = (int)ceil((x + reach) / dx);
+    int j0 = (int)floor((y - reach) / dy), j1 = (int)ceil((y + reach) / dy);
+    if (i0 < 0) i0 = 0;
+    if (j0 < 0) j0 = 0;
+    if (i1 > w->nx - 1) i1 = w->nx - 1;
+    if (j1 > w->ny - 1) j1 = w->ny - 1;
+    if (i0 > i1 || j0 > j1) return;
+    for (int j = j0; j <= j1; j++) {
+        const double yy = (j + 0.5) * dy - y;
+        for (int i = i0; i <= i1; i++) {
+            const double xx = (i + 0.5) * dx - x;
+            const double q = (xx * xx + yy * yy) * inv2s2;
+            if (q < 12.0) buf[(size_t)i + (size_t)w->nx * j] += (float)(amp * exp(-q));
+        }
+    }
+}
+
+void wave_add_pressure(wave *w, double x, double y, double s, double p_dt)
+{
+    if (s <= 0 || p_dt == 0) return;
+    stamp_gauss(w, w->src_p, x, y, s, p_dt);
+    w->dirty_p = 1;
 }
 
 void wave_add_paddle(wave *w, int wall, double pos, double span, double width, double accel, double dt)

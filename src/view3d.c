@@ -596,6 +596,7 @@ static const char *fs_ovl = GLSL(
 );
 
 #define MARK_MAX 2048       /* vertices for the wavemaker outline: 6 per piece */
+#define OBJ_MAX 4096        /* vertices for the boat and the floats */
 
 /* ------------------------------------------------------------------ state */
 struct view3d {
@@ -611,6 +612,7 @@ struct view3d {
 
     GLuint p_bg, p_surf, p_solid, p_sides, p_glass, p_ovl, p_caus, p_fill, p_mark;
     GLuint vao_mark, vbo_mark; int n_mark;
+    GLuint vao_obj, vbo_obj;
     GLuint vao_caus, vbo_caus, ebo_caus; int n_caus_int, n_caus_all;   /* caustic mesh (rect: padded grid; disk: light-map grid) */
     GLuint vao_res, vbo_res, ebo_res; int n_res_idx; int res_pad;        /* disk: polar resample mesh */
     GLuint p_res, tex_hc, fbo_hc; int hc_pad;   /* texels of margin around the square */
@@ -1120,6 +1122,12 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
     glGenVertexArrays(1, &v->vao_solid); glGenBuffers(1, &v->vbo_solid);
     glGenVertexArrays(1, &v->vao_sides); glGenBuffers(1, &v->vbo_sides); glGenBuffers(1, &v->ebo_sides);
     glGenVertexArrays(1, &v->vao_mark); glGenBuffers(1, &v->vbo_mark);
+    glGenVertexArrays(1, &v->vao_obj); glGenBuffers(1, &v->vbo_obj);
+    glBindVertexArray(v->vao_obj);
+    glBindBuffer(GL_ARRAY_BUFFER, v->vbo_obj);
+    glBufferData(GL_ARRAY_BUFFER, OBJ_MAX * 3 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void *)0);
     glBindVertexArray(v->vao_mark);
     glBindBuffer(GL_ARRAY_BUFFER, v->vbo_mark);
     glBufferData(GL_ARRAY_BUFFER, MARK_MAX * 3 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
@@ -1785,6 +1793,96 @@ static void draw_paddle_mark(view3d *v, const view3d_params *p, const float *vp)
     glEnable(GL_DEPTH_TEST);
 }
 
+/* ------------------------------------------------- things on the water
+ * Small meshes in basin coordinates, each vertex lifted onto the surface at its
+ * own (x, z) by the mark shader, so a hull heaves and tilts with the water
+ * under it without any bookkeeping here. */
+static int obj_tri(float *b, int n, const float *p0, const float *p1, const float *p2)
+{
+    if (n + 3 > OBJ_MAX) return n;
+    memcpy(b + 3 * n, p0, 3 * sizeof(float)); memcpy(b + 3 * (n + 1), p1, 3 * sizeof(float)); memcpy(b + 3 * (n + 2), p2, 3 * sizeof(float));
+    return n + 3;
+}
+
+/* a hull from stations: at each, a V of (port rail, keel, starboard rail) */
+static int build_hull(float *b, int n, float cx, float cz, float hdg, float len, int deck_only)
+{
+    const float ex = cosf(hdg), ez = sinf(hdg);          /* along */
+    const float px = -ez, pz = ex;                        /* across, to starboard */
+    static const float st_u[6] = { 0.5f, 0.35f, 0.1f, -0.15f, -0.4f, -0.5f };
+    static const float st_b[6] = { 0.0f, 0.10f, 0.17f, 0.18f, 0.15f, 0.12f };   /* half beam */
+    static const float st_d[6] = { 0.01f, 0.05f, 0.07f, 0.07f, 0.06f, 0.05f };  /* keel depth */
+    static const float st_f[6] = { 0.12f, 0.10f, 0.09f, 0.09f, 0.09f, 0.10f };  /* freeboard */
+    float P[6][3][3];
+    for (int i = 0; i < 6; i++) {
+        const float u = st_u[i] * len, bb = st_b[i] * len;
+        const float ox = cx + ex * u, oz = cz + ez * u;
+        P[i][0][0] = ox - px * bb; P[i][0][1] = st_f[i] * len; P[i][0][2] = oz - pz * bb;
+        P[i][1][0] = ox;           P[i][1][1] = -st_d[i] * len; P[i][1][2] = oz;
+        P[i][2][0] = ox + px * bb; P[i][2][1] = st_f[i] * len; P[i][2][2] = oz + pz * bb;
+    }
+    for (int i = 0; i < 5; i++) {
+        if (deck_only) {
+            n = obj_tri(b, n, P[i][0], P[i + 1][0], P[i + 1][2]);
+            n = obj_tri(b, n, P[i][0], P[i + 1][2], P[i][2]);
+        } else {
+            for (int side = 0; side < 2; side++) {
+                const int r = side ? 2 : 0;
+                n = obj_tri(b, n, P[i][r], P[i][1], P[i + 1][1]);
+                n = obj_tri(b, n, P[i][r], P[i + 1][1], P[i + 1][r]);
+            }
+        }
+    }
+    if (!deck_only) {   /* the transom */
+        n = obj_tri(b, n, P[5][0], P[5][1], P[5][2]);
+    }
+    return n;
+}
+
+/* a float: a cone standing in the water, its base a little below the surface */
+static int build_float(float *b, int n, float cx, float cz, float size)
+{
+    const int ns = 10;
+    const float r = 0.45f * size, top[3] = { cx, 1.1f * size, cz }, bot[3] = { cx, -0.25f * size, cz };
+    for (int i = 0; i < ns; i++) {
+        const float a0 = 6.2831853f * i / ns, a1 = 6.2831853f * (i + 1) / ns;
+        const float q0[3] = { cx + r * cosf(a0), -0.25f * size, cz + r * sinf(a0) };
+        const float q1[3] = { cx + r * cosf(a1), -0.25f * size, cz + r * sinf(a1) };
+        n = obj_tri(b, n, q0, top, q1);
+        n = obj_tri(b, n, q0, q1, bot);
+    }
+    return n;
+}
+
+static void draw_objects(view3d *v, const view3d_params *p, const float *vp)
+{
+    if (!p->boat && p->nfloat <= 0) return;
+    static float buf[OBJ_MAX * 3];
+    glUseProgram(v->p_mark);
+    set_common(v, v->p_mark, p, vp);
+    glUniform1f(U(v->p_mark, "u_lift"), 0.0f);
+    glUniform1f(U(v->p_mark, "u_alpha"), 1.0f);
+    glBindVertexArray(v->vao_obj);
+    glBindBuffer(GL_ARRAY_BUFFER, v->vbo_obj);
+    if (p->boat) {
+        int n = build_hull(buf, 0, p->boat_x, p->boat_z, p->boat_hdg, p->boat_len, 0);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)n * 3 * sizeof(float), buf);
+        glUniform3f(U(v->p_mark, "u_col"), 0.72f, 0.70f, 0.66f);
+        glDrawArrays(GL_TRIANGLES, 0, n);
+        n = build_hull(buf, 0, p->boat_x, p->boat_z, p->boat_hdg, p->boat_len, 1);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)n * 3 * sizeof(float), buf);
+        glUniform3f(U(v->p_mark, "u_col"), 0.95f, 0.93f, 0.88f);
+        glDrawArrays(GL_TRIANGLES, 0, n);
+    }
+    if (p->nfloat > 0) {
+        int n = 0;
+        for (int i = 0; i < p->nfloat && i < 12; i++) n = build_float(buf, n, p->float_x[i], p->float_z[i], p->float_size);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)n * 3 * sizeof(float), buf);
+        glUniform3f(U(v->p_mark, "u_col"), 1.0f, 0.45f, 0.08f);
+        glDrawArrays(GL_TRIANGLES, 0, n);
+    }
+}
+
 static void set_common(view3d *v, GLuint p, const view3d_params *prm, const float *vp)
 {
     glUseProgram(p);
@@ -1867,6 +1965,7 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
     glDrawElements(GL_TRIANGLES, v->n_surf_idx, GL_UNSIGNED_INT, (void *)0);
 
     draw_paddle_mark(v, p, vp);
+    draw_objects(v, p, vp);
 
     /* transparent: the water body's faces, then the glass (if any) */
     if (m >= 1) {

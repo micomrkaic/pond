@@ -66,7 +66,8 @@ typedef struct {
 
     float *eta;                /* real-space surface, valid after wave_realize() */
     float *src_d, *src_v;      /* real-space displacement / velocity source buffers */
-    int dirty_d, dirty_v;
+    float *src_p;              /* surface-pressure impulse buffer, Pa s */
+    int dirty_d, dirty_v, dirty_p;
 
     /* cached rotor powers R^p, p = 1..WAVE_MAXPOW, so a frame of p substeps is one pass */
     #define WAVE_MAXPOW 8
@@ -111,6 +112,16 @@ void  wave_add_drop(wave *w, double x, double y, double s, double amp);
  * actually reaches (a narrow paddle is broad in k along the wall, but still only
  * tens of modes, so the sum is short). */
 void  wave_add_paddle(wave *w, int wall, double pos, double span, double width, double accel, double dt);
+/* A pressure on the surface, applied as an impulse: a Gaussian patch of peak
+ * p_dt pascal-seconds (p * dt) and width s, centred at (x, y).  This is how a
+ * hull presses on the water: the linearised dynamic condition gives each mode
+ *   eta_hat_tt + omega^2 eta_hat = -(k tanh kh / rho) p_hat
+ * so the kick goes in through the modes, with the Dirichlet-to-Neumann factor
+ * k tanh(kh) that no real-space stamp could supply.  At rest a steady patch
+ * settles to the hydrostatic dent eta = -p / (rho g); moving, it leaves a
+ * Kelvin wake. */
+void  wave_add_pressure(wave *w, double x, double y, double s, double p_dt);
+
 /* Stochastic wind forcing.  Modes are kicked with amplitude weights
  *   w(k) = (k/k0)^-2 above the peak k0 (a k^-4 elevation spectrum),
  *          Gaussian roll-off below it, times a cos^2 directional spread

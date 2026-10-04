@@ -1,0 +1,20 @@
+# pond: a boat and its wake.              ./pond --script demos/boat.pond
+#
+# A hull pressed on the water and driven round the basin leaves a Kelvin wake:
+# transverse waves of length 2 pi U^2 / g behind it, divergent waves fanning out,
+# the whole thing inside a half-angle of 19.5 degrees whatever the speed.
+
+at 0     clear  preset pool  rain off  breeze off  paddle off  wind 0  floats 0
+at 0     boat on  boat-speed 0.4  gain 1  damping 0.03
+at 0     camera 40,35,1.2
+at 0     say "a hull under way: the Kelvin wake, 19.5 degrees either side whatever the speed"
+at 10    yaw += 90 over 40
+at 30    boat-speed 0.7 over 10
+at 30    say "faster: the transverse waves lengthen as the speed squared; the angle does not change"
+at 55    floats 6
+at 55    say "six floats, riding the wake"
+at 60    dist 0.6 over 20   pitch 25 over 20
+at 100   boat-speed 0.3 over 10
+at 100   say "slow: a short wake, and the floats settle"
+at 130   say ""
+at 130   loop

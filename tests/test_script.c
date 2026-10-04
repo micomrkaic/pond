@@ -176,8 +176,8 @@ int main(void)
 
     /* --- every demo parses and runs through twice --- */
     {
-        static const char *const demos[] = { "tour", "wavemaker", "rings", "storm", "dispersion" };
-        for (int d = 0; d < 5; d++) {
+        static const char *const demos[] = { "tour", "wavemaker", "rings", "storm", "dispersion", "boat", "wind" };
+        for (int d = 0; d < 7; d++) {
             char path[128], err[256];
             snprintf(path, sizeof path, "demos/%s.pond", demos[d]);
             script *s = script_load(path, err, sizeof err);
