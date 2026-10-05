@@ -75,7 +75,7 @@ screen, one finger is the finger, two fingers orbit and pinch-zoom.
 | `b` | breeze (directional wind sea) on/off |
 | `w`/`W` | wind, m/s: a fetch-limited sea for that wind over the basin's length (0: the breeze on its own knobs) |
 | `e` `z`/`Z` | a boat driving round the basin, leaving its Kelvin wake; its speed, as a Froude number |
-| `E` | one more float riding the surface (up to 12; `--floats N`) |
+| `E` / `C` | one more float riding the surface (up to 12; `--floats N`); clear them all |
 | `p` / `P` | wavemaker on/off / move it to the next wall (its position along the wall is kept) |
 | `k`/`K` | its frequency (the wavelength follows from the dispersion relation) |
 | `l`/`L` | its span: the fraction of the wall it occupies, down to a point source |

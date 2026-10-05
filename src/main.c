@@ -58,7 +58,7 @@ static const char *const help_lines[] = {
     "r   i / I                 rain on / off;  rain rate",
     "w / W                     wind, m/s: a fetch-limited sea over the basin",
     "e   z / Z                 a boat and its Kelvin wake;  its speed (Froude no.)",
-    "E                         one more float riding the waves (--floats N)",
+    "E / C                     one more float riding the waves;  clear them",
     "b                         breeze (wind sea)",
     "p / P                     wavemaker on / off;  next wall",
     "k / K   l / L             its frequency;  its span",
@@ -71,7 +71,7 @@ static const char *const help_lines[] = {
     "",
     "d                         hide / show the settings box",
     "F11, alt+enter            full screen",
-    "c   space   s             clear;  pause;  screenshot",
+    "c   space   s             clear the water;  pause;  screenshot",
     "h / F1   esc   q          help;  back out;  quit",
     "",
     "w^2 = (gk + sk^3/rho) tanh(kh)      gamma = 2 nu k^2 + g0",
@@ -290,7 +290,7 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
         param_nudge(a, "help", 0);
         if (!a->mode3d) print_help();
         break;
-    case SDLK_c: wave_clear(w); break;
+    case SDLK_c: if (shift) app_clear_floats(a); else wave_clear(w); break;
     case SDLK_o: case SDLK_HOME: app_reset_camera(a); break;
     case SDLK_s:
         if (a->mode3d) a->shot_pending = 1; else save_screenshot_2d(a);
