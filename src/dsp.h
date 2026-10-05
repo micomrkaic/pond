@@ -66,6 +66,7 @@ typedef struct {
     double grain_level;
     dsp_drop d[DSP_MAX_DROPS];
     dsp_lp1 hiss_hp, bed_lp, bed_lp2, wob_lp;
+    dsp_lp1 hiss_hp_r, bed_lp_r, bed_lp2_r, gust_lp, tilt_l, tilt_r;   /* a second, independent channel; the slow gust; the warm tilt */
 } dsp_rain;
 void dsp_rain_init(dsp_rain *s, double rate);
 /* amp: 0 = draw as the internal process does; tone: 0 = the layer's tone; pan -1..1;

@@ -71,9 +71,9 @@ static void apply_levels(audio *a)
     m->stream.bubble_level = 0.9 * k[SND_DROPS];       /* their plinks */
     /* the bed: the crackle of drops too small to see, ~200 per visible drop, and only a
      * faint continuous hiss underneath for the heaviest rain */
-    m->rain.grain_rate  = 400.0 * a->rain_level;
+    m->rain.grain_rate  = 250.0 * a->rain_level;
     m->rain.grain_level = 0.9 * k[SND_BED];
-    m->rain.bed_level   = 0.04 * a->rain_level * a->rain_level * k[SND_BED];
+    m->rain.bed_level   = 0.05 * a->rain_level * sqrt(a->rain_level) * k[SND_BED];   /* the bed grows with the rain, the grains with it */
     m->gain[DSP_STREAM] = 1.0;                         /* bubbles only; no flow bed */
     m->gain[DSP_BROWN]  = 0.25 * k[SND_BROWN];         /* a little room tone, off by default */
     /* the breeze: a sea breeze, not a forest gale.  At harsh = 0: a steady, soft,

@@ -92,6 +92,7 @@ void dsp_rain_init(dsp_rain *s, double rate)
     s->grain_rate = 0.0; s->grain_level = 1.0;
     for (int i = 0; i < DSP_MAX_DROPS; i++) s->d[i].alive = 0;
     s->hiss_hp.y = s->bed_lp.y = s->bed_lp2.y = s->wob_lp.y = 0;
+    s->hiss_hp_r.y = s->bed_lp_r.y = s->bed_lp2_r.y = s->gust_lp.y = s->tilt_l.y = s->tilt_r.y = 0;
 }
 
 static dsp_drop *free_drop(dsp_rain *s)
@@ -123,27 +124,35 @@ void dsp_rain_spawn(dsp_rain *s, double amp, double tone, double pan, double dec
 
 /* a grain: a 0.5..2 ms burst of 2..8 kHz noise, or, one time in six, a 4..8 kHz plink of
  * the same length; random pan; amplitude skewed to the quiet */
+/* the many small impacts of rain on water.  Not clicks: each is a soft splash of
+ * 2-8 ms in the 800 Hz - 3.5 kHz band with a 1 ms rise, and one in four is the
+ * bubble a drop pulls under, ringing at 1.5-5 kHz for 5-25 ms (Minnaert: the
+ * smaller the bubble the higher the note).  Sharp sub-millisecond bursts at
+ * 2-8 kHz are what frying sounds like, and water does not fry. */
 static void spawn_grain(dsp_rain *s)
 {
     dsp_drop *d = free_drop(s);
     if (!d) return;
     double u = dsp_rng_uniform(&s->rng);
-    double dec_ms = 0.5 + 1.5 * u * u;
     d->alive = 1; d->wait = 0;
     d->f.y = d->h.y = 0.0;
-    d->dd = exp(-1.0 / (dec_ms * 0.001 * s->rate));
-    d->da = exp(-1.0 / (0.15 * 0.001 * s->rate));
+    d->da = exp(-1.0 / (1.0 * 0.001 * s->rate));
     d->ed = d->ea = 1.0;
-    if (dsp_rng_uniform(&s->rng) < 1.0 / 6.0) {
-        d->fq = 4000.0 + 4000.0 * dsp_rng_uniform(&s->rng); d->ph = 0.0;
+    if (dsp_rng_uniform(&s->rng) < 0.25) {
+        const double dec_ms = 5.0 + 20.0 * u * u;
+        d->dd = exp(-1.0 / (dec_ms * 0.001 * s->rate));
+        d->fq = 1500.0 + 3500.0 * dsp_rng_uniform(&s->rng); d->ph = 0.0;
         d->coef = d->hcoef = 0.0;
+        d->amp = s->grain_level * 0.05 * (0.3 + 0.7 * dsp_rng_uniform(&s->rng));
     } else {
+        const double dec_ms = 2.0 + 6.0 * u * u;
+        d->dd = exp(-1.0 / (dec_ms * 0.001 * s->rate));
         d->fq = 0.0;
-        d->coef = dsp_lp_coef(2000.0 + 6000.0 * dsp_rng_uniform(&s->rng), s->rate);
-        d->hcoef = dsp_lp_coef(1500.0, s->rate);
+        d->coef = dsp_lp_coef(800.0 + 2700.0 * dsp_rng_uniform(&s->rng), s->rate);
+        d->hcoef = dsp_lp_coef(500.0, s->rate);
+        double a = dsp_rng_uniform(&s->rng);
+        d->amp = s->grain_level * (0.04 + 0.16 * a * a);
     }
-    double a = dsp_rng_uniform(&s->rng);
-    d->amp = s->grain_level * (0.05 + 0.25 * a * a);
     d->pan = 2.0 * dsp_rng_uniform(&s->rng) - 1.0;
 }
 
@@ -176,14 +185,24 @@ void dsp_rain_run(dsp_rain *s, double *l, double *r)
         d->ed *= d->dd; d->ea *= d->da;
         if (d->ed < 1e-4) d->alive = 0;
     }
-    double w = dsp_rng_white(&s->rng);
-    double hp = w - dsp_lp1_run(&s->hiss_hp, w, dsp_lp_coef(400.0, s->rate));
-    double bed = dsp_lp1_run(&s->bed_lp2, dsp_lp1_run(&s->bed_lp, hp, dsp_lp_coef(4000.0, s->rate)), dsp_lp_coef(4000.0, s->rate));
-    double wob = clamp(1.0 + 80.0 * dsp_lp1_run(&s->wob_lp, dsp_rng_white(&s->rng), dsp_lp_coef(0.3, s->rate)), 0.5, 1.5);
-    double b = s->bed_level * bed * wob;
-    /* the point sources were panned at unit power; the bed is centred */
-    *l = s->drop_level * sl * 1.41421356 + b;
-    *r = s->drop_level * sr * 1.41421356 + b;
+    /* the bed: the unresolvable mass of small impacts.  Two independent noise
+     * channels, so it surrounds rather than sits in the middle; shaped warm --
+     * high-passed at 300 Hz, a first-order tilt from 1 kHz, two poles at 2.5 kHz
+     * -- which is where a recording of rain on a pond keeps its energy; and
+     * breathing on two scales, a wobble over seconds and a gust over tens of them */
+    const double hpc = dsp_lp_coef(300.0, s->rate), tc = dsp_lp_coef(1000.0, s->rate), lc = dsp_lp_coef(2500.0, s->rate);
+    double wl = dsp_rng_white(&s->rng), wr = dsp_rng_white(&s->rng);
+    double hl = wl - dsp_lp1_run(&s->hiss_hp, wl, hpc), hr = wr - dsp_lp1_run(&s->hiss_hp_r, wr, hpc);
+    hl = 0.5 * hl + 0.5 * dsp_lp1_run(&s->tilt_l, hl, tc);
+    hr = 0.5 * hr + 0.5 * dsp_lp1_run(&s->tilt_r, hr, tc);
+    double bl = dsp_lp1_run(&s->bed_lp2, dsp_lp1_run(&s->bed_lp, hl, lc), lc);
+    double br = dsp_lp1_run(&s->bed_lp2_r, dsp_lp1_run(&s->bed_lp_r, hr, lc), lc);
+    double wob = clamp(1.0 + 60.0 * dsp_lp1_run(&s->wob_lp, dsp_rng_white(&s->rng), dsp_lp_coef(0.3, s->rate)), 0.6, 1.4);
+    double gust = clamp(1.0 + 400.0 * dsp_lp1_run(&s->gust_lp, dsp_rng_white(&s->rng), dsp_lp_coef(0.04, s->rate)), 0.7, 1.3);
+    const double g = s->bed_level * wob * gust * 1.8;
+    /* a little of each side in the other: wide, not split */
+    *l = s->drop_level * sl * 1.41421356 + g * (0.85 * bl + 0.15 * br);
+    *r = s->drop_level * sr * 1.41421356 + g * (0.85 * br + 0.15 * bl);
 }
 
 /* ---- sea ---- */

@@ -541,7 +541,7 @@ static void apply_sources(app *a, double dts)
         audio_set_wind(a->au, a->breeze ? 1.0 : 0.0);
         if (++a->frame_no % 10 == 0) {
             double Lmax = w->Lx > w->Ly ? w->Lx : w->Ly;
-            if (Lmax >= 40.0 && (a->breeze || a->paddle)) {
+            if (Lmax >= 40.0 && a->breeze) {        /* the surf bed is the wind's; the wavemaker is silent */
                 double sl = wave_rms_slope(w);
                 audio_set_sea(a->au, sl / 0.04 > 1.0 ? 1.0 : sl / 0.04, sl / 0.06);
             } else audio_set_sea(a->au, 0.0, 0.0);
