@@ -1,0 +1,168 @@
+# pond: a boat and its wake.              ./pond --script demos/boat.pond
+#
+# A hull pressed on the water and driven round the basin leaves a Kelvin wake:
+# transverse waves of length 2 pi U^2 / g behind it, divergent waves fanning out,
+# the whole thing inside a half-angle of 19.5 degrees whatever the speed.
+
+at 0     clear  preset pool  rain off  breeze off  paddle off  wind 0  floats 0
+at 0     boat on  boat-speed 0.4  gain 1  damping 0.03
+at 0     camera 40,35,1.2
+at 0     say "a hull under way: the Kelvin wake, 19.5 degrees either side whatever the speed"
+at 10    yaw += 90 over 40
+at 30    boat-speed 0.7 over 10
+at 30    say "faster: the transverse waves lengthen as the speed squared; the angle does not change"
+at 55    floats 6
+at 55    say "six floats, riding the wake"
+at 60    dist 0.6 over 20   pitch 25 over 20
+at 100   boat-speed 0.3 over 10
+at 100   say "slow: a short wake, and the floats settle"
+at 130   say ""
+at 130   loop
+# dispersion: one drop, and the long waves outrun the short ones.
+#                                      ./pond --script demos/dispersion.pond
+
+at 0    clear  preset 3  glass none  damping 0.01  warp 1  rain off  paddle off  breeze off
+at 0    camera 30,60,1.6
+at 0    say "one drop in a still pool"
+at 2    drop 0.5,0.5 0.05
+at 3    say "the long waves run ahead and the short ones lag: gravity waves disperse"
+at 3    dist 2.2 over 20
+
+at 25   say "the same, eight times slower"
+at 25   warp 0.125
+at 26   drop 0.3,0.7 0.04
+at 50   warp 1
+
+at 50   say "the tray: capillary waves, where the short ones are the fast ones"
+at 50   clear  preset 1  glass none  damping 0.05
+at 51   camera 30,60,1.6
+at 53   drop 0.5,0.5 0.05
+at 54   warp 0.25
+
+at 75   warp 1   say ""
+at 75   loop
+# the ring maker.                      ./pond --script demos/rings.pond
+
+at 0    clear  shape disk  preset 3  glass glass+bottom  rain off  breeze off
+at 0    paddle on  paddle-span 1  paddle-freq 1.0  paddle-pos 0.5
+at 0    camera 0,70,1.2
+at 0    say "a disk with its whole rim as the wavemaker: rings that converge on the centre"
+at 3    yaw += 360 over 120
+
+at 20   say "lower down: the rings pile up where they meet"
+at 20   pitch 25 over 25
+at 50   say "faster: the pattern tightens"
+at 50   paddle-freq 1.8 over 20
+at 80   say "a sector of the rim instead: a fan, and its echo off the far side"
+at 80   paddle-span 0.15 over 6
+at 90   paddle-pos += 1 over 30
+
+at 125  say ""
+at 125  paddle-span 1  paddle-freq 1.0
+at 125  loop
+# the sea.                             ./pond --script demos/storm.pond
+
+at 0    clear  preset 4  glass opaque  rain off  paddle off
+at 0    breeze on  breeze-gain 1  sound.breeze 1.5  sound.harsh 0.6
+at 0    camera 40,20,0.9
+at 0    say "the sea, eighty metres of it, under a breeze"
+at 2    yaw += 60 over 60
+
+at 30   say "the wind rises"
+at 30   breeze-gain 3 over 30   sound.harsh 1.5 over 30
+at 70   say "and drops"
+at 70   breeze-gain 0.3 over 40   sound.harsh 0.3 over 40
+at 100  pitch 45 over 30   dist 1.4 over 30
+
+at 130  say "swell: the long waves that outlast the wind"
+at 130  breeze off
+
+at 175  say ""
+at 175  loop
+# pond: a tour.                        ./pond --script demos/tour.pond
+#
+# One event per line: a time ("at 20", or "+5" after the line before), then
+# parameter settings.  "over T" tweens a number there.  Escape stops it.
+
+at 0     clear  preset 2  glass opaque  rain on  rain-rate 1.5  paddle off  breeze off
+at 0     camera 35,42,1.5
+at 0     say "a pond, three metres across, in the rain"
+at 2     yaw += 90 over 30
+
+at 20    say "a wavemaker at 1.2 Hz: the water chooses the wavelength"
+at 20    rain off  paddle on  paddle-freq 1.2  paddle-span 1  paddle-wall x=0  paddle-pos 0.5
+at 35    say "twice the frequency: a shorter, slower wave"
+at 35    paddle-freq 2.4 over 8
+at 50    say "a short paddle radiates a fan"
+at 50    paddle-span 0.12 over 6
+at 58    paddle-pos 0.15 over 12   pitch 60 over 12
+at 72    paddle-pos 0.85 over 14
+
+at 88    say "glass walls, and the light that comes through them"
+at 88    glass glass   yaw += 120 over 40   pitch 30 over 20
+
+at 110   say "a disk, with the whole rim as the wavemaker"
+at 110   clear  paddle off
+at 111   shape disk  paddle-span 1  paddle-freq 1.0  paddle on
+at 112   camera 20,55,1.3 over 20
+
+at 140   say "the sea: eighty metres, with a breeze"
+at 140   paddle off  clear
+at 141   shape rect  preset 4  breeze on  glass opaque
+at 142   camera 40,25,1.0 over 30
+at 175   breeze off
+
+at 180   say ""
+at 180   loop
+# the wavemaker.                       ./pond --script demos/wavemaker.pond
+
+at 0    clear  preset 3  glass floor  breeze off  rain off
+at 0    paddle on  paddle-wall x=0  paddle-pos 0.5  paddle-span 1  paddle-freq 0.9
+at 0    camera 30,52,1.7
+at 0    say "a wall-wide wavemaker at 0.9 Hz: plane waves"
+
+at 12   say "the frequency sweeps up: shorter waves, travelling slower"
+at 12   paddle-freq 2.5 over 25
+at 40   say "and down.  it stops at the tank's lowest mode: below that, nothing can answer"
+at 40   paddle-freq 0.3 over 20
+
+at 65   say "the same drive on a fifth of the wall"
+at 65   paddle-freq 1.2   paddle-span 0.2 over 8
+at 80   say "a point source, sliding along the wall"
+at 80   paddle-span 0.05 over 5
+at 86   paddle-pos 0.1 over 10
+at 97   paddle-pos 0.9 over 14
+
+at 113  say "the next wall"
+at 113  paddle-wall y=0  paddle-pos 0.5  paddle-span 0.3
+at 114  yaw += 90 over 20
+
+at 135  say "wall-wide again: the reflection off the far wall makes a standing wave"
+at 135  paddle-span 1  paddle-freq 1.6
+at 136  pitch 70 over 20
+
+at 160  say ""
+at 160  loop
+# pond: a wind sea.                        ./pond --script demos/wind.pond
+#
+# A fetch-limited sea for a wind over the basin's length (JONSWAP): the peak
+# wavelength and the significant height both come from the wind speed alone.
+
+at 0     clear  preset pond  rain off  paddle off  boat off  floats 0
+at 0     wind 3  gain 1
+at 0     camera 30,30,1.3
+at 0     say "a 3 m/s breeze over a 3 m pond: the ripples a breath makes"
+at 20    wind 6 over 20
+at 20    say "6 m/s"
+at 50    wind 10 over 20
+at 50    say "10 m/s: height goes with the wind, wavelength with its 2/3 power"
+at 80    floats 8
+at 80    say "floats drift down the slopes and gather where the water does"
+at 85    yaw += 120 over 40
+at 130   preset sea  wind 12  camera 30,18,0.8
+at 130   say "the sea preset, 12 m/s: as short a chop as the grid can hold"
+at 140   boat on  boat-speed 0.5
+at 140   say "and a boat through it"
+at 150   yaw += 90 over 60
+at 220   say ""
+at 220   loop
