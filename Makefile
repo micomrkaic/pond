@@ -33,7 +33,9 @@ EMCC       ?= emcc
 # ArrayBuffer, which current Chrome refuses in TextDecoder (and elsewhere).
 # 160 MB covers a 512^2 rectangle or a 512 x 256 disk basis; the browser build clamps the grid there.
 EMFLAGS    ?= -std=c17 -O3 -msimd128 -sUSE_SDL=2 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 \
-              -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=160MB -sMINIFY_HTML=0
+              -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=160MB -sMINIFY_HTML=0 \
+              -sEXPORTED_FUNCTIONS=_main,_pond_key -sEXPORTED_RUNTIME_METHODS=ccall \
+              --preload-file demos
 WEB_DIR    := build/web
 
 .PHONY: all web test bench clean

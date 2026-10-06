@@ -15,18 +15,51 @@
   /* 16:10, as large as the viewport allows */
   canvas { display: block; width: min(100vw, 160vh); height: min(62.5vw, 100vh); outline: none; }
   #status { position: fixed; left: 12px; bottom: 10px; color: #667; font: 12px/1.4 monospace; pointer-events: none; }
+  /* the touch bar: for phones and tablets, where there is no keyboard */
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; display: none; flex-wrap: wrap; gap: 6px; padding: 6px;
+         background: rgba(8,8,10,0.55); justify-content: center; }
+  #bar button { font: 15px/1 monospace; color: #dde; background: rgba(40,44,52,0.85); border: 1px solid #556;
+                border-radius: 6px; padding: 10px 12px; min-width: 44px; touch-action: manipulation; }
+  #bar button:active { background: #778; }
+  @media (pointer: coarse) { #bar { display: flex; } #status { display: none; } }
 </style>
 </head>
 <body>
 <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
-<div id="status">click: drop &nbsp; drag: finger &nbsp; right-drag: orbit &nbsp; wheel: zoom &nbsp; t: container &nbsp; h: help &nbsp; ?grid=512 for a finer mesh</div>
+<div id="status">click: drop &nbsp; drag: finger &nbsp; right-drag: orbit &nbsp; wheel: zoom &nbsp; t: container &nbsp; h: help &nbsp; ?grid=512 for a finer mesh &nbsp; ?script=tour, ?preset=sea&amp;boat: any option</div>
+<div id="bar">
+  <button data-k="1">tray</button><button data-k="2">pond</button><button data-k="3">pool</button><button data-k="4">sea</button>
+  <button data-k="r">rain</button><button data-k="b">breeze</button><button data-k="w" data-s="1">wind+</button><button data-k="w">wind&minus;</button>
+  <button data-k="p">paddle</button><button data-k="e">boat</button><button data-k="e" data-s="1">float+</button><button data-k="c" data-s="1">floats&times;</button>
+  <button data-k="c">clear</button><button data-k="-">slower</button><button data-k="=">faster</button>
+  <button data-k="t">container</button><button data-k="d">HUD</button><button data-k="h">help</button>
+</div>
 <script>
   var Module = {
     canvas: document.getElementById('canvas'),
+    /* every ?name=value in the address is a --name value option, so a phone can start
+       in any mode: ?preset=sea&boat&wind=10, or ?script=boat for a demo */
+    arguments: (function () {
+      var q = new URLSearchParams(location.search), a = [];
+      q.forEach(function (v, k) {
+        if (k === 'grid') return;
+        if (k === 'script') { a.push('--script', 'demos/' + v.replace(/[^a-z-]/g, '') + '.pond'); return; }
+        a.push('--' + k.replace(/[^a-z0-9.-]/g, ''));
+        if (v !== '') a.push(v);
+      });
+      return a;
+    })(),
     print: function (t) { console.log(t); },
     printErr: function (t) { console.error(t); },
   };
   document.getElementById('canvas').focus();
+  /* the touch bar sends the keyboard's keys through the program's own key table */
+  document.getElementById('bar').addEventListener('click', function (ev) {
+    var b = ev.target.closest('button');
+    if (!b || !Module.ccall) return;
+    Module.ccall('pond_key', null, ['number', 'number'], [b.dataset.k.charCodeAt(0), b.dataset.s ? 1 : 0]);
+    document.getElementById('canvas').focus();
+  });
 </script>
 {{{ SCRIPT }}}
 </body>

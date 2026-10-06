@@ -48,7 +48,10 @@ the finer mesh (single-threaded WASM, so budget accordingly; 512 is the cap,
 the heap is fixed at 128 MB). `make web
 WEB_DIR=docs` puts the build where GitHub Pages can serve it from `/docs`.
 Use `h` for the help there (Firefox keeps F1 for itself); on a touch
-screen, one finger is the finger, two fingers orbit and pinch-zoom.
+screen, one finger is the finger, two fingers orbit and pinch-zoom, and a
+bar of buttons along the bottom stands in for the keys (presets, rain,
+breeze, wind, wavemaker, boat, floats, warp, container, HUD, help); it
+appears only on devices without a fine pointer.
 
 ## Controls
 
@@ -171,8 +174,9 @@ of pinning the old one's size. The format is `key = value`, one per line;
 booleans are any of on/off, yes/no, true/false, 1/0, enumerations take their
 names or a number, reals accept `%`, and `-` and `_` are the same character
 in a key. Unknown keys are reported with their line number and skipped, so
-an old file still starts the program. The browser build has no file to read:
-there `?grid=N` in the URL is the only setting.
+an old file still starts the program. The browser build has no file to read;
+instead every `?name=value` in the address is a `--name value` option
+(`?preset=sea&boat&wind=10`, `?script=boat`), and `?grid=N` sets the mesh.
 
 ## Scripts
 

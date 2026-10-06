@@ -267,6 +267,19 @@ static const keybind keybinds[] = {
 };
 #define NKEYBINDS ((int)(sizeof keybinds / sizeof keybinds[0]))
 
+static app *app_global;        /* the running program, for the web page's touch bar */
+static void handle_key(app *a, SDL_Keycode k, int shift);
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+/* a key from the page's buttons: the SDL keycode (ASCII for letters and digits) and
+ * whether shift is held, through the same table the keyboard uses */
+EMSCRIPTEN_KEEPALIVE void pond_key(int sym, int shift)
+{
+    if (app_global) handle_key(app_global, (SDL_Keycode)sym, shift);
+}
+#endif
+
 static void handle_key(app *a, SDL_Keycode k, int shift)
 {
     wave *w = a->w;
@@ -778,6 +791,7 @@ POND_MAIN(int argc, char **argv)
 
     /* static: with Emscripten the main-loop call unwinds main's stack frame */
     static app a;
+    app_global = &a;
     memset(&a, 0, sizeof a);
     a.nx = a.ny = cfg.grid;
     a.running = 1;
