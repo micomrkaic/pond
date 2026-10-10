@@ -24,7 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef enum { A_SET, A_DROP, A_CLEAR, A_CAMERA, A_SAY, A_LOOP, A_END } action_kind;
+typedef enum { A_SET, A_DROP, A_CLEAR, A_CAMERA, A_SAY, A_LOOP, A_END, A_BOAT, A_FLOAT } action_kind;
 
 typedef struct {
     action_kind kind;
@@ -178,6 +178,18 @@ script *script_parse(const char *text, const char *name, char *err, size_t errn)
                 else if (i < n && sscanf(tok[i], "%lf,%lf", &a.x, &a.y) == 2) { a.random = 0; i++; }
                 if (i < n && is_number(tok[i])) a.size = atof(tok[i++]);
             }
+            else if (!strcmp(w, "boat") && i < n && sscanf(tok[i], "%lf,%lf", &a.x, &a.y) == 2) {
+                /* boat X,Y[,HEADING]: put the boat there (fractions of the basin, degrees) and turn it on;
+                 * a bare "boat on/off" is the parameter and is handled below */
+                a.kind = A_BOAT; a.z = -1000;
+                sscanf(tok[i], "%lf,%lf,%lf", &a.x, &a.y, &a.z);
+                i++;
+            }
+            else if (!strcmp(w, "float")) {
+                a.kind = A_FLOAT; a.random = 1;
+                if (i < n && sscanf(tok[i], "%lf,%lf", &a.x, &a.y) == 2) { a.random = 0; i++; }
+                else if (i < n && !strcmp(tok[i], "random")) i++;
+            }
             else if (!strcmp(w, "camera")) {
                 a.kind = A_CAMERA; a.z = -1;
                 if (i >= n || sscanf(tok[i], "%lf,%lf,%lf", &a.x, &a.y, &a.z) < 2) {
@@ -291,6 +303,23 @@ static void run_action(script *s, app *a, const action *ac)
         break;
     }
     case A_CLEAR: wave_clear(a->w); break;
+    case A_BOAT:
+        a->boat = 1;
+        a->boat_x = ac->x * w->Lx; a->boat_y = ac->y * w->Ly;
+        if (ac->z > -999) a->boat_hdg = ac->z * M_PI / 180.0;
+        a->hud_dirty = 1;
+        break;
+    case A_FLOAT:
+        if (a->nfloat < NFLOAT_MAX) {
+            if (ac->random) app_add_float(a);
+            else {
+                a->fl_x[a->nfloat] = ac->x * w->Lx; a->fl_y[a->nfloat] = ac->y * w->Ly;
+                a->fl_vx[a->nfloat] = a->fl_vy[a->nfloat] = 0;
+                a->nfloat++;
+                a->hud_dirty = 1;
+            }
+        }
+        break;
     case A_SAY:
         snprintf(a->caption, sizeof a->caption, "%s", ac->sval);
         a->hud_dirty = 1;

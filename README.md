@@ -6,7 +6,10 @@ A numerically honest wave tank as screen candy. Linear dispersive water waves
 (gravity + capillary, finite depth) on the surface of a rectangular or
 circular basin with rigid walls, solved spectrally and advanced *exactly* in
 time, then drawn as a 3-D basin — walls, floor, refraction, caustics, sky — that you can orbit and
-zoom, with walls and bottom switchable to glass. A top-down CPU renderer is
+zoom, with walls and bottom switchable to glass. Rain, a breeze or a wind in
+m/s, a wavemaker on any wall, a boat leaving its Kelvin wake, floats riding
+the surface; every setting is a named parameter that keys, the command line,
+a config file and timed scripts all go through. A top-down CPU renderer is
 kept as `--2d`.
 
 C17. Dependencies: SDL2 (video and audio) and an OpenGL 3.3 core context (macOS ships 4.1;
@@ -27,6 +30,8 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     ./pond --hos --preset 3 --scene paddle # nonlinear, order 3 on the lowest 64x64 modes
     ./pond --scene paddle --paddle-freq 1.2      # a wavemaker at 1.2 Hz: the water picks the wavelength
     ./pond --scene paddle --paddle-span 0.12 --paddle-pos 0.25 --paddle-wall y=0
+    ./pond --preset 3 --boat --floats 4    # a hull under way on the pool, four floats in its wake
+    ./pond --preset 4 --wind 12 --boat     # a 12 m/s wind sea, and a boat through it
     ./pond --script demos/tour.pond        # three minutes of everything, on a loop; Escape stops it
     ./pond --cpu-caustics                  # if the GPU pass is unavailable or suspect
     ./pond --mute                          # starts silent; --no-audio opens no device at all
@@ -117,7 +122,7 @@ Everything that can change while the program runs is a named parameter:
 booleans, enumerations, reals. Each has a getter and a setter on the running
 program (the setter carrying whatever side effects keep things consistent), a
 range, and a nudge — the step a key press takes. Keys nudge; the config file
-and the command line set; scripts, when they come, will tween. All of them
+and the command line set; scripts tween. All of them
 land in the same place, `src/param.c`, and `--list-params` prints the lot:
 
     $ ./pond --list-params
@@ -199,9 +204,12 @@ then parameter settings, run against the same table the keys nudge.
 a line with no time shares the previous line's. Every parameter name is a
 verb; a value may be absolute or relative (`+=`, `-=`), and a number may take
 `over T` to get there smoothly. The other verbs: `drop X,Y [SIZE]` or
-`drop random`, `clear`, `camera Y,P,D [over T]`, `say "text"` (shown under
-the HUD), `loop`, `end`. Times are wall-clock, so a script can change the
-time warp itself. `#` starts a comment.
+`drop random`, `boat X,Y[,HEADING]` (put the hull there — fractions of the
+basin, degrees from +x — and start it; `boat on`/`off` and `boat-speed` are
+the parameters), `float X,Y` or `float random` (one more float; `floats N`
+sets the count, `floats 0` clears them), `clear`, `camera Y,P,D [over T]`,
+`say "text"` (shown under the HUD), `loop`, `end`. Times are wall-clock, so
+a script can change the time warp itself. `#` starts a comment.
 
     ./pond --script demos/tour.pond
 
@@ -682,13 +690,18 @@ simulation rather than alongside it:
   they are taken at the size they would have in the 30 cm tray, so rain
   plinks like rain on every preset, a click is a small stone, a shift-click
   a bigger one.
-- **The rain bed is grains, not hiss.** What you hear under rain on water
-  is thousands of drops too small to see, and by Campbell's theorem shot
-  noise only turns Gaussian when many events overlap; at a few hundred a
-  second with millisecond grains it doesn't, it crackles. So the bed is a
-  second Poisson process, ~200 grains per visible drop, each 0.5–2 ms of
-  2–8 kHz noise or, one in six, a tiny 4–8 kHz plink, randomly panned, with
-  only a faint continuous hiss left underneath for downpours.
+- **The rain bed is many small splashes, not hiss and not sizzle.** What
+  you hear under rain on water is thousands of drops too small to see. The
+  bed is a second Poisson process, a few hundred impacts a second per unit
+  of rain, each a 2–8 ms burst of noise band-limited to 0.6–2.4 kHz with a
+  millisecond rise (a soft splash: sub-millisecond bursts at 2–8 kHz are
+  what frying sounds like, and water does not fry), one in twelve a low
+  bubble note at 0.7–2.2 kHz; under them a continuous bed in two
+  independent channels, high-passed at 250 Hz, tilted down from 700 Hz and
+  rolled off at 1.8 kHz, breathing on two time scales (a wobble over
+  seconds, a gust over tens). The spectrum was tuned against octave-band
+  measurements: 8 % of the energy above 4 kHz, where a recording of rain on
+  a pond sits.
 - **The breeze plays the wind layer and listens to it.** The wind's gust
   envelope comes back from the audio thread and multiplies the breeze
   forcing, so the gusts you hear roughen the water you see. The suite's
@@ -701,9 +714,10 @@ simulation rather than alongside it:
   plinks of the drops you see), `bed` (the grain crackle and hiss of the
   ones you don't), `brown` (a little room tone, off by default), `breeze`
   (its level) and `harsh` (its gustiness, rustle, tremor and tone together).
-- Rain adds the hiss bed at the rain rate; on basins of 40 m and up the sea
-  layer follows the surface's rms slope, both in level and in how hard the
-  surf breaks.
+- Rain adds the bed at the rain rate; on basins of 40 m and up, under the
+  breeze, the sea layer follows the surface's rms slope, both in level and
+  in how hard the surf breaks. The wavemaker is silent: a paddle in a tank
+  makes no sound worth synthesising.
 
 `POND_WAV=take.wav` records what is played; `doc/drop.png` is one drop's
 spectrogram, tick–gap–plink. Latency is one audio buffer, ~23 ms. In the browser, SDL's audio is Web
@@ -758,6 +772,12 @@ map with additive blending, which is the same forward map).
 - **Arbitrary basin shapes**, ellipses included, mean numerically computed
   Neumann eigenmodes and a dense transform; see the discussion of the disk
   for why the circle is special.
+- **Variable depth** — shoaling, refraction, a beach — is outside the
+  constant-depth mode basis altogether: a finite-difference solver on the
+  grid, not an addition to this one.
+- **An attract mode**: full screen, no HUD, a script or a random walk
+  through the settings, any key to leave; then the OS screen-saver hooks.
+  The web build already behaves as one.
 
 ## Layout
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 # usage: ./push_this.sh ~/Downloads/pond-0.5-src.tar.gz "GPU caustics and HOS"
 set -e
-cd ~/work/c_progs/pond
+cd ~/work/pond
 tarball=${1:?tarball path}
 msg=${2:-"update from tarball"}
 

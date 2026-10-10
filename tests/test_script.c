@@ -166,6 +166,23 @@ int main(void)
         run(a, 2.5, 0.01);
         check(fabs(param_get(a, "yaw") - 10) < 1e-3 && fabs(param_get(a, "dist") - 0.5) < 1e-3, "camera tweens all three");
         script_free(a->sc); a->sc = NULL;
+        free_app(a);
+    }
+
+    /* --- boat X,Y,HDG places and starts the boat; float X,Y and float random add floats --- */
+    {
+        app *a = make_app(32);
+        char err[256];
+        a->sc = script_parse("at 0 boat 0.25,0.75,90\nat 0 float 0.5,0.5\nat 0 float random\nat 1 boat off\nat 1 floats 0\n", "t5", err, sizeof err);
+        check(a->sc != NULL, "boat / float parse");
+        script_start(a->sc, a);
+        run(a, 0.1, 0.01);
+        check(a->boat && fabs(a->boat_x - 0.25 * a->w->Lx) < 1e-9 && fabs(a->boat_y - 0.75 * a->w->Ly) < 1e-9
+              && fabs(a->boat_hdg - M_PI / 2) < 1e-9, "boat 0.25,0.75,90 puts it there, heading north, and on");
+        check(a->nfloat == 2 && fabs(a->fl_x[0] - 0.5 * a->w->Lx) < 1e-9, "two floats, the first at the middle");
+        run(a, 1.0, 0.01);
+        check(!a->boat && a->nfloat == 0, "boat off and floats 0, the parameters, take them away again");
+        script_free(a->sc); a->sc = NULL;
 
         check(script_parse("at 0 warpp 2\n", "e", err, sizeof err) == NULL && strstr(err, "warpp"), "an unknown word is an error with its name");
         check(script_parse("at 5 warp 2\nat 3 warp 1\n", "e", err, sizeof err) == NULL && strstr(err, "backwards"), "time may not run backwards");
