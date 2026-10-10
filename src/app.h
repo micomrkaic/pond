@@ -91,6 +91,12 @@ typedef struct app {
     /* wind: m/s, 0 leaves the breeze on its own knobs */
     double wind;
     float *fl_u, *fl_v; size_t fl_n;   /* the surface velocity, for the floats */
+    /* the sun: where it is, degrees; the light and the sky follow */
+    double sun_elev, sun_azim;
+    /* bubbles: the one each drop pulls under, rising back to the surface */
+    #define NBUB_MAX 64
+    int    nbub;
+    double bub_x[NBUB_MAX], bub_y[NBUB_MAX], bub_d[NBUB_MAX], bub_r[NBUB_MAX], bub_v[NBUB_MAX];
     /* Faraday: the basin shaken vertically */
     int    shake;
     double shake_amp, shake_freq;      /* in g; Hz */
@@ -125,5 +131,6 @@ double app_boat_len(const app *a);      /* the hull's length: a twelfth of the b
 double app_boat_speed(const app *a);    /* m/s */
 void  app_add_float(app *a);            /* one more, somewhere not too near a wall */
 void  app_clear_floats(app *a);
+void  app_bubble(app *a, double x, double y, double s);
 
 #endif

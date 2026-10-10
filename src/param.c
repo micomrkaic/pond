@@ -135,6 +135,7 @@ void app_set_fullscreen(app *a, int on)
 void app_splash(app *a, double x, double y, double s, double amp)
 {
     wave_add_drop(a->w, x, y, s, amp);
+    app_bubble(a, x, y, s);
     if (!a->au) return;
     double pan = 0, att = 1;
     if (a->v3) view3d_listen(a->v3, x, y, &pan, &att);
@@ -142,6 +143,18 @@ void app_splash(app *a, double x, double y, double s, double amp)
      * rain should plink like rain whatever the basin, so the acoustic size is the drop as it
      * would be in the 30 cm tray: a raindrop's few millimetres, a click a small stone */
     audio_splash(a->au, s * 0.3 / sqrt(a->w->Lx * a->w->Ly), pan, att);
+}
+
+/* the bubble a drop pulls under: a third of the crater's radius (the same one the
+ * ear is given), starting a couple of radii down and rising back in about half
+ * a second, scaled to the basin so it can be seen through the glass */
+void app_bubble(app *a, double x, double y, double s)
+{
+    int i = a->nbub < NBUB_MAX ? a->nbub++ : (int)(rand() % NBUB_MAX);
+    a->bub_x[i] = x; a->bub_y[i] = y;
+    a->bub_r[i] = s / 3.0;
+    a->bub_d[i] = 2.5 * a->bub_r[i] + 0.5 * s;
+    a->bub_v[i] = a->bub_d[i] / 0.6;
 }
 
 /* The wavemaker is driven at a frequency; the wavelength it radiates is whatever
@@ -223,6 +236,8 @@ G(g_breeze, a->breeze)              S(s_breeze, a->breeze = v > 0.5)
 G(g_wind, a->wind)                  S(s_wind, { a->wind = v; if (v > 0) a->breeze = 1; })
 G(g_boat, a->boat)                  S(s_boat, a->boat = v > 0.5)
 G(g_shake, a->shake)                S(s_shake, a->shake = v > 0.5)
+G(g_sun_el, a->sun_elev)            S(s_sun_el, a->sun_elev = v)
+G(g_sun_az, a->sun_azim)            S(s_sun_az, a->sun_azim = v)
 G(g_shake_a, a->shake_amp)          S(s_shake_a, a->shake_amp = v)
 G(g_shake_f, a->shake_freq)         S(s_shake_f, a->shake_freq = v)
 G(g_boat_fr, a->boat_froude)        S(s_boat_fr, a->boat_froude = v)
@@ -329,6 +344,8 @@ static const param params[] = {
     B("fullscreen", "display", "full screen", g_full, s_full),
     B("paused", "display",  "time stopped", g_paused, s_paused),
     B("view", "display",    "2-D mode: height map instead of the rendered view", g_view, s_view),
+    RA("sun-elev", "display", "the sun's elevation, degrees; below -6 it is night, and the moon lights the water", -30, 90, 3, 0, g_sun_el, s_sun_el),
+    RA("sun-azim", "display", "the sun's azimuth, degrees", 0, 360, 10, 1, g_sun_az, s_sun_az),
     RA("yaw", "camera",    "camera yaw, degrees", 0, 360, 5, 1, g_yaw, s_yaw),
     RA("pitch", "camera",  "camera pitch, degrees above the water", -89, 89, 3, 0, g_pitch, s_pitch),
     RM("dist", "camera",   "camera distance, in basin lengths", 0.15, 12, 1.25, 0, g_dist, s_dist),

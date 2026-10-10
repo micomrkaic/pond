@@ -87,6 +87,7 @@ appears only on devices without a fine pointer.
 | `E` / `C` | one more float riding the surface (up to 12; `--floats N`); clear them all |
 | `;` `'`/`"` `/`/`?` | shake the basin vertically (Faraday waves at half the frequency); amplitude in g; frequency |
 | `F8` `F9` (shift: harder) | jolt it sideways along x, along y: the seiche |
+| `F2` `F3`, `F4` (shift: back) | the sun lower / higher — below −6° it is night and the moon lights the water; round |
 | `p` / `P` | wavemaker on/off / move it to the next wall (its position along the wall is kept) |
 | `k`/`K` | its frequency (the wavelength follows from the dispersion relation) |
 | `l`/`L` | its span: the fraction of the wall it occupies, down to a point source |
@@ -223,14 +224,15 @@ then the program. Scripts do not clear the water between events unless told
 to; the old waves decaying under the new ones is the good part. (Do clear
 before shrinking a basin, though: 80 m of sea in a 3 m pond is a tsunami.)
 
-`demos/` has eight: `tour` (a bit of everything, three minutes, loops),
+`demos/` has nine: `tour` (a bit of everything, three minutes, loops),
 `wavemaker` (frequency, span, position, walls), `rings` (the disk with its
 rim as the wavemaker), `storm` (the sea under a rising and falling wind),
 `dispersion` (one drop in a still pool, then the same in the tray where the
 short waves are the fast ones), `boat` (a hull and its Kelvin wake, at three
 speeds, with floats), `wind` (a fetch-limited sea from a breath to a gale,
 then the sea preset with a boat through it), `shake` (the seiche, then
-Faraday waves at three frequencies, the threshold, and the tray). `tests/test_script.c` runs every one of them
+Faraday waves at three frequencies, the threshold, and the tray), `day`
+(night, dawn, noon, dusk and night again over four minutes: a screen saver). `tests/test_script.c` runs every one of them
 headless, twice round.
 
 ## What it computes
@@ -707,6 +709,29 @@ murky. The camera can go below the floor.
 Text is an 8×8 public-domain bitmap font rasterised on the CPU into a
 window-sized RGBA overlay, updated only when the HUD changes; the glyph
 scale follows the drawable height and shrinks until the help panel fits.
+
+### Light
+
+The sun is a parameter (`sun-elev`, `sun-azim`; `F2`–`F4`), and the sky,
+the glints, the caustics and the light on the walls follow it. Low sun warms
+the horizon and lengthens the glints; below −6° it is night: a dark sky with
+stars, and the moon, 40° up and opposite the sun's azimuth, lights the water
+at an eighth of daylight with half-strength caustics. `demos/day.pond` runs
+a day in four minutes.
+
+Through a glass wall, from below the waterline, the water body is lit by
+shafts. Each fragment of a face of the body marches 24 samples along the
+view ray; at each the sunlight has been focused by the surface above it by a
+share that grows with depth — uniform just under the surface, the full
+caustic pattern (squared, for contrast) at the floor — taken from the
+caustic map at the point the refracted sunlight through that sample lands
+on. The near water counts for more (forward scattering), so the columns in
+front of you converge downward under the crests and move with them. It
+costs nothing unless a glass face is on screen.
+
+Every drop pulls a bubble under — the one the ear already hears ring — and
+it is now drawn: a third of the crater's radius, starting a couple of radii
+down and rising back in half a second, visible through the glass.
 
 ## Sound (`src/audio.c`, `src/dsp.c`)
 

@@ -30,7 +30,8 @@ typedef struct {
     int floor_style;   /* 0 tiles, 1 checkerboard, 2 sand */
     int glass;         /* 0 opaque; 1 floor only (walls invisible, floor continues as a table);
                           2 glass walls; 3 glass walls and bottom; 4 no container at all */
-    float sun[3];      /* unit vector towards the sun, y up */
+    float sun[3];      /* unit vector towards the light (the sun, or the moon at night), y up */
+    float day, dusk, lk; int night;   /* 1 at noon .. 0 at night; 1 with the sun on the horizon; the light level; moon */
     int cpu_caustics;  /* 1: force the CPU splat instead of the GPU pass */
     /* the wavemaker's footprint, outlined on the water so it can be seen */
     int   paddle;      /* 0: draw nothing */
@@ -43,6 +44,8 @@ typedef struct {
     float boat_x, boat_z, boat_hdg, boat_len;   /* metres, radians (0 = +x) */
     int   nfloat;
     float float_x[12], float_z[12], float_size;
+    int   nbub;
+    float bub_x[64], bub_z[64], bub_d[64], bub_r[64];   /* bubbles: centre, depth below the surface, radius */
 } view3d_params;
 
 typedef struct view3d view3d;

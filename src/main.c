@@ -61,6 +61,7 @@ static const char *const help_lines[] = {
     "E / C                     one more float riding the waves;  clear them",
     ";   ' / \"   / / ?          shake the basin (Faraday);  amplitude;  frequency",
     "F8  F9  (shift: harder)   jolt it sideways along x, along y: the seiche",
+    "F2 / F3   F4 (shift: back) the sun lower / higher (below -6: night, moon);  round",
     "b                         breeze (wind sea)",
     "p / P                     wavemaker on / off;  next wall",
     "k / K   l / L             its frequency;  its span",
@@ -129,9 +130,10 @@ static void update_hud(app *a)
     snprintf(line2, sizeof line2, "warp %.2gx  gain %.2g  damp %.3g/s%s%s%s%s%s%s",
              a->warp, (double)a->p3.gain, a->w->gamma0, nl, snd,
              a->rain ? "  rain" : "", a->breeze ? " breeze" : "", a->paddle ? " paddle" : "", a->paused ? "  PAUSED" : "");
-    if (a->wind > 0 || a->boat || a->nfloat || a->shake) {
-        char ex[160];
+    if (a->wind > 0 || a->boat || a->nfloat || a->shake || a->sun_elev < 30) {
+        char ex[200];
         int k = 0;
+        if (a->sun_elev < 30) k += snprintf(ex + k, sizeof ex - k, a->sun_elev < -3 ? "  night" : "  sun %.0f deg", a->sun_elev);
         if (a->shake) k += snprintf(ex + k, sizeof ex - k, "  shake %.2fg %.1fHz", a->shake_amp, a->shake_freq);
         if (a->wind > 0) k += snprintf(ex + k, sizeof ex - k, "  wind %.0f m/s", a->wind);
         if (a->boat) k += snprintf(ex + k, sizeof ex - k, "  boat %.2f m/s", app_boat_speed(a));
@@ -240,6 +242,8 @@ static const keybind keybinds[] = {
     { SDLK_b, -1, "breeze", 0 },
     { SDLK_w,  0, "wind", -1 },           { SDLK_w, 1, "wind", +1 },
     { SDLK_e,  0, "boat", 0 },            { SDLK_e, 1, "floats", +1 },
+    { SDLK_F2, -1, "sun-elev", -1 },      { SDLK_F3, -1, "sun-elev", +1 },
+    { SDLK_F4,  0, "sun-azim", +1 },      { SDLK_F4, 1, "sun-azim", -1 },
     { SDLK_SEMICOLON, -1, "shake", 0 },
     { SDLK_QUOTE,  0, "shake-amp", -1 },  { SDLK_QUOTE, 1, "shake-amp", +1 },
     { SDLK_SLASH,  0, "shake-freq", -1 }, { SDLK_SLASH, 1, "shake-freq", +1 },
@@ -642,6 +646,39 @@ static void frame(void *ud)
     for (int i = 0; i < a->nfloat; i++) { a->p3.float_x[i] = (float)a->fl_x[i]; a->p3.float_z[i] = (float)a->fl_y[i]; }
     a->p3.float_size = (float)(sqrt(a->w->Lx * a->w->Ly) / 60.0);
 
+    /* the bubbles rise, and burst at the surface */
+    {
+        int n = 0;
+        for (int i = 0; i < a->nbub; i++) {
+            a->bub_d[i] -= a->bub_v[i] * dt * a->warp;
+            if (a->bub_d[i] > 0.2 * a->bub_r[i]) {
+                if (n != i) { a->bub_x[n] = a->bub_x[i]; a->bub_y[n] = a->bub_y[i]; a->bub_d[n] = a->bub_d[i]; a->bub_r[n] = a->bub_r[i]; a->bub_v[n] = a->bub_v[i]; }
+                n++;
+            }
+        }
+        a->nbub = n;
+        a->p3.nbub = n;
+        for (int i = 0; i < n; i++) { a->p3.bub_x[i] = (float)a->bub_x[i]; a->p3.bub_z[i] = (float)a->bub_y[i]; a->p3.bub_d[i] = (float)a->bub_d[i]; a->p3.bub_r[i] = (float)a->bub_r[i]; }
+    }
+
+    /* the light: the sun where the parameters put it; below the horizon, the moon
+     * opposite it, 40 degrees up, and the sky and the light level follow */
+    {
+        const double el = a->sun_elev * M_PI / 180.0, az = a->sun_azim * M_PI / 180.0;
+        const double day = fmin(1.0, fmax(0.0, (a->sun_elev + 6.0) / 18.0));
+        const double dsk = fmax(0.0, 1.0 - fabs(a->sun_elev) / 15.0);
+        a->p3.day = (float)(day * day * (3.0 - 2.0 * day));
+        a->p3.dusk = (float)dsk;
+        a->p3.night = a->sun_elev < -3.0;
+        if (!a->p3.night) {
+            a->p3.sun[0] = (float)(cos(el) * cos(az)); a->p3.sun[1] = (float)sin(fmax(el, 0.02)); a->p3.sun[2] = (float)(cos(el) * sin(az));
+        } else {
+            const double me = 40.0 * M_PI / 180.0, ma = az + M_PI;
+            a->p3.sun[0] = (float)(cos(me) * cos(ma)); a->p3.sun[1] = (float)sin(me); a->p3.sun[2] = (float)(cos(me) * sin(ma));
+        }
+        a->p3.lk = (float)fmax(a->p3.day, 0.12);
+    }
+
     /* the wavemaker's outline, so its place and size can be seen while they change */
     a->p3.paddle = a->paddle && a->paddle_mark;
     a->p3.paddle_wall = a->paddle_wall;
@@ -833,6 +870,8 @@ POND_MAIN(int argc, char **argv)
     render_defaults(&a.rp);
     a.p3.gain = 1.0f;
     a.p3.cpu_caustics = cfg.cpu_caustics;
+    a.sun_elev = 66.0; a.sun_azim = 320.0;
+    a.p3.day = a.p3.lk = 1.0f;
     { float sv[3] = { 0.30f, 0.90f, -0.25f }; float n = 1.0f / sqrtf(sv[0]*sv[0] + sv[1]*sv[1] + sv[2]*sv[2]);
       a.p3.sun[0] = sv[0] * n; a.p3.sun[1] = sv[1] * n; a.p3.sun[2] = sv[2] * n; }
     a.pix = malloc((size_t)cfg.grid * cfg.grid * sizeof(uint32_t));

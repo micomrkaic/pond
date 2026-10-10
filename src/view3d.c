@@ -58,18 +58,50 @@ static const char *glsl_header = "#version 330 core\n";
 
 /* shared: sky, floor pattern, gamma */
 static const char *glsl_common = GLSL(
-    uniform vec3 u_sun;
+    uniform vec3 u_sun;       /* unit vector towards the light: the sun by day, the moon by night */
+    uniform float u_day;      /* 1 full day .. 0 night */
+    uniform float u_dusk;     /* 1 with the sun on the horizon: the warm sky */
+    uniform float u_night;    /* 1 when the light is the moon */
+    uniform float u_lk;       /* how much light there is to see by: 1 noon, ~0.12 moonlight */
+    uniform float u_time;
     const vec3 ZENITH  = vec3(0.30, 0.52, 0.86);
     const vec3 HORIZON = vec3(0.80, 0.86, 0.92);
     const vec3 GROUND  = vec3(0.07, 0.075, 0.09);
     const vec3 SUNCOL  = vec3(1.00, 0.96, 0.86);
+    const vec3 MOONCOL = vec3(0.80, 0.86, 1.00);
     const vec3 SCATTER = vec3(0.00, 0.22, 0.38);
+    vec3 lit(vec3 c) { return c * u_lk; }
+    float hash31(vec3 p) {
+        p = fract(p * vec3(443.897, 441.423, 437.195));
+        p += dot(p, p.yzx + 19.19);
+        return fract((p.x + p.y) * p.z);
+    }
     vec3 sky(vec3 d) {
+        float h = clamp(d.y, 0.0, 1.0);
+        /* the day sky, warming at the horizon as the sun goes down */
+        vec3 hor = mix(HORIZON, vec3(1.00, 0.52, 0.28), 0.85 * u_dusk);
+        vec3 zen = mix(ZENITH, vec3(0.22, 0.26, 0.52), 0.75 * u_dusk);
         vec3 c;
-        if (d.y >= 0.0) c = mix(HORIZON, ZENITH, sqrt(clamp(d.y, 0.0, 1.0)));
-        else            c = mix(HORIZON * 0.45, GROUND, pow(clamp(-d.y, 0.0, 1.0), 0.4));
+        if (d.y >= 0.0) c = mix(hor, zen, sqrt(h));
+        else            c = mix(hor * 0.45, GROUND, pow(clamp(-d.y, 0.0, 1.0), 0.4));
+        c *= u_day;
+        /* the night sky, with stars */
+        vec3 nz = vec3(0.012, 0.018, 0.045), nh = vec3(0.035, 0.040, 0.070);
+        vec3 n = d.y >= 0.0 ? mix(nh, nz, sqrt(h)) : mix(nh * 0.5, GROUND * 0.3, pow(clamp(-d.y, 0.0, 1.0), 0.4));
+        if (d.y > 0.02) {
+            vec3 cell = floor(d * 90.0);
+            float r = hash31(cell);
+            if (r > 0.985) {
+                vec3 cen = (cell + 0.5 + 0.6 * (vec3(hash31(cell + 1.7), hash31(cell + 3.1), hash31(cell + 5.3)) - 0.5)) / 90.0;
+                float dd = length(d - normalize(cen)) * 90.0;
+                n += vec3(0.9, 0.9, 1.0) * (r - 0.985) / 0.015 * smoothstep(0.35, 0.0, dd) * (0.7 + 0.3 * sin(u_time * (3.0 + 5.0 * r) + r * 40.0));
+            }
+        }
+        c += n * (1.0 - u_day);
+        /* the sun's disc and glow by day, the moon's by night */
         float s = max(dot(d, u_sun), 0.0);
-        c += SUNCOL * (5.0 * pow(s, 800.0) + 0.12 * pow(s, 12.0));
+        if (u_night < 0.5) c += SUNCOL * mix(vec3(1.0), vec3(1.0, 0.45, 0.20), u_dusk).rgb * (5.0 * pow(s, 800.0) + 0.12 * pow(s, 12.0)) * max(u_day, 0.15);
+        else               c += MOONCOL * (2.0 * pow(s, 3000.0) + 0.025 * pow(s, 20.0));
         return c;
     }
     float hash21(vec2 p) {
@@ -260,7 +292,7 @@ static const char *fs_surf = GLSL(
             }
         }
         vec3 att = exp(-u_mu * max(path, 0.0));
-        return c * att + SCATTER * (1.0 - att);
+        return lit(c * att + SCATTER * (1.0 - att));
     }
 
     void main() {
@@ -439,7 +471,7 @@ static const char *fs_mark = GLSL(
     uniform vec3 u_col;
     uniform float u_alpha;
     out vec4 o;
-    void main() { o = vec4(gam(u_col), u_alpha); }
+    void main() { o = vec4(gam(lit(u_col)), u_alpha); }
 );
 
 static const char *vs_fill = GLSL(
@@ -511,7 +543,7 @@ static const char *fs_solid = GLSL(
             float diff = max(dot(N, u_sun), 0.0);
             c = pattern(q, u_tile, u_style) * (0.35 + 0.65 * diff);
         }
-        o = vec4(gam(c), 1.0);
+        o = vec4(gam(lit(c)), 1.0);
     }
 );
 
@@ -541,21 +573,72 @@ static const char *fs_sides = GLSL(
     in vec3 v_pos;
     in vec3 v_nrm;
     uniform vec2 u_L;
+    uniform float u_depth;
     uniform vec3 u_mu;
     uniform vec3 u_cam;
+    uniform int u_shape;
+    uniform sampler2D u_light;
+    uniform float u_lscale;
     out vec4 o;
     void main() {
-        /* a vertical face of the water body: translucent, with the water's own Fresnel reflection */
+        /* a face of the water body, seen through glass: the water's own Fresnel
+         * reflection over the light inside it.  The light is marched along the view
+         * ray: at each sample the sunlight has been focused by the surface above
+         * towards what the caustic map says the floor gets, by a share that grows
+         * with depth -- uniform just under the surface, the full caustic pattern on
+         * the floor -- so the shafts converge downwards under the crests and move
+         * with them. */
         vec3 N = normalize(v_nrm);
         vec3 V = normalize(u_cam - v_pos);
         if (dot(N, V) < 0.0) N = -N;
         float cv = max(dot(N, V), 0.0);
         float F = 0.02 + 0.98 * pow(1.0 - cv, 5.0);
+        /* how far the ray goes inside the body */
+        vec3 T = -V;
+        float t = 1e30;
+        if (u_shape == 1) {
+            vec2 C = 0.5 * u_L; float R = 0.5 * u_L.x;
+            vec2 pp = v_pos.xz - C, dd = T.xz;
+            float a = dot(dd, dd), b = dot(pp, dd), c0 = dot(pp, pp) - R * R;
+            float disc = b * b - a * c0;
+            if (a > 1e-12 && disc > 0.0) t = max((-b + sqrt(disc)) / a, 0.0);
+        } else {
+            if (T.x < 0.0) t = min(t, (0.0 - v_pos.x) / T.x);
+            if (T.x > 0.0) t = min(t, (u_L.x - v_pos.x) / T.x);
+            if (T.z < 0.0) t = min(t, (0.0 - v_pos.z) / T.z);
+            if (T.z > 0.0) t = min(t, (u_L.y - v_pos.z) / T.z);
+        }
+        if (T.y < 0.0) t = min(t, (-u_depth - v_pos.y) / T.y);
+        if (T.y > 0.0) t = min(t, (0.0 - v_pos.y) / T.y);
+        t = clamp(t, 0.0, 3.0 * max(u_L.x, u_L.y));
+        /* sunlight inside the water travels along the refracted direction */
+        vec3 Lr = refract(-u_sun, vec3(0.0, 1.0, 0.0), 1.0 / 1.333);
+        if (dot(Lr, Lr) < 1e-6 || Lr.y >= -0.05) Lr = vec3(0.0, -1.0, 0.0);
+        const int NS = 24;
+        float ds = t / float(NS);
+        vec3 acc = vec3(0.0);
+        float wsum = 0.0;
+        float jitter = hash21(gl_FragCoord.xy) - 0.5;
+        for (int i = 0; i < NS; i++) {
+            float si = (float(i) + 0.5 + jitter) * ds;
+            vec3 P = v_pos + si * T;
+            float f = clamp(-P.y / u_depth, 0.0, 1.0);
+            vec3 Q = P + ((-u_depth - P.y) / Lr.y) * Lr;
+            float lm = texture(u_light, Q.xz / u_L).r * u_lscale;
+            float I = mix(1.0, lm * lm, f);
+            /* the light that reaches the eye from a sample: attenuated on the way in
+             * from the surface and on the way out to the glass, and the near water
+             * counts for more, as the scattering is forward */
+            vec3 att = exp(-u_mu * (si + f * u_depth)) * exp(-si / (0.25 * max(u_L.x, u_L.y)));
+            wsum += (att.r + att.g + att.b) / 3.0 * ds;
+            acc += SCATTER * I * att * ds;
+        }
+        /* normalised so that an unfocused body comes out as before */
+        vec3 body = acc / max(wsum, 1e-3) * 1.3 + vec3(0.05, 0.08, 0.10);
         float path = 0.6 * max(u_L.x, u_L.y);
         vec3 att = exp(-u_mu * path);
         float a = clamp(1.0 - (att.r + att.g + att.b) / 3.0, 0.06, 0.92);
-        vec3 body = SCATTER * 1.3 + vec3(0.05, 0.08, 0.10);
-        vec3 c = mix(body, sky(reflect(-V, N)), F);
+        vec3 c = mix(lit(body), sky(reflect(-V, N)), F);
         o = vec4(gam(c), max(a, F));
     }
 );
@@ -600,6 +683,7 @@ static const char *fs_ovl = GLSL(
 
 /* ------------------------------------------------------------------ state */
 struct view3d {
+    float time;                      /* seconds of frames, for the stars */
     SDL_Window *win;
     SDL_GLContext ctx;
     int nx, ny, W, H;
@@ -1854,9 +1938,28 @@ static int build_float(float *b, int n, float cx, float cz, float size)
     return n;
 }
 
+/* a bubble: a small sphere at (cx, cz), its centre `depth` below the surface */
+static int build_bubble(float *b, int n, float cx, float cz, float depth, float r)
+{
+    const int nu = 8, nv = 6;
+    for (int j = 0; j < nv; j++) {
+        const float t0 = 3.14159265f * j / nv, t1 = 3.14159265f * (j + 1) / nv;
+        for (int i = 0; i < nu; i++) {
+            const float a0 = 6.2831853f * i / nu, a1 = 6.2831853f * (i + 1) / nu;
+            const float p00[3] = { cx + r * sinf(t0) * cosf(a0), -depth + r * cosf(t0), cz + r * sinf(t0) * sinf(a0) };
+            const float p01[3] = { cx + r * sinf(t0) * cosf(a1), -depth + r * cosf(t0), cz + r * sinf(t0) * sinf(a1) };
+            const float p10[3] = { cx + r * sinf(t1) * cosf(a0), -depth + r * cosf(t1), cz + r * sinf(t1) * sinf(a0) };
+            const float p11[3] = { cx + r * sinf(t1) * cosf(a1), -depth + r * cosf(t1), cz + r * sinf(t1) * sinf(a1) };
+            n = obj_tri(b, n, p00, p10, p11);
+            n = obj_tri(b, n, p00, p11, p01);
+        }
+    }
+    return n;
+}
+
 static void draw_objects(view3d *v, const view3d_params *p, const float *vp)
 {
-    if (!p->boat && p->nfloat <= 0) return;
+    if (!p->boat && p->nfloat <= 0 && p->nbub <= 0) return;
     static float buf[OBJ_MAX * 3];
     glUseProgram(v->p_mark);
     set_common(v, v->p_mark, p, vp);
@@ -1881,6 +1984,18 @@ static void draw_objects(view3d *v, const view3d_params *p, const float *vp)
         glUniform3f(U(v->p_mark, "u_col"), 1.0f, 0.45f, 0.08f);
         glDrawArrays(GL_TRIANGLES, 0, n);
     }
+    if (p->nbub > 0) {
+        /* bubbles: under the surface, so seen through glass; translucent and bright */
+        int n = 0;
+        for (int i = 0; i < p->nbub && i < 64; i++) n = build_bubble(buf, n, p->bub_x[i], p->bub_z[i], p->bub_d[i], p->bub_r[i]);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, (GLsizeiptr)n * 3 * sizeof(float), buf);
+        glUniform3f(U(v->p_mark, "u_col"), 0.85f, 0.95f, 1.0f);
+        glUniform1f(U(v->p_mark, "u_alpha"), 0.7f);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDrawArrays(GL_TRIANGLES, 0, n);
+        glDisable(GL_BLEND);
+    }
 }
 
 static void set_common(view3d *v, GLuint p, const view3d_params *prm, const float *vp)
@@ -1888,8 +2003,13 @@ static void set_common(view3d *v, GLuint p, const view3d_params *prm, const floa
     glUseProgram(p);
     GLint l;
     if (vp && (l = U(p, "u_vp")) >= 0) glUniformMatrix4fv(l, 1, GL_FALSE, vp);
-    if ((l = U(p, "u_lscale")) >= 0) glUniform1f(l, v->gpu_caustics ? 1.0f : 4.0f);
+    if ((l = U(p, "u_lscale")) >= 0) glUniform1f(l, (v->gpu_caustics ? 1.0f : 4.0f) * (prm->night ? 0.5f : 1.0f));
     if ((l = U(p, "u_sun")) >= 0) glUniform3f(l, prm->sun[0], prm->sun[1], prm->sun[2]);
+    if ((l = U(p, "u_day")) >= 0) glUniform1f(l, prm->day);
+    if ((l = U(p, "u_dusk")) >= 0) glUniform1f(l, prm->dusk);
+    if ((l = U(p, "u_night")) >= 0) glUniform1f(l, prm->night ? 1.0f : 0.0f);
+    if ((l = U(p, "u_lk")) >= 0) glUniform1f(l, prm->lk);
+    if ((l = U(p, "u_time")) >= 0) glUniform1f(l, v->time);
     if ((l = U(p, "u_cam")) >= 0) glUniform3f(l, v->cam[0], v->cam[1], v->cam[2]);
     if ((l = U(p, "u_L")) >= 0) glUniform2f(l, v->Lx, v->Ly);
     if ((l = U(p, "u_depth")) >= 0) glUniform1f(l, v->depth);
