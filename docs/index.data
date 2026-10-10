@@ -5,13 +5,13 @@
 # the whole thing inside a half-angle of 19.5 degrees whatever the speed.
 
 at 0     clear  preset pool  rain off  breeze off  paddle off  wind 0  floats 0
-at 0     boat on  boat-speed 0.4  gain 1  damping 0.03
+at 0     boat 0.2,0.5,0  boat-speed 0.4  gain 1  damping 0.03     # at the west side, heading east
 at 0     camera 40,35,1.2
 at 0     say "a hull under way: the Kelvin wake, 19.5 degrees either side whatever the speed"
 at 10    yaw += 90 over 40
 at 30    boat-speed 0.7 over 10
 at 30    say "faster: the transverse waves lengthen as the speed squared; the angle does not change"
-at 55    floats 6
+at 55    float 0.5,0.3  float 0.5,0.7  float 0.7,0.5  floats 6       # three placed, three anywhere
 at 55    say "six floats, riding the wake"
 at 60    dist 0.6 over 20   pitch 25 over 20
 at 100   boat-speed 0.3 over 10
@@ -60,6 +60,34 @@ at 90   paddle-pos += 1 over 30
 at 125  say ""
 at 125  paddle-span 1  paddle-freq 1.0
 at 125  loop
+# pond: the basin shaken.                 ./pond --script demos/shake.pond
+#
+# Shaken vertically at frequency F, the water answers at F/2: every mode is a
+# Mathieu oscillator, and the ones near F/2 are parametrically unstable once
+# the shaking beats the damping (Faraday, 1831).  Shoved sideways, it sloshes
+# at its fundamental period (the seiche).
+
+at 0     clear  preset pond  rain off  breeze off  paddle off  boat off  floats 0
+at 0     camera 35,30,1.2  gain 1
+at 0     say "a 3 m pond, still.  shoved sideways: the seiche, 2.9 s a swing"
+at 2     jolt 0.4,0
+at 25    jolt 0,0.4
+at 25    say "and across"
+at 45    clear  shake on  shake-amp 0.5  shake-freq 3
+at 45    say "shaken at 3 Hz, half a g: Faraday waves grow at 1.5 Hz from nothing"
+at 60    yaw += 90 over 40
+at 80    shake-freq 2 over 10
+at 80    say "2 Hz: longer waves, at 1 Hz"
+at 110   shake-freq 5 over 10
+at 110   say "5 Hz: a finer pattern, at 2.5 Hz"
+at 135   shake-amp 0.15 over 10
+at 135   say "the shaking eased to 0.15 g: below the threshold, the waves die away"
+at 165   clear  preset tray  shake on  shake-amp 0.6  shake-freq 8  gain 4  camera 30,35,0.9
+at 165   say "the 30 cm tray at 8 Hz: millimetre ripples at 4 Hz, drawn at four times their height"
+at 175   yaw += 60 over 30
+at 215   shake off  gain 1
+at 215   say ""
+at 220   loop
 # the sea.                             ./pond --script demos/storm.pond
 
 at 0    clear  preset 4  glass opaque  rain off  paddle off
