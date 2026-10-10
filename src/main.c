@@ -191,7 +191,7 @@ static void drop_at(app *a, int mx, int my, double rel_size)
 {
     double x, y;
     if (!to_basin(a, mx, my, &x, &y)) return;
-    double s = rel_size * sqrt(a->w->Lx * a->w->Ly);
+    double s = rel_size * app_drop_size(a);     /* a click is a small stone: twice a raindrop; shift, four times */
     app_splash(a, x, y, s, -0.15 * s);
 }
 
@@ -351,14 +351,14 @@ static void handle_events(app *a)
             a->mx = e.button.x; a->my = e.button.y;
             if (e.button.button == SDL_BUTTON_LEFT && !modifier && to_basin(a, e.button.x, e.button.y, &x, &y)) {
                 /* on the water: drop, or a finger if the button stays down */
-                double sz = (shift ? 0.06 : 0.03) * sqrt(a->w->Lx * a->w->Ly);
+                double sz = (shift ? 4.0 : 2.0) * app_drop_size(a);
                 app_splash(a, x, y, sz, -0.15 * sz);
                 a->dragging = !shift;
             } else if (a->mode3d) {
                 /* off the water, with a modifier, or any other button: orbit */
                 a->orbiting = 1;
             } else if (e.button.button == SDL_BUTTON_RIGHT) {
-                drop_at(a, e.button.x, e.button.y, 0.06);
+                drop_at(a, e.button.x, e.button.y, 4.0);
             }
             break;
         }
@@ -541,7 +541,7 @@ static void apply_sources(app *a, double dts)
             do {
                 x = rand() / (RAND_MAX + 1.0) * w->Lx; y = rand() / (RAND_MAX + 1.0) * w->Ly;
             } while (w->shape == WAVE_DISK && (x - w->R) * (x - w->R) + (y - w->R) * (y - w->R) > w->R * w->R);
-            double s = 0.02 * L * (0.5 + rand() / (RAND_MAX + 1.0));
+            double s = app_drop_size(a) * (0.5 + rand() / (RAND_MAX + 1.0));
             app_splash(a, x, y, s, -0.15 * s);
         }
     }

@@ -80,7 +80,7 @@ appears only on devices without a fine pointer.
 | `1` `2` `3` `4` | presets: tray 30 cm · pond 3 m · pool 12 m · sea 80 m |
 | `[` `]` / `{` `}` | width / length (disk: diameter), 5 % per press, hold to sweep (live: the physics changes, the field is kept; aspect kept within 4:1) |
 | `,` `.` / `\` | depth / make it square again at the same area |
-| `r` `i`/`I` | rain on/off, rate |
+| `r` `i`/`I` | rain on/off, rate (a raindrop's crater is 2 cm, or 2.5 cells on a coarse grid — 40 cm on the sea; `--drop-size` in metres overrides; a click is twice it, shift-click four times) |
 | `b` | breeze (directional wind sea) on/off |
 | `w`/`W` | wind, m/s: a fetch-limited sea for that wind over the basin's length (0: the breeze on its own knobs) |
 | `e` `z`/`Z` | a boat driving round the basin, leaving its Kelvin wake; its speed, as a Froude number |
@@ -756,9 +756,8 @@ simulation rather than alongside it:
   retracted: a short broadband tick at impact, a pause of 15–50 ms, then the
   plink (Pumphrey & Crum's sequence; the pause grows with the drop). Big
   drops add a lower splash burst. Everything is panned to the drop's
-  position relative to the camera and attenuated by distance. Drops are
-  drawn at a size relative to the basin so they can be seen; for the ear
-  they are taken at the size they would have in the 30 cm tray, so rain
+  position relative to the camera and attenuated by distance. For the ear
+  drops are taken at the size they would have in the 30 cm tray, so rain
   plinks like rain on every preset, a click is a small stone, a shift-click
   a bigger one.
 - **The rain bed is many small splashes, not hiss and not sizzle.** What

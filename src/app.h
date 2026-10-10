@@ -91,6 +91,8 @@ typedef struct app {
     /* wind: m/s, 0 leaves the breeze on its own knobs */
     double wind;
     float *fl_u, *fl_v; size_t fl_n;   /* the surface velocity, for the floats */
+    /* drops: Gaussian width in metres; 0 = physical, with a floor of a few cells */
+    double drop_size;
     /* the sun: where it is, degrees; the light and the sky follow */
     double sun_elev, sun_azim;
     /* bubbles: the one each drop pulls under, rising back to the surface */
@@ -134,6 +136,7 @@ double app_boat_speed(const app *a);    /* m/s */
 void  app_add_float(app *a);            /* one more, somewhere not too near a wall */
 void  app_clear_floats(app *a);
 void  app_bubble(app *a, double x, double y, double s);
+double app_drop_size(const app *a);         /* a raindrop's crater width, metres, on this basin */
 void  app_jolt(app *a, double dux, double duy);   /* shove the basin by that velocity, over 0.4 of the seiche period */
 void  app_jolt_step(app *a, double dts);          /* the slice of it that falls in this frame */
 

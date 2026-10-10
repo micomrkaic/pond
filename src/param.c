@@ -66,6 +66,17 @@ void app_add_float(app *a)
 
 void app_clear_floats(app *a) { a->nfloat = 0; a->hud_dirty = 1; }
 
+/* A raindrop's crater is a couple of centimetres across; drawn smaller than a
+ * few cells it is not there at all, so the width is the larger of 2 cm and 2.5
+ * cells: 2 cm on the pond, 2 mm on the tray, 40 cm on the 80 m sea (rings under
+ * a metre, where it used to rain cars). */
+double app_drop_size(const app *a)
+{
+    if (a->drop_size > 0) return a->drop_size;
+    const double cell = a->w->dx < a->w->dy ? a->w->dx : a->w->dy;
+    return fmax(0.02, 2.5 * cell);
+}
+
 /* An instantaneous shove excites every mode at once -- the ramp's series falls as
  * 1/n^2 but the velocity kick carries sqrt(k), and the surface shows the short
  * modes as fine parallel ridges.  A real shove takes time, and the time averages
@@ -163,9 +174,9 @@ void app_splash(app *a, double x, double y, double s, double amp)
     if (!a->au) return;
     double pan = 0, att = 1;
     if (a->v3) view3d_listen(a->v3, x, y, &pan, &att);
-    /* drops are drawn at a size relative to the basin so they can be seen; for the ear,
-     * rain should plink like rain whatever the basin, so the acoustic size is the drop as it
-     * would be in the 30 cm tray: a raindrop's few millimetres, a click a small stone */
+    /* for the ear, rain should plink like rain whatever the basin, so the acoustic size
+     * is the drop as it would be in the 30 cm tray: a raindrop's few millimetres, a click
+     * a small stone (the drawn size has a grid floor the ear should not hear) */
     audio_splash(a->au, s * 0.3 / sqrt(a->w->Lx * a->w->Ly), pan, att);
 }
 
@@ -260,6 +271,7 @@ G(g_breeze, a->breeze)              S(s_breeze, a->breeze = v > 0.5)
 G(g_wind, a->wind)                  S(s_wind, { a->wind = v; if (v > 0) a->breeze = 1; })
 G(g_boat, a->boat)                  S(s_boat, a->boat = v > 0.5)
 G(g_shake, a->shake)                S(s_shake, a->shake = v > 0.5)
+G(g_dropsz, a->drop_size)           S(s_dropsz, a->drop_size = v)
 G(g_sun_el, a->sun_elev)            S(s_sun_el, a->sun_elev = v)
 G(g_sun_az, a->sun_azim)            S(s_sun_az, a->sun_azim = v)
 G(g_shake_a, a->shake_amp)          S(s_shake_a, a->shake_amp = v)
@@ -343,6 +355,7 @@ static const param params[] = {
     B("rain", "sources",    "rain on", g_rain, s_rain),
     RM("rain-rate", "sources", "drops per simulated second", 0.05, 200, 1.5, 0, g_rain_rate, s_rain_rate),
     B("breeze", "sources",  "wind sea on", g_breeze, s_breeze),
+    RM("drop-size", "sources", "a raindrop's crater width, metres (0: 2 cm, or a few cells on a coarse grid; a click is twice it)", 0, 10, 1.5, 0.005, g_dropsz, s_dropsz),
     RA("wind", "sources",   "wind speed, m/s: a fetch-limited sea over the basin's length (0: the breeze's own knobs)", 0, 30, 1, 0, g_wind, s_wind),
     RM("breeze-gain", "sources", "multiplier on the wind forcing", 0.01, 100, 1.5, 0, g_bgain, s_bgain),
     B("boat", "sources",    "a boat driving round the basin, leaving its wake", g_boat, s_boat),
