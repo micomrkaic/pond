@@ -147,6 +147,7 @@ void  wave_seed(wave *w, double rms_m);      /* broadband noise of that rms heig
  * phi_hat = B omega / (k tanh kh): u and v are each nx * ny.  Costs one inverse
  * transform plus a gradient; call once per frame when something rides the water. */
 void  wave_velocity(wave *w, float *u, float *v);
+int   wave_velocity_at(const wave *w, double x, double y, double *u, double *v);   /* one point, no transform; -1 on the disk */
 
 /* Stochastic wind forcing.  Modes are kicked with amplitude weights
  *   w(k) = (k/k0)^-2 above the peak k0 (a k^-4 elevation spectrum),

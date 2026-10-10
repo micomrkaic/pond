@@ -298,6 +298,22 @@ int main(void)
         printf("a float in a 2 Hz wave train, ka %.2f: drifts downwave at %.4f m/s; Stokes (ka)^2 c = %.4f m/s ", k * a, got, want);
         ok = got > 0 && fabs(got - want) < 0.25 * want;
         printf("%s\n", ok ? "ok" : "FAIL"); fails += !ok;
+        /* the direct mode sum gives the same velocity as the field, where the modes are low */
+        {
+            wave_realize(q); wave_velocity(q, u, v);
+            double worst = 0, scale = 0;
+            for (int t = 0; t < 20; t++) {
+                const double px = 1.0 + 0.4 * t, py = 0.3;
+                const int i = (int)(px / q->dx), j = (int)(py / q->dy);
+                double du, dv;
+                wave_velocity_at(q, px, py, &du, &dv);
+                worst = fmax(worst, fabs(du - u[i + q->nx * j]));
+                scale = fmax(scale, fabs(u[i + q->nx * j]));
+            }
+            printf("   the direct mode sum agrees with the field to %.1f%% of the peak ", 100 * worst / scale);
+            ok = worst < 0.05 * scale;
+            printf("%s\n", ok ? "ok" : "FAIL"); fails += !ok;
+        }
         free(u); free(v);
         wave_destroy(q);
     }

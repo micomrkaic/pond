@@ -484,18 +484,23 @@ static void drive_boat(app *a, double dts)
 static void drift_floats(app *a, double dts)
 {
     wave *w = a->w;
-    const size_t NG = (size_t)w->nx * w->ny;
-    if (a->fl_n != NG) {
-        free(a->fl_u); free(a->fl_v);
-        a->fl_u = malloc(NG * sizeof(float)); a->fl_v = malloc(NG * sizeof(float));
-        a->fl_n = NG;
-    }
-    if (!a->fl_u || !a->fl_v) return;
-    wave_velocity(w, a->fl_u, a->fl_v);
     const double L = sqrt(w->Lx * w->Ly), size = L / 60.0, gain = (double)a->p3.gain;
+    const int direct = w->shape == WAVE_RECT;      /* a direct mode sum per float; the disk needs the field */
+    if (!direct) {
+        const size_t NG = (size_t)w->nx * w->ny;
+        if (a->fl_n != NG) {
+            free(a->fl_u); free(a->fl_v);
+            a->fl_u = malloc(NG * sizeof(float)); a->fl_v = malloc(NG * sizeof(float));
+            a->fl_n = NG;
+        }
+        if (!a->fl_u || !a->fl_v) return;
+        wave_velocity(w, a->fl_u, a->fl_v);
+    }
     for (int i = 0; i < a->nfloat; i++) {
-        a->fl_vx[i] = gain * grid_at(w, a->fl_u, a->fl_x[i], a->fl_y[i]);
-        a->fl_vy[i] = gain * grid_at(w, a->fl_v, a->fl_x[i], a->fl_y[i]);
+        double u, v;
+        if (direct) wave_velocity_at(w, a->fl_x[i], a->fl_y[i], &u, &v);
+        else { u = grid_at(w, a->fl_u, a->fl_x[i], a->fl_y[i]); v = grid_at(w, a->fl_v, a->fl_x[i], a->fl_y[i]); }
+        a->fl_vx[i] = gain * u; a->fl_vy[i] = gain * v;
         a->fl_x[i] += a->fl_vx[i] * dts;
         a->fl_y[i] += a->fl_vy[i] * dts;
         keep_in(w, size, &a->fl_x[i], &a->fl_y[i], &a->fl_vx[i], &a->fl_vy[i]);

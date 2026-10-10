@@ -822,9 +822,16 @@ On a 512^2 grid the CPU does, per frame: one inverse DCT (~25 Mflop) and one
 pass over 262k modes, ~7 ms on a slow Xeon and a few on a recent laptop; the
 disk costs about the same. The GPU does the caustic map, the surface mesh
 and a few full-screen passes — trivial for anything with a real GPU. HOS
-adds a few milliseconds at $n_c = 64$. WASM is single-threaded here on purpose (pthreads need COOP/COEP
-headers, which static hosts rarely serve), so 256^2 is the sensible browser
-default.
+adds a few milliseconds at $n_c = 64$. The sources are kept off that budget
+where they can be: the hull's pressure patches go straight into mode space
+(a Gaussian's cosine transform is analytic), and the floats take their
+velocity from a direct sum over the lowest $96^2$ modes at their own
+positions — twelve of them cost 2 ms, against 20 ms for the two transforms
+the full velocity field needs (which the disk, whose basis is not worth
+summing, still uses). Shaking adds one pass over the modes per substep; the
+jolt stamps the grid only while the shove lasts. WASM is single-threaded here
+on purpose (pthreads need COOP/COEP headers, which static hosts rarely
+serve), so 256^2 is the sensible browser default.
 
 Possible speedups, none done yet: two rows per complex FFT in the DCT, and
 moving the caustic splat to the GPU (render the surface mesh into the light

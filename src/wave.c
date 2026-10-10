@@ -470,8 +470,84 @@ static void stamp_gauss(wave *w, float *buf, double x, double y, double s, doubl
 void wave_add_pressure(wave *w, double x, double y, double s, double p_dt)
 {
     if (s <= 0 || p_dt == 0) return;
+    if (w->shape == WAVE_RECT) {
+        /* a Gaussian's cosine transform is analytic (the images in the walls are
+         * neglected: a patch within a few widths of a wall is slightly wrong there,
+         * which nothing shows), so the kick goes straight into the modes and the
+         * frame is spared a 512^2 transform.  The forward transform is a Riemann sum,
+         * X_k = (N/L) int f cos(k x) dx, and int exp(-(x-x0)^2/2s^2) cos(kx) dx =
+         * s sqrt(2 pi) exp(-k^2 s^2/2) cos(k x0). */
+        const double C = p_dt * (w->nx / w->Lx) * (w->ny / w->Ly) * 2.0 * M_PI * s * s;
+        const double kcut = 5.0 / s;                       /* exp(-12.5): nothing beyond */
+        const int mmax = (int)fmin(w->nx - 1, kcut * w->Lx / M_PI), nmax = (int)fmin(w->ny - 1, kcut * w->Ly / M_PI);
+        float *ex = w->tmp;                                 /* max(nx, ny) floats of scratch */
+        for (int m = 0; m <= mmax; m++) { const double km = M_PI * m / w->Lx; ex[m] = (float)(exp(-0.5 * km * km * s * s) * cos(km * x)); }
+        const int have_fara = w->dt_rotor >= 0;             /* k tanh(kh) / omega = fara / g, once the rotor exists */
+        for (int n = 0; n <= nmax; n++) {
+            const double kn = M_PI * n / w->Ly;
+            const float ey = (float)(C * exp(-0.5 * kn * kn * s * s) * cos(kn * y) / w->rho);
+            const size_t row = (size_t)w->nx * n;
+            if (have_fara) {
+                const float g = (float)(1.0 / w->g);
+                for (int m = 0; m <= mmax; m++) w->B[row + m] -= w->fara[row + m] * g * ex[m] * ey;
+            } else {
+                for (int m = 0; m <= mmax; m++) {
+                    const size_t i = row + m;
+                    const double om = w->omega[i], k = w->kmag[i];
+                    if (om <= 0.0f || k <= 0.0) continue;
+                    w->B[i] -= (float)(k * tanh(k * w->depth) / om) * ex[m] * ey;
+                }
+            }
+        }
+        return;
+    }
     stamp_gauss(w, w->src_p, x, y, s, p_dt);
     w->dirty_p = 1;
+}
+
+/* the surface velocity at one point, from the lowest modes directly: no transform.
+ * Rectangle only (the disk's basis is not separable in a form worth summing);
+ * the caller falls back to wave_velocity there.  Same quantity as wave_velocity:
+ * grad phi at z = eta, with the eta d/dz term that carries half the Stokes drift. */
+int wave_velocity_at(const wave *w, double x, double y, double *u, double *v)
+{
+    if (w->shape != WAVE_RECT) return -1;
+    enum { M = 96 };
+    const int mmax = w->nx < M ? w->nx : M, nmax = w->ny < M ? w->ny : M;
+    double cx[M], sx[M], cy[M], sy[M];
+    for (int m = 0; m < mmax; m++) { const double km = M_PI * m / w->Lx; cx[m] = cos(km * x); sx[m] = sin(km * x); }
+    for (int n = 0; n < nmax; n++) { const double kn = M_PI * n / w->Ly; cy[n] = cos(kn * y); sy[n] = sin(kn * y); }
+    double ux = 0, uy = 0, eta = 0, etat = 0, etatx = 0, etaty = 0;
+    for (int n = 0; n < nmax; n++) {
+        const double kn = M_PI * n / w->Ly, en = n == 0 ? 0.5 : 1.0;
+        double rx = 0, ry = 0, re = 0, rt = 0, rtx = 0, rty = 0;
+        for (int m = 0; m < mmax; m++) {
+            const size_t i = (size_t)m + (size_t)w->nx * n;
+            const double k = w->kmag[i], om = w->omega[i];
+            if (om <= 0.0f || k <= 0.0) { re += (m == 0 ? 0.5 : 1.0) * w->A[i] * cx[m]; continue; }
+            const double km = M_PI * m / w->Lx, em = m == 0 ? 0.5 : 1.0;
+            const double phi = w->B[i] * om / (k * tanh(k * w->depth));
+            const double et = w->B[i] * om;
+            rx += em * phi * (-km * sx[m]);
+            ry += em * phi * cx[m];
+            re += em * w->A[i] * cx[m];
+            rt += em * et * cx[m];
+            rtx += em * et * (-km * sx[m]);
+            rty += em * et * cx[m];
+        }
+        ux += en * rx * cy[n];
+        uy += en * ry * (-kn * sy[n]);
+        eta += en * re * cy[n];
+        etat += en * rt * cy[n];
+        etatx += en * rtx * cy[n];
+        etaty += en * rty * (-kn * sy[n]);
+    }
+    const double norm = 4.0 / ((double)w->nx * w->ny);
+    ux *= norm; uy *= norm; eta *= norm; etatx *= norm; etaty *= norm;
+    (void)etat;
+    *u = ux + eta * etatx;
+    *v = uy + eta * etaty;
+    return 0;
 }
 
 void wave_add_jolt(wave *w, double dux, double duy)
