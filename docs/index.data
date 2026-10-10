@@ -18,6 +18,31 @@ at 100   boat-speed 0.3 over 10
 at 100   say "slow: a short wake, and the floats settle"
 at 130   say ""
 at 130   loop
+# pond: a day.                              ./pond --script demos/day.pond
+#
+# The sun is a parameter.  Sweep its elevation and the light, the sky, the
+# glints and the caustics follow: long grazing glints at dawn, a red Fresnel
+# dusk, then the moon, sparse glints and stars.  Minutes, on a loop: a
+# screen saver.
+
+at 0     clear  preset pool  rain off  paddle off  boat off  floats 0  glass 0
+at 0     breeze on  wind 4
+at 0     sun-azim 110  sun-elev -12
+at 0     camera 40,14,1.3
+at 0     say "night.  the moon on the water"
+at 15    sun-elev 4 over 40
+at 15    say "dawn: the sun comes up over the far wall"
+at 30    say ""
+at 40    yaw += 60 over 120
+at 55    sun-elev 60 over 70   sun-azim 200 over 70
+at 60    say "noon"
+at 125   say ""
+at 130   sun-elev 2 over 60   sun-azim 260 over 60
+at 150   say "evening: the sky warms, the glints lengthen"
+at 190   sun-elev -15 over 30
+at 200   say "and night again"
+at 230   say ""
+at 235   loop
 # dispersion: one drop, and the long waves outrun the short ones.
 #                                      ./pond --script demos/dispersion.pond
 
