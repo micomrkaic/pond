@@ -4,7 +4,7 @@ set -e
 cd ~/work/pond
 tarball=${1:?tarball path}
 msg=${2:-"update from tarball"}
-
+. "$HOME/emsdk/emsdk_env.sh"
 tar xzf "$tarball" --strip-components=1 pond/src pond/web pond/tests pond/demos pond/Makefile pond/README.md
 make && make test
 git add -A
