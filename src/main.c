@@ -598,6 +598,12 @@ static void advance(app *a, double dt_real)
 {
     double dts = a->paused ? 0.0 : dt_real * a->warp;
     if (!a->paused) apply_sources(a, dts);
+    else if (a->au) {
+        /* paused: the rain stops falling, the wind drops, the surf is still */
+        audio_set_rain(a->au, 0.0);
+        audio_set_wind(a->au, 0.0);
+        audio_set_sea(a->au, 0.0, 0.0);
+    }
     a->acc += dts;
     double sub = a->warp / SUBSTEPS_PER_SEC;
     int n = (int)(a->acc / sub);
