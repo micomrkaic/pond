@@ -624,8 +624,10 @@ static const char *fs_sides = GLSL(
             vec3 P = v_pos + si * T;
             float f = clamp(-P.y / u_depth, 0.0, 1.0);
             vec3 Q = P + ((-u_depth - P.y) / Lr.y) * Lr;
-            float lm = texture(u_light, Q.xz / u_L).r * u_lscale;
-            float I = mix(1.0, lm * lm, f);
+            /* the map, clamped: a fresh crater is a lens with a hot spot under it, and
+             * a shaft fed by an unclamped spot would outshine the whole tank */
+            float lm = min(texture(u_light, Q.xz / u_L).r * u_lscale, 2.5);
+            float I = mix(1.0, pow(lm, 1.5), f);
             /* the light that reaches the eye from a sample: attenuated on the way in
              * from the surface and on the way out to the glass, and the near water
              * counts for more, as the scattering is forward */

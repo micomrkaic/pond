@@ -728,7 +728,7 @@ Through a glass wall, from below the waterline, the water body is lit by
 shafts. Each fragment of a face of the body marches 24 samples along the
 view ray; at each the sunlight has been focused by the surface above it by a
 share that grows with depth — uniform just under the surface, the full
-caustic pattern (squared, for contrast) at the floor — taken from the
+caustic pattern (to the power 1.5 for contrast, clamped so a fresh crater's hot spot does not become a pillar) at the floor — taken from the
 caustic map at the point the refracted sunlight through that sample lands
 on. The near water counts for more (forward scattering), so the columns in
 front of you converge downward under the crests and move with them. It
