@@ -101,6 +101,8 @@ static void build_rotor(wave *w, double dt)
         const double th = (double)w->omega[i] * dt;
         w->Rr[i] = (float)(d * cos(th));
         w->Ri[i] = (float)(-d * sin(th));
+        const double k = w->kmag[i];
+        w->fara[i] = (w->omega[i] > 0.0f && k > 0.0) ? (float)(w->g * k * tanh(k * w->depth) / w->omega[i]) : 0.0f;
     }
     w->dt_rotor = dt;
     w->rotor_pow_valid = 1;   /* only R^1 */
@@ -141,6 +143,9 @@ static wave *alloc_common(int nx, int ny, int nmodes)
     w->Rr = malloc(NM * sizeof(float)); w->Ri = malloc(NM * sizeof(float));
     w->eta = calloc(N, sizeof(float));
     w->src_d = calloc(N, sizeof(float)); w->src_v = calloc(N, sizeof(float)); w->src_p = calloc(N, sizeof(float));
+    w->fara = calloc(NM, sizeof(float));
+    w->vtmp = calloc(N, sizeof(float));
+    w->tmpm = malloc(NM * sizeof(float));
     w->tmp = malloc((size_t)(nx > ny ? nx : ny) * sizeof(float));
     int ok = 1;
     for (int p = 2; p <= WAVE_MAXPOW; p++) {
@@ -180,7 +185,6 @@ wave *wave_create_disk(int nt, int nr, double D, double depth)
     w->sq_rho = malloc((size_t)nr * sizeof(float)); w->isq_rho = malloc((size_t)nr * sizeof(float));
     w->spec_re = malloc((size_t)nr * M * sizeof(float)); w->spec_im = malloc((size_t)nr * M * sizeof(float));
     w->fre = malloc((size_t)nt * sizeof(float)); w->fim = malloc((size_t)nt * sizeof(float));
-    w->tmpm = malloc((size_t)w->nmodes * sizeof(float));
     w->ncut = malloc((size_t)M * sizeof(int));
     if (!w->G || !w->kappa || !w->sq_rho || !w->isq_rho || !w->spec_re || !w->spec_im || !w->fre || !w->fim || !w->tmpm || !w->ncut ||
         dct_plan_init(&w->pt, nt) || disk_basis_build(nr, M, w->G, w->kappa)) {
@@ -206,7 +210,7 @@ void wave_destroy(wave *w)
 {
     if (!w) return;
     free(w->A); free(w->B); free(w->omega); free(w->gamma); free(w->kmag);
-    free(w->Rr); free(w->Ri); free(w->eta); free(w->src_d); free(w->src_v); free(w->src_p); free(w->tmp);
+    free(w->Rr); free(w->Ri); free(w->eta); free(w->src_d); free(w->src_v); free(w->src_p); free(w->fara); free(w->vtmp); free(w->tmp);
     for (int p = 2; p <= WAVE_MAXPOW; p++) { free(w->Rpr[p]); free(w->Rpi[p]); }
     free(w->bz_idx); free(w->bz_w);
     free(w->G); free(w->kappa); free(w->sq_rho); free(w->isq_rho);
@@ -319,6 +323,42 @@ void wave_step(wave *w, double dt, int nsub)
 
     const size_t N = (size_t)w->nmodes;
     float *restrict A = w->A, *restrict B = w->B;
+    if (w->shake_a > 0.0) {
+        /* Mathieu: eta_tt + 2 gamma eta_t + (omega^2 + eps cos(Om t)) eta = 0 with
+         * eps = a g k tanh(kh).  B is eta_t / omega, so the modulation is a kick
+         * B -= eps cos(Om t) A dt / omega; half a kick, the exact rotor, half a kick:
+         * second order, and it keeps the exact part exact */
+        const float *restrict Rr = w->Rr, *restrict Ri = w->Ri, *restrict F = w->fara;
+        for (int sub = 0; sub < nsub; sub++) {
+            const float c0 = (float)(w->shake_a * cos(w->shake_om * w->t) * 0.5 * dt);
+            const float c1 = (float)(w->shake_a * cos(w->shake_om * (w->t + dt)) * 0.5 * dt);
+            double e2 = 0, k2e2 = 0;
+            for (size_t i = 0; i < N; i++) {
+                float a = A[i], b = B[i] - c0 * F[i] * A[i];
+                const float rr = Rr[i], ri = Ri[i];
+                const float na = a * rr - b * ri, nb = a * ri + b * rr;
+                a = na; b = nb - c1 * F[i] * na;
+                A[i] = (fabsf(a) < 1e-30f) ? 0.0f : a;
+                B[i] = (fabsf(b) < 1e-30f) ? 0.0f : b;
+                const double e = (double)a * a + (double)b * b, k = w->kmag[i];
+                e2 += e; k2e2 += k * k * e;
+            }
+            /* breaking, as a stand-in: once the surface is steeper than steep_max the
+             * excess is damped off within a few hundred milliseconds.  (A mode's
+             * energy is (A^2 + B^2) up to a constant; the ratio with k^2 is the mean
+             * square slope, in the same units as a real wave of the same height.) */
+            /* the DCT puts N/4 into a unit mode's coefficient and a cos cos mode has
+             * mean square slope k^2 a^2 / 4, so the mean square slope is 4 sum k^2 (A^2 + B^2) / N^2
+             * (the disk's normalisation differs by a constant; the knob absorbs it) */
+            w->steep = e2 > 0 ? 1.15 * sqrt(k2e2) / (double)N : 0.0;   /* 2/N, and A^2+B^2 is twice the instant's mean square: calibrated to the grid's rms slope */
+            if (w->steep_max > 0 && w->steep > w->steep_max) {
+                const float dmp = (float)exp(-20.0 * (w->steep / w->steep_max - 1.0) * dt);
+                for (size_t i = 0; i < N; i++) { A[i] *= dmp; B[i] *= dmp; }
+            }
+            w->t += dt;
+        }
+        return;
+    }
     int left = nsub;
     while (left > 0) {
         const int p = left > WAVE_MAXPOW ? WAVE_MAXPOW : left;
@@ -432,6 +472,129 @@ void wave_add_pressure(wave *w, double x, double y, double s, double p_dt)
     if (s <= 0 || p_dt == 0) return;
     stamp_gauss(w, w->src_p, x, y, s, p_dt);
     w->dirty_p = 1;
+}
+
+void wave_add_jolt(wave *w, double dux, double duy)
+{
+    if (dux == 0 && duy == 0) return;
+    const double cx = 0.5 * w->Lx, cy = 0.5 * w->Ly;
+    if (w->shape == WAVE_DISK) {
+        for (int i = 0; i < w->nr; i++) {
+            const double r = (i + 0.5) * w->dr;
+            for (int j = 0; j < w->nt; j++) {
+                const double th = j * w->dth;
+                w->src_p[(size_t)j + (size_t)w->nt * i] += (float)(w->rho * (dux * r * cos(th) + duy * r * sin(th)));
+            }
+        }
+    } else {
+        for (int j = 0; j < w->ny; j++) {
+            const double y = (j + 0.5) * w->dy - cy;
+            for (int i = 0; i < w->nx; i++) {
+                const double x = (i + 0.5) * w->dx - cx;
+                w->src_p[(size_t)i + (size_t)w->nx * j] += (float)(w->rho * (dux * x + duy * y));
+            }
+        }
+    }
+    w->dirty_p = 1;
+}
+
+void wave_seed(wave *w, double rms)
+{
+    /* a little broadband noise, rms metres on the surface: the seed a parametric
+     * instability grows from, as a real tank's always has */
+    const size_t N = (size_t)w->nmodes;
+    const double c = rms * sqrt((double)w->nx * w->ny) / 2.0;    /* the DCT puts N/4 into a unit mode */
+    for (size_t i = 0; i < N; i++) {
+        if (w->omega[i] <= 0.0f) continue;
+        w->rng = w->rng * 6364136223846793005ULL + 1442695040888963407ULL;
+        const double u = (double)(w->rng >> 11) / 9007199254740992.0 * 2.0 - 1.0;
+        w->A[i] += (float)(c * u * 1.7);   /* sqrt(3) for a uniform's rms */
+    }
+}
+
+void wave_set_shake(wave *w, double a, double f_hz, double steep_max)
+{
+    w->shake_a = a > 0 ? a : 0;
+    w->shake_om = 2.0 * M_PI * f_hz;
+    w->steep_max = steep_max;
+}
+
+/* the gradient of a grid field into (gx, gy), both shapes; polar fields come out Cartesian */
+static void grid_gradient(const wave *w, const float *f, float *gx, float *gy)
+{
+    if (w->shape == WAVE_DISK) {
+        const int nt = w->nt, nr = w->nr;
+        for (int i = 0; i < nr; i++) {
+            const double r = (i + 0.5) * w->dr;
+            const int ip = i + 1 < nr ? i + 1 : i, im = i > 0 ? i - 1 : i;
+            for (int j = 0; j < nt; j++) {
+                const int jp = (j + 1) % nt, jm = (j + nt - 1) % nt;
+                const double dr = (f[(size_t)j + (size_t)nt * ip] - f[(size_t)j + (size_t)nt * im]) / ((ip - im) * w->dr);
+                const double dth = (f[(size_t)jp + (size_t)nt * i] - f[(size_t)jm + (size_t)nt * i]) / (2.0 * w->dth * r);
+                const double th = j * w->dth, c = cos(th), sn = sin(th);
+                gx[(size_t)j + (size_t)nt * i] = (float)(dr * c - dth * sn);
+                gy[(size_t)j + (size_t)nt * i] = (float)(dr * sn + dth * c);
+            }
+        }
+        return;
+    }
+    const int nx = w->nx, ny = w->ny;
+    for (int j = 0; j < ny; j++) {
+        const int jp = j + 1 < ny ? j + 1 : j, jm = j > 0 ? j - 1 : j;
+        for (int i = 0; i < nx; i++) {
+            const int ip = i + 1 < nx ? i + 1 : i, im = i > 0 ? i - 1 : i;
+            gx[(size_t)i + (size_t)nx * j] = (float)((f[(size_t)ip + (size_t)nx * j] - f[(size_t)im + (size_t)nx * j]) / ((ip - im) * w->dx));
+            gy[(size_t)i + (size_t)nx * j] = (float)((f[(size_t)i + (size_t)nx * jp] - f[(size_t)i + (size_t)nx * jm]) / ((jp - jm) * w->dy));
+        }
+    }
+}
+
+static void modes_to_grid(wave *w, float *grid)
+{
+    if (w->shape == WAVE_DISK) { disk_inverse(w, w->tmpm, grid); return; }
+    memcpy(grid, w->tmpm, (size_t)w->nx * w->ny * sizeof(float));
+    dct2_inverse(&w->px, &w->py, grid, w->tmp);
+}
+
+void wave_velocity(wave *w, float *u, float *v)
+{
+    const size_t N = (size_t)w->nmodes, NG = (size_t)w->nx * w->ny;
+    /* phi on the grid, and its gradient: the velocity at z = 0 */
+    for (size_t i = 0; i < N; i++) {
+        const double k = w->kmag[i];
+        const double kt = k > 0 ? k * tanh(k * w->depth) : 0.0;
+        w->tmpm[i] = kt > 0 ? (float)(w->B[i] * w->omega[i] / kt) : 0.0f;
+    }
+    modes_to_grid(w, w->vtmp);
+    grid_gradient(w, w->vtmp, u, v);
+    /* the velocity at the surface itself, not at z = 0: u(eta) = u(0) + eta du/dz, and
+     * du/dz = d(eta_t)/dx at z = 0.  Half of a particle's Stokes drift comes from
+     * this term (the other half from its horizontal excursion); without it a float
+     * drifts at half the rate.  Needs eta current: wave_realize first. */
+    for (size_t i = 0; i < N; i++) w->tmpm[i] = w->B[i] * w->omega[i];
+    modes_to_grid(w, w->vtmp);
+    const int nx = w->nx, ny = w->ny;
+    if (w->shape == WAVE_DISK) {
+        /* gradient of eta_t into the row scratch is not enough room: reuse tmpm's grid-sized
+         * twin by going through two passes of the gradient on u and v in place */
+        float *gx = malloc(NG * sizeof(float)), *gy = malloc(NG * sizeof(float));
+        if (gx && gy) {
+            grid_gradient(w, w->vtmp, gx, gy);
+            for (size_t i = 0; i < NG; i++) { u[i] += w->eta[i] * gx[i]; v[i] += w->eta[i] * gy[i]; }
+        }
+        free(gx); free(gy);
+        return;
+    }
+    for (int j = 0; j < ny; j++) {
+        const int jp = j + 1 < ny ? j + 1 : j, jm = j > 0 ? j - 1 : j;
+        for (int i = 0; i < nx; i++) {
+            const int ip = i + 1 < nx ? i + 1 : i, im = i > 0 ? i - 1 : i;
+            const size_t c = (size_t)i + (size_t)nx * j;
+            const float *f = w->vtmp;
+            u[c] += w->eta[c] * (float)((f[(size_t)ip + (size_t)nx * j] - f[(size_t)im + (size_t)nx * j]) / ((ip - im) * w->dx));
+            v[c] += w->eta[c] * (float)((f[c + (size_t)nx * (jp - j)] - f[c - (size_t)nx * (j - jm)]) / ((jp - jm) * w->dy));
+        }
+    }
 }
 
 void wave_add_paddle(wave *w, int wall, double pos, double span, double width, double accel, double dt)

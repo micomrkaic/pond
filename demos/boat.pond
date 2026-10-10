@@ -5,13 +5,13 @@
 # the whole thing inside a half-angle of 19.5 degrees whatever the speed.
 
 at 0     clear  preset pool  rain off  breeze off  paddle off  wind 0  floats 0
-at 0     boat on  boat-speed 0.4  gain 1  damping 0.03
+at 0     boat 0.2,0.5,0  boat-speed 0.4  gain 1  damping 0.03     # at the west side, heading east
 at 0     camera 40,35,1.2
 at 0     say "a hull under way: the Kelvin wake, 19.5 degrees either side whatever the speed"
 at 10    yaw += 90 over 40
 at 30    boat-speed 0.7 over 10
 at 30    say "faster: the transverse waves lengthen as the speed squared; the angle does not change"
-at 55    floats 6
+at 55    float 0.5,0.3  float 0.5,0.7  float 0.7,0.5  floats 6       # three placed, three anywhere
 at 55    say "six floats, riding the wake"
 at 60    dist 0.6 over 20   pitch 25 over 20
 at 100   boat-speed 0.3 over 10

@@ -182,6 +182,13 @@ int main(void)
         check(a->nfloat == 2 && fabs(a->fl_x[0] - 0.5 * a->w->Lx) < 1e-9, "two floats, the first at the middle");
         run(a, 1.0, 0.01);
         check(!a->boat && a->nfloat == 0, "boat off and floats 0, the parameters, take them away again");
+        script_free(a->sc);
+        a->sc = script_parse("at 0 jolt 0.1,0\nat 0 shake on  shake-amp 0.8  shake-freq 6\n", "t6", err, sizeof err);
+        check(a->sc != NULL, "jolt / shake parse");
+        script_start(a->sc, a);
+        run(a, 0.5, 0.01);
+        check(a->shake && fabs(a->shake_amp - 0.8) < 1e-9 && fabs(a->shake_freq - 6) < 1e-9, "shake on, 0.8 g at 6 Hz");
+        check(wave_norm(a->w) > 0, "the jolt put the water in motion");
         script_free(a->sc); a->sc = NULL;
 
         check(script_parse("at 0 warpp 2\n", "e", err, sizeof err) == NULL && strstr(err, "warpp"), "an unknown word is an error with its name");
@@ -193,8 +200,8 @@ int main(void)
 
     /* --- every demo parses and runs through twice --- */
     {
-        static const char *const demos[] = { "tour", "wavemaker", "rings", "storm", "dispersion", "boat", "wind" };
-        for (int d = 0; d < 7; d++) {
+        static const char *const demos[] = { "tour", "wavemaker", "rings", "storm", "dispersion", "boat", "wind", "shake" };
+        for (int d = 0; d < 8; d++) {
             char path[128], err[256];
             snprintf(path, sizeof path, "demos/%s.pond", demos[d]);
             script *s = script_load(path, err, sizeof err);

@@ -32,6 +32,7 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     ./pond --scene paddle --paddle-span 0.12 --paddle-pos 0.25 --paddle-wall y=0
     ./pond --preset 3 --boat --floats 4    # a hull under way on the pool, four floats in its wake
     ./pond --preset 4 --wind 12 --boat     # a 12 m/s wind sea, and a boat through it
+    ./pond --preset 2 --shake --shake-freq 3   # the pond shaken at 3 Hz: Faraday waves at 1.5
     ./pond --script demos/tour.pond        # three minutes of everything, on a loop; Escape stops it
     ./pond --cpu-caustics                  # if the GPU pass is unavailable or suspect
     ./pond --mute                          # starts silent; --no-audio opens no device at all
@@ -84,6 +85,8 @@ appears only on devices without a fine pointer.
 | `w`/`W` | wind, m/s: a fetch-limited sea for that wind over the basin's length (0: the breeze on its own knobs) |
 | `e` `z`/`Z` | a boat driving round the basin, leaving its Kelvin wake; its speed, as a Froude number |
 | `E` / `C` | one more float riding the surface (up to 12; `--floats N`); clear them all |
+| `;` `'`/`"` `/`/`?` | shake the basin vertically (Faraday waves at half the frequency); amplitude in g; frequency |
+| `F8` `F9` (shift: harder) | jolt it sideways along x, along y: the seiche |
 | `p` / `P` | wavemaker on/off / move it to the next wall (its position along the wall is kept) |
 | `k`/`K` | its frequency (the wavelength follows from the dispersion relation) |
 | `l`/`L` | its span: the fraction of the wall it occupies, down to a point source |
@@ -204,7 +207,7 @@ then parameter settings, run against the same table the keys nudge.
 a line with no time shares the previous line's. Every parameter name is a
 verb; a value may be absolute or relative (`+=`, `-=`), and a number may take
 `over T` to get there smoothly. The other verbs: `drop X,Y [SIZE]` or
-`drop random`, `boat X,Y[,HEADING]` (put the hull there — fractions of the
+`drop random`, `jolt DUX,DUY` (shove the basin, m/s), `boat X,Y[,HEADING]` (put the hull there — fractions of the
 basin, degrees from +x — and start it; `boat on`/`off` and `boat-speed` are
 the parameters), `float X,Y` or `float random` (one more float; `floats N`
 sets the count, `floats 0` clears them), `clear`, `camera Y,P,D [over T]`,
@@ -220,13 +223,14 @@ then the program. Scripts do not clear the water between events unless told
 to; the old waves decaying under the new ones is the good part. (Do clear
 before shrinking a basin, though: 80 m of sea in a 3 m pond is a tsunami.)
 
-`demos/` has seven: `tour` (a bit of everything, three minutes, loops),
+`demos/` has eight: `tour` (a bit of everything, three minutes, loops),
 `wavemaker` (frequency, span, position, walls), `rings` (the disk with its
 rim as the wavemaker), `storm` (the sea under a rising and falling wind),
 `dispersion` (one drop in a still pool, then the same in the tray where the
 short waves are the fast ones), `boat` (a hull and its Kelvin wake, at three
 speeds, with floats), `wind` (a fetch-limited sea from a breath to a gale,
-then the sea preset with a boat through it). `tests/test_script.c` runs every one of them
+then the sea preset with a boat through it), `shake` (the seiche, then
+Faraday waves at three frequencies, the threshold, and the tray). `tests/test_script.c` runs every one of them
 headless, twice round.
 
 ## What it computes
@@ -452,10 +456,47 @@ peak is held inside what the grid can carry, which on the 80 m sea preset
 means a 2.5 m chop stands in for the 60 cm one a 12 m/s wind would make.
 
 Floats (`E`) are drawn riding the surface — the view lifts every vertex onto
-the water under it, so a hull heaves and tilts for free — and move
-horizontally by sliding down the local slope against drag. That is a
-stand-in for the orbital motion, not a derivation of it; it sloshes them
-about believably and gathers them where the water gathers.
+the water under it, so a hull heaves and tilts for free — and are carried by
+the water's velocity at the surface, $\nabla\phi$ evaluated at $z=\eta$:
+`wave_velocity` builds $\phi$ on the grid from $\hat\phi = \hat B\,\omega/(k\tanh kh)$
+(one inverse transform), takes its gradient, and adds $\eta\,\partial_z\mathbf u
+= \eta\,\nabla\eta_t$ (a second). Nothing second-order is coded, yet a float in a
+wave train drifts downwave at Stokes' rate $(ka)^2 c$ — the test gets 0.0089
+m/s against 0.0081 — because that is what the Lagrangian mean of the linear
+field is. Half of it comes from the vertical term: at $z=0$ the drift is half
+what it should be, which is why the surface velocity is evaluated at the
+surface.
+
+### Shaking: Faraday waves and the seiche
+
+Shake the basin vertically and gravity becomes $g\,(1 + a\cos\Omega t)$ in
+its frame. Each mode is then a Mathieu oscillator,
+
+$$
+\ddot{\hat\eta}_n + 2\gamma_n\dot{\hat\eta}_n + \bigl(\omega_n^2 + a\,g\,k_n\tanh k_n h\,\cos\Omega t\bigr)\hat\eta_n = 0 ,
+$$
+
+and the ones with $\omega_n \approx \Omega/2$ are parametrically unstable once
+$a\,\omega_n/4 > \gamma_n$, growing at $a\omega_n/4 - \gamma_n$. The exact
+rotor needs a constant $\omega$, so while the shaking is on each substep is a
+half-kick, the rotor, a half-kick — second order, symplectic, and the exact
+part stays exact. `tests/test_wave.c` shakes a tank at twice a mode's
+frequency and measures its growth: 1.233/s against Mathieu's 1.236. The
+instability is exponential and nothing in linear theory stops it, so a
+stand-in for breaking does: once the rms steepness passes 0.12 the excess is
+damped off within a fraction of a second, and the waves sit at a few
+centimetres on the pond, a few millimetres on the tray (turn the display
+gain up there). A dead-flat tank gets a micron of broadband noise to grow
+from, as a real one always has. The pattern that comes out is whatever set
+of modes sits nearest $\Omega/2$: squares and hexagons are a question of
+nonlinear selection that the HOS correction may or may not answer; the
+subharmonic response and the threshold it does.
+
+A jolt (`F8`/`F9`, or `jolt DUX,DUY` in a script) shoves the basin sideways
+by that velocity: in its frame a pressure impulse $\rho\,\Delta\mathbf u\cdot\mathbf x$
+across the water, through the same pressure source as the hull, projecting on
+the odd modes as $1/n^2$. The water sloshes at the fundamental: the test
+gets 2.418 s for a 2 m tank 30 cm deep against the mode's 2.415.
 
 ### Validity
 

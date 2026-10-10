@@ -24,7 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef enum { A_SET, A_DROP, A_CLEAR, A_CAMERA, A_SAY, A_LOOP, A_END, A_BOAT, A_FLOAT } action_kind;
+typedef enum { A_SET, A_DROP, A_CLEAR, A_CAMERA, A_SAY, A_LOOP, A_END, A_BOAT, A_FLOAT, A_JOLT } action_kind;
 
 typedef struct {
     action_kind kind;
@@ -185,6 +185,11 @@ script *script_parse(const char *text, const char *name, char *err, size_t errn)
                 sscanf(tok[i], "%lf,%lf,%lf", &a.x, &a.y, &a.z);
                 i++;
             }
+            else if (!strcmp(w, "jolt")) {
+                /* jolt DUX,DUY: the basin shoved sideways by that velocity, m/s */
+                a.kind = A_JOLT; a.x = 0.1; a.y = 0;
+                if (i < n && sscanf(tok[i], "%lf,%lf", &a.x, &a.y) >= 1) i++;
+            }
             else if (!strcmp(w, "float")) {
                 a.kind = A_FLOAT; a.random = 1;
                 if (i < n && sscanf(tok[i], "%lf,%lf", &a.x, &a.y) == 2) { a.random = 0; i++; }
@@ -309,6 +314,7 @@ static void run_action(script *s, app *a, const action *ac)
         if (ac->z > -999) a->boat_hdg = ac->z * M_PI / 180.0;
         a->hud_dirty = 1;
         break;
+    case A_JOLT: wave_add_jolt(a->w, ac->x, ac->y); break;
     case A_FLOAT:
         if (a->nfloat < NFLOAT_MAX) {
             if (ac->random) app_add_float(a);

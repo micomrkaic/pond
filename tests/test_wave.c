@@ -214,6 +214,94 @@ int main(void)
         wave_destroy(q);
     }
 
+    /* --- Faraday: shaken at twice a mode's frequency the mode grows at the Mathieu
+     *     rate, (a omega / 4 - gamma) in amplitude; off the tongue it decays --- */
+    {
+        for (int trial = 0; trial < 2; trial++) {
+            wave *q = wave_create(64, 64, 1.0, 1.0, 0.1);
+            wave_set_damping(q, 0.3);
+            const double om = q->omega[4], a = trial == 0 ? 0.6 : 0.15;
+            wave_set_shake(q, a, 2.0 * om / (2.0 * M_PI), 0.0);
+            for (int i = 0; i < q->nmodes; i++) q->A[i] = 1e-6f;
+            const size_t m = 4;
+            double e5 = 0;
+            for (int it = 0; it < 2400; it++) { wave_step(q, 1.0 / 240, 1); if (it == 1199) e5 = (double)q->A[m] * q->A[m] + (double)q->B[m] * q->B[m]; }
+            const double e10 = (double)q->A[m] * q->A[m] + (double)q->B[m] * q->B[m];
+            const double gam = q->gamma[m], rate = a * om / 4.0 - gam;   /* gravity dominates at k = 4 pi */
+            const double got = log(e10 / e5) / 10.0, want = rate;
+            printf("shaken at 2 omega(4,0), a = %.2f g: mode (4,0) grows at %.3f /s in amplitude, Mathieu says a omega/4 - gamma = %.3f ", a, got, want);
+            ok = fabs(got - want) < 0.1 * fabs(want) + 0.02;
+            printf("%s\n", ok ? "ok" : "FAIL"); fails += !ok;
+            wave_destroy(q);
+        }
+        /* and with the breaking stand-in the steepness saturates instead of exploding */
+        wave *q = wave_create(64, 64, 1.0, 1.0, 0.1);
+        wave_set_damping(q, 0.3);
+        wave_set_shake(q, 0.6, 2.0 * q->omega[4] / (2.0 * M_PI), 0.15);
+        for (int i = 0; i < q->nmodes; i++) q->A[i] = 1e-4f;
+        double smax = 0;
+        for (int it = 0; it < 240 * 30; it++) { wave_step(q, 1.0 / 240, 1); if (it > 240 * 10 && q->steep > smax) smax = q->steep; }
+        wave_realize(q);
+        float mx = 0;
+        for (int i = 0; i < 64 * 64; i++) if (fabsf(q->eta[i]) > mx) mx = fabsf(q->eta[i]);
+        printf("   capped at steepness 0.15: it holds %.3f, standing waves of %.0f mm in a 1 m tank ", smax, mx * 1e3);
+        ok = smax > 0.12 && smax < 0.25 && mx > 0.01 && mx < 0.2;
+        printf("%s\n", ok ? "ok" : "FAIL"); fails += !ok;
+        wave_destroy(q);
+    }
+
+    /* --- a jolt sets the seiche going at the basin's fundamental period --- */
+    {
+        wave *q = wave_create(128, 32, 2.0, 0.5, 0.3);
+        wave_set_damping(q, 0.02);
+        wave_add_jolt(q, 0.05, 0.0);
+        double tz[400]; int n = 0; float prev = 0;
+        for (int it = 0; it < 240 * 20; it++) {
+            wave_step(q, 1.0 / 240, 1); wave_realize(q);
+            const float e = q->eta[2 + 128 * 16];
+            if (it > 5 && n < 400 && (e < 0) != (prev < 0)) tz[n++] = (it + 0.5) / 240.0;
+            prev = e;
+        }
+        const double T = 2.0 * (tz[n - 1] - tz[0]) / (n - 1), T10 = 2.0 * M_PI / q->omega[1];
+        printf("a 5 cm/s jolt in a 2 m tank: the water sloshes with T = %.3f s, the (1,0) mode's %.3f s ", T, T10);
+        ok = n > 8 && fabs(T - T10) < 0.01 * T10;
+        printf("%s\n", ok ? "ok" : "FAIL"); fails += !ok;
+        wave_destroy(q);
+    }
+
+    /* --- a float advected by the surface velocity drifts at Stokes' rate (ka)^2 c,
+     *     downwave; nothing second-order is coded, it is the Lagrangian mean --- */
+    {
+        wave *q = wave_create(1024, 64, 10.0, 0.625, 2.0);
+        wave_set_damping(q, 0.02);
+        float *u = malloc(1024 * 64 * sizeof(float)), *v = malloc(1024 * 64 * sizeof(float));
+        const double dt = 1.0 / 240, om = 2 * M_PI * 2.0, k = wave_k_of_omega(q, om);
+        double x = 2.0, y = 0.3, e2 = 0, x8 = 0, x14 = 0; int ne = 0;
+        for (int it = 0; it < 240 * 15; it++) {
+            const double t = it * dt;
+            wave_add_paddle(q, 0, 0.5, 1.0, 0.1, 0.06 * om * cos(om * t), dt);
+            wave_step(q, dt, 1);
+            if (it % 4 == 0) {
+                wave_realize(q); wave_velocity(q, u, v);
+                int i = (int)(x / q->dx), j = (int)(y / q->dy);
+                if (i < 0) i = 0;
+                if (i >= q->nx) i = q->nx - 1;
+                if (j < 0) j = 0;
+                if (j >= q->ny) j = q->ny - 1;
+                if (t >= 8 && t < 14) { const double e = q->eta[i + q->nx * j]; e2 += e * e; ne++; }
+                if (fabs(t - 8) < 1e-6) x8 = x;
+                if (fabs(t - 14) < 1e-6) x14 = x;
+                x += u[i + q->nx * j] * 4 * dt; y += v[i + q->nx * j] * 4 * dt;
+            }
+        }
+        const double c = om / k, a = sqrt(2 * e2 / ne), got = (x14 - x8) / 6.0, want = k * k * a * a * c;
+        printf("a float in a 2 Hz wave train, ka %.2f: drifts downwave at %.4f m/s; Stokes (ka)^2 c = %.4f m/s ", k * a, got, want);
+        ok = got > 0 && fabs(got - want) < 0.25 * want;
+        printf("%s\n", ok ? "ok" : "FAIL"); fails += !ok;
+        free(u); free(v);
+        wave_destroy(q);
+    }
+
     printf("%s\n", fails ? "SOME TESTS FAILED" : "all wave tests passed");
     return fails ? 1 : 0;
 }

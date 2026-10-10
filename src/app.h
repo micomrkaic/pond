@@ -90,6 +90,10 @@ typedef struct app {
     double fl_x[NFLOAT_MAX], fl_y[NFLOAT_MAX], fl_vx[NFLOAT_MAX], fl_vy[NFLOAT_MAX];
     /* wind: m/s, 0 leaves the breeze on its own knobs */
     double wind;
+    float *fl_u, *fl_v; size_t fl_n;   /* the surface velocity, for the floats */
+    /* Faraday: the basin shaken vertically */
+    int    shake;
+    double shake_amp, shake_freq;      /* in g; Hz */
 
     int dragging, orbiting, mx, my;
     int touch_active; float tx, ty;   /* two-finger gesture (touch screens, browsers) */

@@ -222,6 +222,9 @@ G(g_rain_rate, a->rain_rate)        S(s_rain_rate, a->rain_rate = v)
 G(g_breeze, a->breeze)              S(s_breeze, a->breeze = v > 0.5)
 G(g_wind, a->wind)                  S(s_wind, { a->wind = v; if (v > 0) a->breeze = 1; })
 G(g_boat, a->boat)                  S(s_boat, a->boat = v > 0.5)
+G(g_shake, a->shake)                S(s_shake, a->shake = v > 0.5)
+G(g_shake_a, a->shake_amp)          S(s_shake_a, a->shake_amp = v)
+G(g_shake_f, a->shake_freq)         S(s_shake_f, a->shake_freq = v)
 G(g_boat_fr, a->boat_froude)        S(s_boat_fr, a->boat_froude = v)
 G(g_floats, a->nfloat)              S(s_floats, { int n = (int)v; if (n < 0) n = 0; if (n > NFLOAT_MAX) n = NFLOAT_MAX; while (a->nfloat > n) a->nfloat--; while (a->nfloat < n) app_add_float(a); })
 G(g_paddle, a->paddle)              S(s_paddle, a->paddle = v > 0.5)
@@ -306,6 +309,9 @@ static const param params[] = {
     B("boat", "sources",    "a boat driving round the basin, leaving its wake", g_boat, s_boat),
     RM("boat-speed", "sources", "the boat's speed as a Froude number U / sqrt(g L_boat); 0.4 is a dinghy under way", 0.1, 2, 1.25, 0, g_boat_fr, s_boat_fr),
     RA("floats", "sources", "how many floats ride the surface (0..12)", 0, 12, 1, 0, g_floats, s_floats),
+    B("shake", "sources",   "shake the basin vertically: Faraday waves at half the shaking frequency", g_shake, s_shake),
+    RA("shake-amp", "sources", "the shaking's acceleration, in g (the threshold is set by the damping)", 0.05, 2, 0.05, 0, g_shake_a, s_shake_a),
+    RM("shake-freq", "sources", "the shaking's frequency, Hz; the waves answer at half of it", 0.5, 15, 1.1, 0, g_shake_f, s_shake_f),
     RM("finger-gain", "sources", "multiplier on the drag-a-finger forcing", 0.01, 100, 1.5, 0, g_fgain, s_fgain),
     B("paddle", "wavemaker",  "wavemaker on", g_paddle, s_paddle),
     RM("paddle-freq", "wavemaker", "wavemaker frequency, Hz (held inside the band the basin can answer)", 0.001, 10000, 1.25, 0, g_pfreq, s_pfreq),

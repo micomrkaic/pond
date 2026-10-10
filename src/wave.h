@@ -64,6 +64,15 @@ typedef struct {
     float *Rr, *Ri;            /* rotor for dt_rotor */
     double dt_rotor;           /* < 0: rotor invalid */
 
+    /* Faraday: the basin shaken vertically, g -> g (1 + shake_a cos(shake_om t)).
+     * Each mode is then a Mathieu oscillator; the exact rotor is replaced by a
+     * kick-rotor-kick split while shake_a > 0 */
+    double shake_a, shake_om;  /* amplitude in g, angular frequency [rad/s] */
+    double steep_max;          /* saturation: extra damping once the rms steepness passes this (0 = none) */
+    float *fara;               /* per mode: g k tanh(kh) / omega, the modulation's strength (built with the rotor) */
+    float *vtmp;               /* grid scratch for wave_velocity */
+    double steep;              /* the rms steepness, sqrt(sum k^2 (A^2 + B^2)) over the energy norm, last step */
+
     float *eta;                /* real-space surface, valid after wave_realize() */
     float *src_d, *src_v;      /* real-space displacement / velocity source buffers */
     float *src_p;              /* surface-pressure impulse buffer, Pa s */
@@ -121,6 +130,23 @@ void  wave_add_paddle(wave *w, int wall, double pos, double span, double width, 
  * settles to the hydrostatic dent eta = -p / (rho g); moving, it leaves a
  * Kelvin wake. */
 void  wave_add_pressure(wave *w, double x, double y, double s, double p_dt);
+
+/* A horizontal jolt of the basin: an impulsive change of its velocity by (dux, duy)
+ * m/s.  In the basin's frame that is a pressure impulse rho (du . x) across the
+ * water, which projects on the odd modes as 1/n^2: the seiche, mostly its
+ * fundamental.  Goes in through the pressure source. */
+void  wave_add_jolt(wave *w, double dux, double duy);
+
+/* Shake the basin vertically: amplitude a in g (0 = off), frequency f in Hz.
+ * steep_max > 0 adds damping once the rms steepness passes it, which is what
+ * stops a parametrically unstable mode from growing without end (breaking). */
+void  wave_set_shake(wave *w, double a, double f_hz, double steep_max);
+void  wave_seed(wave *w, double rms_m);      /* broadband noise of that rms height: what shaking grows from */
+
+/* The surface velocity (u, v) on the real-space grid, from the modes' potential
+ * phi_hat = B omega / (k tanh kh): u and v are each nx * ny.  Costs one inverse
+ * transform plus a gradient; call once per frame when something rides the water. */
+void  wave_velocity(wave *w, float *u, float *v);
 
 /* Stochastic wind forcing.  Modes are kicked with amplitude weights
  *   w(k) = (k/k0)^-2 above the peak k0 (a k^-4 elevation spectrum),
