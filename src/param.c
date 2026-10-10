@@ -66,6 +66,30 @@ void app_add_float(app *a)
 
 void app_clear_floats(app *a) { a->nfloat = 0; a->hud_dirty = 1; }
 
+/* An instantaneous shove excites every mode at once -- the ramp's series falls as
+ * 1/n^2 but the velocity kick carries sqrt(k), and the surface shows the short
+ * modes as fine parallel ridges.  A real shove takes time, and the time averages
+ * out every mode with a shorter period: spread over 0.4 of the fundamental's
+ * period, 78% of the slope is in the fundamental and nothing is above n = 8. */
+void app_jolt(app *a, double dux, double duy)
+{
+    a->jolt_dux = dux; a->jolt_duy = duy;
+    a->jolt_tau = 0.4 * 2.0 * M_PI / (a->w->omega[1] > 0 ? a->w->omega[1] : 1.0);
+    a->jolt_t = 0;
+}
+
+void app_jolt_step(app *a, double dts)
+{
+    if (a->jolt_tau <= 0 || dts <= 0) return;
+    /* the slice of the shove that falls in this frame: raised cosine over tau */
+    const double t0 = a->jolt_t, t1 = fmin(a->jolt_t + dts, a->jolt_tau);
+    const double s0 = (t0 - sin(2 * M_PI * t0 / a->jolt_tau) * a->jolt_tau / (2 * M_PI)) / a->jolt_tau;
+    const double s1 = (t1 - sin(2 * M_PI * t1 / a->jolt_tau) * a->jolt_tau / (2 * M_PI)) / a->jolt_tau;
+    wave_add_jolt(a->w, a->jolt_dux * (s1 - s0), a->jolt_duy * (s1 - s0));
+    a->jolt_t = t1;
+    if (a->jolt_t >= a->jolt_tau) a->jolt_tau = 0;
+}
+
 void app_reset_camera(app *a)
 {
     a->cam_yaw = 35.0f; a->cam_pitch = 42.0f; a->cam_dist = 1.5f;

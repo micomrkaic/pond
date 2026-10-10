@@ -497,8 +497,13 @@ subharmonic response and the threshold it does.
 A jolt (`F8`/`F9`, or `jolt DUX,DUY` in a script) shoves the basin sideways
 by that velocity: in its frame a pressure impulse $\rho\,\Delta\mathbf u\cdot\mathbf x$
 across the water, through the same pressure source as the hull, projecting on
-the odd modes as $1/n^2$. The water sloshes at the fundamental: the test
-gets 2.418 s for a 2 m tank 30 cm deep against the mode's 2.415.
+the odd modes as $1/n^2$. Applied in one instant it would excite every mode
+at once — the velocity kick carries $\sqrt k$, and half the surface slope
+would sit in modes above $n=8$, drawn as fine parallel ridges — so the shove
+is spread over 0.4 of the fundamental's period with a raised-cosine profile,
+which averages out everything shorter: 78 % of the slope in the fundamental,
+nothing above $n=8$. The water sloshes at the fundamental: the test gets
+2.418 s for a 2 m tank 30 cm deep against the mode's 2.415.
 
 ### Validity
 

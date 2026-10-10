@@ -68,6 +68,7 @@ static void run(app *a, double secs, double dt)
 {
     for (double t = 0; t < secs; t += dt) {
         script_update(a->sc, a, dt);
+        app_jolt_step(a, dt);
         wave_step(a->w, 1.0 / 240.0, 1);
     }
 }

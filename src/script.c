@@ -314,7 +314,7 @@ static void run_action(script *s, app *a, const action *ac)
         if (ac->z > -999) a->boat_hdg = ac->z * M_PI / 180.0;
         a->hud_dirty = 1;
         break;
-    case A_JOLT: wave_add_jolt(a->w, ac->x, ac->y); break;
+    case A_JOLT: app_jolt(a, ac->x, ac->y); break;
     case A_FLOAT:
         if (a->nfloat < NFLOAT_MAX) {
             if (ac->random) app_add_float(a);

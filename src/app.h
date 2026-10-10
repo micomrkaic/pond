@@ -97,6 +97,8 @@ typedef struct app {
     #define NBUB_MAX 64
     int    nbub;
     double bub_x[NBUB_MAX], bub_y[NBUB_MAX], bub_d[NBUB_MAX], bub_r[NBUB_MAX], bub_v[NBUB_MAX];
+    /* a jolt in progress: the shove is spread over jolt_tau seconds, raised-cosine */
+    double jolt_dux, jolt_duy, jolt_tau, jolt_t;
     /* Faraday: the basin shaken vertically */
     int    shake;
     double shake_amp, shake_freq;      /* in g; Hz */
@@ -132,5 +134,7 @@ double app_boat_speed(const app *a);    /* m/s */
 void  app_add_float(app *a);            /* one more, somewhere not too near a wall */
 void  app_clear_floats(app *a);
 void  app_bubble(app *a, double x, double y, double s);
+void  app_jolt(app *a, double dux, double duy);   /* shove the basin by that velocity, over 0.4 of the seiche period */
+void  app_jolt_step(app *a, double dts);          /* the slice of it that falls in this frame */
 
 #endif

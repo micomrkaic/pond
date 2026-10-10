@@ -317,7 +317,7 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
     case SDLK_F8: case SDLK_F9: {
         /* a jolt: the basin shoved sideways, by a tenth of the fundamental's speed scale */
         const double du = 0.08 * sqrt(w->g * w->depth) * (shift ? 3.0 : 1.0);
-        if (k == SDLK_F8) wave_add_jolt(w, du, 0.0); else wave_add_jolt(w, 0.0, du);
+        if (k == SDLK_F8) app_jolt(a, du, 0.0); else app_jolt(a, 0.0, du);
         break;
     }
     case SDLK_o: case SDLK_HOME: app_reset_camera(a); break;
@@ -509,6 +509,7 @@ static void apply_sources(app *a, double dts)
 
     wave_set_shake(w, a->shake ? a->shake_amp : 0.0, a->shake_freq, 0.12);
     if (a->shake && wave_norm(w) < 1e-12) wave_seed(w, 2e-6 * sqrt(L));   /* a dead-flat tank has nothing to grow */
+    app_jolt_step(a, dts);
     if (a->boat && dts > 0) drive_boat(a, dts);
     if (a->nfloat && dts > 0) drift_floats(a, dts);
 
