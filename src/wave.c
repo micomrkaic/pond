@@ -760,6 +760,20 @@ void wave_add_paddle(wave *w, int wall, double pos, double span, double width, d
     free(g);
 }
 
+/* The breeze band's k^-2 tail, faded out before the grid's resolution: full weight
+ * below 0.35 of the axis Nyquist, nothing past 0.6 of it, a cos^2 between.  When
+ * the peak is clamped to a quarter of Nyquist (every fetch-limited sea the presets
+ * can hold), the untapered tail ran on to 6 k0 and forced the grid-scale modes
+ * themselves: a pixel-sharp roughness over the whole surface. */
+static double breeze_taper(double k, double kn)
+{
+    const double a = 0.35 * kn, b = 0.6 * kn;
+    if (k <= a) return 1.0;
+    if (k >= b) return 0.0;
+    const double c = cos(0.5 * M_PI * (k - a) / (b - a));
+    return c * c;
+}
+
 void wave_breeze(wave *w, double k0, double amp, double dt)
 {
     const size_t N = (size_t)w->nx * w->ny;
@@ -774,6 +788,7 @@ void wave_breeze(wave *w, double k0, double amp, double dt)
             double wt;
             if (k < k0) { const double d = (k - k0) / (0.35 * k0); wt = exp(-d * d); }
             else        { wt = (k0 / k) * (k0 / k); }
+            wt *= breeze_taper(k, M_PI / w->dr);
             wt *= 0.5;    /* the rectangle's cos^2 spread averages to 1/2 */
             if (wt < 1e-3) continue;
             w->bz_idx[n] = idx; w->bz_w[n] = (float)wt; n++;
@@ -798,6 +813,7 @@ void wave_breeze(wave *w, double k0, double amp, double dt)
                 double wt;
                 if (k < k0) { const double d = (k - k0) / (0.35 * k0); wt = exp(-d * d); }
                 else        { wt = (k0 / k) * (k0 / k); }
+                wt *= breeze_taper(k, M_PI / fmax(w->dx, w->dy));
                 wt *= (kx * kx) / (k * k);              /* cos^2 spread about the x axis */
                 if (wt < 1e-3) continue;
                 w->bz_idx[n] = (int)((size_t)m + (size_t)w->nx * nn);

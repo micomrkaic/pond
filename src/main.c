@@ -468,8 +468,13 @@ static void drive_boat(app *a, double dts)
     a->boat_y += U * sin(a->boat_hdg) * dts;
     double vx = 0, vy = 0;
     keep_in(w, 0.6 * len, &a->boat_x, &a->boat_y, &vx, &vy);
-    /* the hull: draft a twentieth of the length, bow and stern pressing less than the middle */
-    const double draft = 0.05 * len, p = w->rho * w->g * draft, sx = 0.18 * len;
+    /* the hull: draft a thirtieth of the length, bow and stern pressing less than the
+     * middle.  The patches are a quarter of the length wide: narrower ones (0.18 L, with
+     * a draft of L/20) put the near field into short divergent waves of slope 0.4-0.5,
+     * which a pressure patch in linear theory overstates and the eye reads as sharp
+     * creases; at these settings the wake's slope stays near 0.2 at Froude 0.4 */
+    const double f = a->boat_fade, ease = f * f * (3.0 - 2.0 * f);
+    const double draft = 0.035 * len * ease, p = w->rho * w->g * draft, sx = 0.26 * len;
     const double ex = cos(a->boat_hdg), ey = sin(a->boat_hdg);
     wave_add_pressure(w, a->boat_x, a->boat_y, sx, p * dts);
     wave_add_pressure(w, a->boat_x + 0.3 * len * ex, a->boat_y + 0.3 * len * ey, 0.7 * sx, 0.6 * p * dts);
@@ -512,10 +517,19 @@ static void apply_sources(app *a, double dts)
     wave *w = a->w;
     const double L = sqrt(w->Lx * w->Ly);     /* size scale for drops, paddle, breeze */
 
-    wave_set_shake(w, a->shake ? a->shake_amp : 0.0, a->shake_freq, 0.12);
+    /* saturation at an rms steepness of 0.08: at 0.12 the short patterns of the higher
+     * shaking frequencies reached slopes of 0.3, sharp creases on the screen */
+    wave_set_shake(w, a->shake ? a->shake_amp : 0.0, a->shake_freq, 0.08);
     if (a->shake && wave_norm(w) < 1e-12) wave_seed(w, 2e-6 * sqrt(L));   /* a dead-flat tank has nothing to grow */
     app_jolt_step(a, dts);
-    if (a->boat && dts > 0) drive_boat(a, dts);
+    /* the hull settles in and lifts out over two seconds: switched in one step, the
+     * pressure's sudden onset or release rang the whole basin with a sharp ring */
+    if (dts > 0) {
+        const double target = a->boat ? 1.0 : 0.0, step = dts / 2.0;
+        if (a->boat_fade < target) a->boat_fade = fmin(target, a->boat_fade + step);
+        else if (a->boat_fade > target) a->boat_fade = fmax(target, a->boat_fade - step);
+        if (a->boat_fade > 0) drive_boat(a, dts);
+    }
     if (a->nfloat && dts > 0) drift_floats(a, dts);
 
     if (a->dragging) {
@@ -651,7 +665,7 @@ static void frame(void *ud)
     if (a->hud_dirty) update_hud(a);
 
     /* the boat and the floats, where the sources put them this frame */
-    a->p3.boat = a->boat;
+    a->p3.boat = a->boat_fade > 0;
     a->p3.boat_x = (float)a->boat_x; a->p3.boat_z = (float)a->boat_y;
     a->p3.boat_hdg = (float)a->boat_hdg; a->p3.boat_len = (float)app_boat_len(a);
     a->p3.nfloat = a->nfloat;

@@ -84,6 +84,7 @@ typedef struct app {
     double boat_x, boat_y, boat_hdg;   /* metres from the top-left corner; radians, 0 = +x */
     double boat_froude;                /* speed as U / sqrt(g len): the picture is the same in any basin */
     double boat_weave;                 /* phase of its wandering */
+    double boat_fade;                  /* 0..1: the hull settling in, or lifting out, over two seconds */
     /* floats: small things riding the surface, sliding down the slopes */
     #define NFLOAT_MAX 12
     int    nfloat;

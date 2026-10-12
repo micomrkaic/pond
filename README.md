@@ -442,7 +442,8 @@ $2\pi U^2/g$ to three figures) and the whole pattern inside a half-angle of
 $19.47°$ in deep water, which the test finds as the caustic where the
 amplitude peaks before collapsing — 18° on a grid, and nothing in the code
 knows the number. The boat (`e`) is three such patches along its length,
-hydrostatic for a draft of a twentieth of the hull, driven at a Froude number
+hydrostatic for a draft of a thirtieth of the hull and a quarter of its
+length wide, settling in and lifting out over two seconds, driven at a Froude number
 $U/\sqrt{gL}$ so the picture is the same in a tray and at sea. In shallow
 water the wedge opens out as the hull nears the critical speed $\sqrt{gh}$
 (the test finds 26° at a depth Froude number of 0.89, against 18° in deep
@@ -458,6 +459,10 @@ The stochastic forcing's steady rms under damping $\gamma$ is
 $\text{amp}/\sqrt{2\gamma}$, so the amplitude is set to leave $H_s/4$. The
 peak is held inside what the grid can carry, which on the 80 m sea preset
 means a 2.5 m chop stands in for the 60 cm one a 12 m/s wind would make.
+The band's $k^{-2}$ tail is faded out between 0.35 and 0.6 of the grid's
+Nyquist wavenumber: with the peak clamped at a quarter of Nyquist, as it is
+for every wind the presets can hold, an untapered tail forced the grid-scale
+modes themselves and the surface came out pixel-sharp.
 
 Floats (`E`) are drawn riding the surface — the view lifts every vertex onto
 the water under it, so a hull heaves and tilts for free — and are carried by
@@ -487,7 +492,7 @@ half-kick, the rotor, a half-kick — second order, symplectic, and the exact
 part stays exact. `tests/test_wave.c` shakes a tank at twice a mode's
 frequency and measures its growth: 1.233/s against Mathieu's 1.236. The
 instability is exponential and nothing in linear theory stops it, so a
-stand-in for breaking does: once the rms steepness passes 0.12 the excess is
+stand-in for breaking does: once the rms steepness passes 0.08 the excess is
 damped off within a fraction of a second, and the waves sit at a few
 centimetres on the pond, a few millimetres on the tray (turn the display
 gain up there). A dead-flat tank gets a micron of broadband noise to grow
