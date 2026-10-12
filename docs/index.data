@@ -113,6 +113,141 @@ at 175   yaw += 60 over 30
 at 215   shake off  gain 1
 at 215   say ""
 at 220   loop
+# pond: everything it does, once.          ./pond --script demos/showcase.pond
+#
+# Ten minutes through every source, basin, container, light and sound the
+# program has, from the 30 cm tray to the 80 m sea.  Loops.  Escape stops it;
+# any key on a parameter the script is moving takes that parameter over.
+#
+# The cameras are framed for 16:9 with the settings box showing.  Where a
+# drive would pile steep crests into a closed basin, the damping is raised
+# for that scene: the basin then reads like a pool with overflow gutters.
+
+# --- the tray: millimetre water ------------------------------------------
+at 0     clear  shape rect  preset tray  glass opaque  floor checker  warp 1  gain 1  damping 0.03
+at 0     rain off  breeze off  wind 0  paddle off  boat off  floats 0  shake off
+at 0     nonlinear off  view off  paused off  paddle-mark on  paddle-stroke 1  drop-size 0
+at 0     sun-elev 50  sun-azim 200
+at 0     camera 30,50,2.0
+at 0     say "the 30 cm tray: millimetre water, where surface tension rules"
+at 2     drop 0.5,0.5 0.05
+at 4     say "at quarter speed: here the short ripples outrun the long ones"
+at 4     warp 0.25
+at 5     drop 0.3,0.65 0.04
+at 16    warp 1  gain 4 over 4
+at 16    say "drawn at four times their height"
+at 18    drop random
++2       drop random
++2       drop random
+at 24    say "the same field as a height map"
+at 24    view on
+at 31    view off  gain 1
+
+# --- the pond: rain, the seiche, Faraday ---------------------------------
+at 33    clear  preset pond  floor sand  glass floor
+at 33    camera 35,40,2.4
+at 33    say "a 3 m pond in the rain: every drop rings, and pulls a bubble under"
+at 33    rain on  rain-rate 2
+at 42    rain-rate 12 over 10
+at 42    say "harder"
+at 54    drop-size 0.05 over 4
+at 54    say "bigger drops"
+at 64    rain off  drop-size 0
+at 66    say "shoved sideways: the seiche, one slow slosh"
+at 66    jolt 0.4,0
+at 80    jolt 0,0.4
+at 80    say "and across"
+at 94    clear  shake on  shake-amp 0.5  shake-freq 3
+at 94    say "shaken up and down at 3 Hz, half a g: Faraday waves grow at 1.5 Hz"
+at 97    yaw += 60 over 30
+at 116   shake-freq 5 over 8  shake-amp 0.25 over 8
+at 116   say "5 Hz: a finer pattern, at 2.5 Hz"
+at 134   shake off
+
+# --- the pool: the wavemaker ---------------------------------------------
+at 137   clear  preset pool  floor tiles  glass opaque  damping 0.08
+at 137   camera 30,45,2.1
+at 137   say "the 12 m pool: a wall-wide wavemaker at 0.8 Hz"
+at 137   paddle on  paddle-wall x=0  paddle-pos 0.5  paddle-span 1  paddle-freq 0.8
+at 150   paddle-freq 1.6 over 10  paddle-stroke 0.6 over 10
+at 150   say "twice the frequency: the water picks a quarter of the wavelength"
+at 164   paddle-span 0.1 over 6  paddle-stroke 0.5 over 6
+at 164   say "a tenth of the wall: a fan"
+at 172   paddle-pos 0.15 over 10
+at 183   paddle-wall y=0  paddle-pos 0.5
+at 183   say "the next wall"
+at 184   yaw += 90 over 20
+at 198   paddle-span 1  paddle-freq 1.0  paddle-stroke 2 over 6
+at 198   say "driven harder: steeper crests"
+at 206   nonlinear on
+at 206   say "the nonlinear correction on: crests sharpen, troughs flatten"
+at 221   nonlinear off  paddle-stroke 1
+
+# --- the containers --------------------------------------------------------
+at 223   glass floor  pitch 30 over 10
+at 223   say "the containers.  floor only"
+at 233   glass glass
+at 233   say "glass walls: light shafts through the water"
+at 245   glass glass+bottom
+at 245   say "glass all round"
+at 255   glass none
+at 255   say "and nothing: the water alone"
+at 265   glass opaque  paddle off
+
+# --- a boat and its floats -----------------------------------------------
+at 267   clear  damping 0.12  boat 0.15,0.5,0  boat-speed 0.4
+at 267   camera 40,38,1.9 over 6
+at 267   say "a hull under way: the Kelvin wake, 19.5 degrees either side"
+at 283   boat-speed 0.55 over 10
+at 283   say "faster: longer waves, the same angle"
+at 298   float 0.5,0.3  float 0.5,0.7  float random  floats 6
+at 298   say "six floats: they ride the wake and drift with the water"
+at 313   boat-speed 0.3 over 8
+at 313   say "slower: a short wake, and the floats settle"
+at 328   boat off  floats 0  damping 0.03
+
+# --- the sun ---------------------------------------------------------------
+at 329   breeze on  breeze-gain 0.5
+at 329   sun-elev 4 over 20  sun-azim 270 over 20  yaw += 60 over 60
+at 329   say "the sun is a parameter.  dusk: long glints, a red sky"
+at 351   sun-elev -15 over 15
+at 353   say "night: the moon on the water, and stars"
+at 375   sun-elev 50 over 15  sun-azim 200 over 15
+at 375   say "and morning"
+at 391   breeze off
+
+# --- the disk ---------------------------------------------------------------
+at 393   clear
+at 394   shape disk  preset pool  glass opaque  floor tiles  damping 0.05
+at 394   sun-elev 35 over 4  sun-azim 30 over 4
+at 394   paddle on  paddle-span 1  paddle-freq 1.2  paddle-pos 0.5  paddle-stroke 0.4
+at 394   camera 30,40,1.9
+at 394   say "a disk, the whole rim a wavemaker: rings converging on the centre"
+at 400   yaw += 120 over 50
+at 410   paddle-span 0.15 over 6
+at 410   say "a sector of the rim, going round"
+at 417   paddle-pos += 1 over 25
+at 444   paused on
+at 444   say "paused: time stops, and the sound with it"
+at 450   paused off
+at 450   say ""
+at 452   paddle off  paddle-stroke 1  breeze-gain 1
+
+# --- the sea ----------------------------------------------------------------
+at 454   clear
+at 455   shape rect  preset sea  glass opaque  floor sand  damping 0.05
+at 455   sun-elev 50  sun-azim 200
+at 455   wind 6  sound.breeze 1.5  sound.harsh 0.6
+at 455   camera 40,28,1.7 over 10
+at 455   say "the sea, 80 m of it, under a 6 m/s wind"
+at 475   wind 14 over 25  sound.harsh 1.5 over 25
+at 475   say "14 m/s: a fetch-limited chop, and the wind's sound rising with it"
+at 505   yaw += 90 over 40
+at 540   breeze off  wind 0  sound.harsh 0.6 over 10  sound.breeze 1 over 10
+at 540   say "the wind drops: swell, the long waves that outlast it"
+at 565   say ""
+at 570   damping 0.03
+at 570   loop
 # the sea.                             ./pond --script demos/storm.pond
 
 at 0    clear  preset 4  glass opaque  rain off  paddle off
