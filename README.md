@@ -34,6 +34,7 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     ./pond --preset 4 --wind 12 --boat     # a 12 m/s wind sea, and a boat through it
     ./pond --preset 2 --shake --shake-freq 3   # the pond shaken at 3 Hz: Faraday waves at 1.5
     ./pond --script demos/tour.pond        # three minutes of everything, on a loop; Escape stops it
+    ./pond --script demos/showcase.pond    # every feature once, ten minutes
     ./pond --cpu-caustics                  # if the GPU pass is unavailable or suspect
     ./pond --mute                          # starts silent; --no-audio opens no device at all
                                            # POND_WAV=take.wav records what you hear
@@ -224,7 +225,8 @@ then the program. Scripts do not clear the water between events unless told
 to; the old waves decaying under the new ones is the good part. (Do clear
 before shrinking a basin, though: 80 m of sea in a 3 m pond is a tsunami.)
 
-`demos/` has nine: `tour` (a bit of everything, three minutes, loops),
+`demos/` has ten: `showcase` (every feature once, from the tray to the sea,
+ten minutes, loops), `tour` (a bit of everything, three minutes, loops),
 `wavemaker` (frequency, span, position, walls), `rings` (the disk with its
 rim as the wavemaker), `storm` (the sea under a rising and falling wind),
 `dispersion` (one drop in a still pool, then the same in the tray where the

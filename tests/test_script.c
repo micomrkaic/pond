@@ -201,8 +201,8 @@ int main(void)
 
     /* --- every demo parses and runs through twice --- */
     {
-        static const char *const demos[] = { "tour", "wavemaker", "rings", "storm", "dispersion", "boat", "wind", "shake", "day" };
-        for (int d = 0; d < 9; d++) {
+        static const char *const demos[] = { "tour", "wavemaker", "rings", "storm", "dispersion", "boat", "wind", "shake", "day", "showcase" };
+        for (int d = 0; d < 10; d++) {
             char path[128], err[256];
             snprintf(path, sizeof path, "demos/%s.pond", demos[d]);
             script *s = script_load(path, err, sizeof err);
@@ -210,9 +210,9 @@ int main(void)
             app *a = make_app(64);
             a->sc = s;
             script_start(s, a);
-            /* find the loop or the end: run until the clock has wrapped twice, or 1000 s */
+            /* find the loop or the end: run until the clock has wrapped twice, or 1500 s */
             int loops = 0; double last = 0, secs = 0;
-            for (secs = 0; secs < 1000 && loops < 2 && script_running(s); secs += 0.05) {
+            for (secs = 0; secs < 1500 && loops < 2 && script_running(s); secs += 0.05) {
                 script_update(s, a, 0.05);
                 wave_step(a->w, 1.0 / 240.0, 1);
                 if (script_time(s) < last) loops++;
