@@ -110,6 +110,14 @@ typedef void          GLvoid;
 #define GL_FRAMEBUFFER 0x8D40
 #define GL_COLOR_ATTACHMENT0 0x8CE0
 #define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+#define GL_NONE 0
+#define GL_TEXTURE2 0x84C2
+#define GL_TEXTURE3 0x84C3
+#define GL_DEPTH_COMPONENT 0x1902
+#define GL_DEPTH_COMPONENT24 0x81A6
+#define GL_DEPTH_ATTACHMENT 0x8D00
+#define GL_RENDERBUFFER 0x8D41
+#define GL_POLYGON_OFFSET_FILL 0x8037
 
 #define GL_FUNCTIONS(X) \
     X(void,          glClear,                   (GLbitfield)) \
@@ -171,7 +179,15 @@ typedef void          GLvoid;
     X(void,          glDeleteFramebuffers,      (GLsizei, const GLuint*)) \
     X(void,          glBindFramebuffer,         (GLenum, GLuint)) \
     X(void,          glFramebufferTexture2D,    (GLenum, GLenum, GLenum, GLuint, GLint)) \
-    X(GLenum,        glCheckFramebufferStatus,  (GLenum))
+    X(GLenum,        glCheckFramebufferStatus,  (GLenum)) \
+    X(void,          glGenRenderbuffers,        (GLsizei, GLuint*)) \
+    X(void,          glDeleteRenderbuffers,     (GLsizei, const GLuint*)) \
+    X(void,          glBindRenderbuffer,        (GLenum, GLuint)) \
+    X(void,          glRenderbufferStorage,     (GLenum, GLenum, GLsizei, GLsizei)) \
+    X(void,          glFramebufferRenderbuffer, (GLenum, GLenum, GLenum, GLuint)) \
+    X(void,          glDrawBuffers,             (GLsizei, const GLenum*)) \
+    X(void,          glReadBuffer,              (GLenum)) \
+    X(void,          glPolygonOffset,           (GLfloat, GLfloat))
 
 #define GL_DECL(ret, name, args) extern ret (*name) args;
 GL_FUNCTIONS(GL_DECL)

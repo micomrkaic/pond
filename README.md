@@ -236,7 +236,8 @@ short waves are the fast ones), `boat` (a hull and its Kelvin wake, at three
 speeds, with floats), `wind` (a fetch-limited sea from a breath to a gale,
 then the sea preset with a boat through it), `shake` (the seiche, then
 Faraday waves at three frequencies, the threshold, and the tray), `day`
-(night, dawn, noon, dusk and night again over four minutes: a screen saver). `tests/test_script.c` runs every one of them
+(night, dawn, noon, dusk and night again over four minutes, round the
+house, its shadow swinging across the pool: a screen saver). `tests/test_script.c` runs every one of them
 headless, twice round.
 
 ## What it computes
@@ -731,7 +732,7 @@ the glints, the caustics and the light on the walls follow it. Low sun warms
 the horizon and lengthens the glints; below −6° it is night: a dark sky with
 stars, and the moon, 40° up and opposite the sun's azimuth, lights the water
 at an eighth of daylight with half-strength caustics. `demos/day.pond` runs
-a day in four minutes.
+a day in four minutes, in the setting.
 
 Through a glass wall, from below the waterline, the water body is lit by
 shafts. Each fragment of a face of the body marches 24 samples along the
@@ -770,8 +771,28 @@ The glass wall has rooms behind it, found by following the view ray into a
 box 7.4 m deep with partitions every 4.8 m (interior mapping): floor,
 ceiling, a back wall with a picture on it, all dim by day under the sky's
 reflection, lit warm after sunset. The whole setting is a few thousand
-triangles drawn once a frame; it costs nothing measurable. It does not yet
-cast shadows, nor appear reflected in the water.
+triangles.
+
+It casts shadows and the water mirrors it. The shadows come from a
+2048-square depth map drawn from the sun, orthographically, over the box the
+casters occupy (house, cabana, loungers, palms, shrubs: about 2 cm a texel
+on the pool preset), redrawn only when the sun moves, and read with a 3 x 3
+percentage-closer filter. They fall on the terrace, the lawn, the coping,
+the house itself and the pool floor; a point under water is tested where
+its sunlight crossed the surface along the refracted ray, which is steeper
+than the sun's, so a low sun behind the house still lights the floor under
+the open water. The sun's glint on the water goes dark in the house's
+shadow too.
+
+The reflection is a second view, drawn each frame at half the window's
+size: the sky and the setting seen from the camera mirrored in the still
+water's plane. The water looks it up where its own reflected ray, a dozen
+metres out, lands in that view, so flat water shows the image straight
+below the house and every tilt of the surface shifts it as far as a tilt
+should; the breeze breaks it into pieces. The sun's disc is left out of
+that view and added back by the water at full strength, so the glints keep
+their brightness, which an 8-bit texture would clip. Neither pass runs
+without the setting.
 
 ## Sound (`src/audio.c`, `src/dsp.c`)
 

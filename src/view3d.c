@@ -65,6 +65,11 @@ static const char *glsl_common = GLSL(
     uniform float u_lk;       /* how much light there is to see by: 1 noon, ~0.12 moonlight */
     uniform float u_time;
     uniform float u_sunny;    /* 1 with the house around the basin: a deeper sky, a bluer pool */
+    uniform float u_nosun;    /* 1: the sky without the sun's disc (the reflection pass; the water adds it back) */
+    uniform sampler2D u_shadow;
+    uniform mat4 u_lvp;       /* world -> the sun's shadow map */
+    uniform float u_shadow_on;
+    uniform float u_sbias;    /* depth bias, in shadow-map depth units */
     const vec3 ZENITH  = vec3(0.30, 0.52, 0.86);
     const vec3 HORIZON = vec3(0.80, 0.86, 0.92);
     const vec3 GROUND  = vec3(0.07, 0.075, 0.09);
@@ -76,6 +81,12 @@ static const char *glsl_common = GLSL(
         p = fract(p * vec3(443.897, 441.423, 437.195));
         p += dot(p, p.yzx + 19.19);
         return fract((p.x + p.y) * p.z);
+    }
+    /* the sun's disc and glow by day, the moon's by night */
+    vec3 sun_term(vec3 d) {
+        float s = max(dot(d, u_sun), 0.0);
+        if (u_night < 0.5) return SUNCOL * mix(vec3(1.0), vec3(1.0, 0.45, 0.20), u_dusk) * (5.0 * pow(s, 800.0) + 0.12 * pow(s, 12.0)) * max(u_day, 0.15);
+        return MOONCOL * (2.0 * pow(s, 3000.0) + 0.025 * pow(s, 20.0));
     }
     vec3 sky(vec3 d) {
         float h = clamp(d.y, 0.0, 1.0);
@@ -101,10 +112,7 @@ static const char *glsl_common = GLSL(
             }
         }
         c += n * (1.0 - u_day);
-        /* the sun's disc and glow by day, the moon's by night */
-        float s = max(dot(d, u_sun), 0.0);
-        if (u_night < 0.5) c += SUNCOL * mix(vec3(1.0), vec3(1.0, 0.45, 0.20), u_dusk).rgb * (5.0 * pow(s, 800.0) + 0.12 * pow(s, 12.0)) * max(u_day, 0.15);
-        else               c += MOONCOL * (2.0 * pow(s, 3000.0) + 0.025 * pow(s, 20.0));
+        if (u_nosun < 0.5) c += sun_term(d);
         return c;
     }
     float hash21(vec2 p) {
@@ -128,6 +136,32 @@ static const char *glsl_common = GLSL(
         }
     }
     vec3 gam(vec3 c) { return pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)); }
+);
+
+/* shared, second part (ISO C caps a string literal at 4095 characters): the
+ * setting's shadows and materials */
+static const char *glsl_common2 = GLSL(
+    /* 1 lit .. 0 in the shadow of the house, the palms, the cabana: a 3 x 3 percentage-closer
+     * lookup, the point pushed off its surface a little along the normal */
+    float shadow_at(vec3 p, vec3 n) {
+        if (u_shadow_on < 0.5) return 1.0;
+        vec4 q = u_lvp * vec4(p + 0.05 * n, 1.0);
+        vec3 s = q.xyz / q.w * 0.5 + 0.5;
+        if (s.x <= 0.0 || s.x >= 1.0 || s.y <= 0.0 || s.y >= 1.0 || s.z >= 1.0) return 1.0;
+        vec2 tx = 1.0 / vec2(textureSize(u_shadow, 0));
+        float lit = 0.0;
+        for (int j = -1; j <= 1; j++)
+            for (int i = -1; i <= 1; i++)
+                lit += (s.z - u_sbias > texture(u_shadow, s.xy + vec2(float(i), float(j)) * tx).r) ? 0.0 : 1.0;
+        return lit / 9.0;
+    }
+    /* a point under the water: its sunlight came in along the refracted ray, steeper
+     * than the sun's, so the test is made where that ray crossed the surface */
+    float shadow_under(vec3 q) {
+        vec3 Lr = refract(-u_sun, vec3(0.0, 1.0, 0.0), 1.0 / 1.333);
+        if (Lr.y > -0.05) return shadow_at(q, vec3(0.0, 1.0, 0.0));
+        return shadow_at(q - Lr * (q.y / Lr.y), vec3(0.0, 1.0, 0.0));
+    }
 
     /* the house and garden: albedo by kind, at a point with a normal.  Kinds from
      * 10 up; the basin's own faces are 0 .. 3 */
@@ -178,9 +212,11 @@ static const char *fs_bg = GLSL(
     in vec2 v_ndc;
     uniform vec3 u_fwd; uniform vec3 u_right; uniform vec3 u_up;
     uniform float u_tanhalf; uniform float u_aspect;
+    uniform float u_mirror;   /* 1: the sky as the water mirrors it */
     out vec4 o;
     void main() {
         vec3 d = normalize(u_fwd + u_tanhalf * (v_ndc.x * u_aspect * u_right + v_ndc.y * u_up));
+        if (u_mirror > 0.5) d.y = -d.y;
         o = vec4(gam(sky(d)), 1.0);
     }
 );
@@ -264,6 +300,10 @@ static const char *fs_surf = GLSL(
     uniform vec3 u_mu;
     uniform sampler2D u_light;
     uniform float u_lscale;
+    uniform float u_refl;     /* 1: the setting is mirrored in the water */
+    uniform sampler2D u_refl_tex;
+    uniform mat4 u_vpref;     /* world -> the mirrored view the reflection was drawn in */
+    uniform float u_rd;       /* how far off the reflected things are, metres: sets how far a tilt displaces them */
     out vec4 o;
 
     bool in_basin(vec2 q) {
@@ -302,7 +342,7 @@ static const char *fs_surf = GLSL(
                 vec3 col = pattern(Q.xz, u_tile, u_style);
                 if (in_basin(Q.xz)) {
                     float lm = texture(u_light, Q.xz / u_L).r * u_lscale;
-                    c = col * (0.30 + 0.70 * lm);
+                    c = col * (0.30 + 0.70 * lm * shadow_under(Q));
                 } else {
                     c = col * (0.35 + 0.65 * max(u_sun.y, 0.0));
                 }
@@ -326,7 +366,7 @@ static const char *fs_surf = GLSL(
             else {
                 vec3 Q = P + tv * T;
                 float lm = texture(u_light, Q.xz / u_L).r * u_lscale;
-                c = pattern(Q.xz, u_tile, u_style) * (0.30 + 0.70 * lm);
+                c = pattern(Q.xz, u_tile, u_style) * (0.30 + 0.70 * lm * shadow_under(Q));
             }
         }
         vec3 att = exp(-u_mu * max(path, 0.0));
@@ -343,7 +383,17 @@ static const char *fs_surf = GLSL(
             float F = R0 + (1.0 - R0) * pow(1.0 - cv, 5.0);
             vec3 R = reflect(-V, N);
             vec3 T = refract(-V, N, 1.0 / 1.333);
-            c = mix(inside(v_pos, T), sky(R), F);
+            vec3 rc;
+            if (u_refl > 0.5) {
+                /* the mirrored scene, looked up where the reflected ray, u_rd metres out,
+                 * lands in the mirrored view: flat water finds the image straight below
+                 * the house, and every tilt of the surface shifts it as far as it should */
+                vec3 Rr = vec3(R.x, max(R.y, 0.01), R.z);
+                vec4 cq = u_vpref * vec4(v_pos + Rr * u_rd, 1.0);
+                vec2 uv = clamp(cq.xy / max(cq.w, 1e-4) * 0.5 + 0.5, vec2(0.001), vec2(0.999));
+                rc = pow(texture(u_refl_tex, uv).rgb, vec3(2.2)) + sun_term(R) * shadow_at(v_pos, vec3(0.0, 1.0, 0.0));
+            } else rc = sky(R);
+            c = mix(inside(v_pos, T), rc, F);
         } else {
             vec3 Nn = -N;
             float cv = max(dot(Nn, V), 0.0);
@@ -556,7 +606,7 @@ static const char *fs_solid = GLSL(
             /* interior floor: lit by the caustic map, seen through water along the
              * path from here towards the camera until it leaves the basin box */
             float lm = texture(u_light, v_pos.xz / u_L).r * u_lscale;
-            c = pattern(v_pos.xz, u_tile, u_style) * (0.30 + 0.70 * lm);
+            c = pattern(v_pos.xz, u_tile, u_style) * (0.30 + 0.70 * lm * shadow_at(v_pos, vec3(0.0, 1.0, 0.0)));
             vec3 D = u_cam - v_pos;
             float dist = length(D); D /= dist;
             float t = dist;
@@ -577,7 +627,7 @@ static const char *fs_solid = GLSL(
             c = c * att + SCATTER * (1.0 - att);
         } else if (v_kind > 9.5) {
             /* the coping round a basin sunk in the terrace */
-            c = scene_albedo(v_kind, v_pos, N) * (0.35 + 0.65 * max(dot(N, u_sun), 0.0));
+            c = scene_albedo(v_kind, v_pos, N) * (0.35 + 0.65 * max(dot(N, u_sun), 0.0) * shadow_at(v_pos, N));
         } else {
             /* kind 1: wall or slab face; kind 3: floor outside the basin. Both sunlit. */
             vec2 q = abs(N.x) > 0.5 ? vec2(v_pos.z, v_pos.y) : (abs(N.z) > 0.5 ? vec2(v_pos.x, v_pos.y) : v_pos.xz);
@@ -595,8 +645,10 @@ static const char *fs_scene = GLSL(
     in float v_kind;
     uniform vec3 u_cam;
     uniform float u_fog;      /* metres: the haze's e-folding distance */
+    uniform float u_clip;     /* 1 in the reflection pass: nothing below the water */
     out vec4 o;
     void main() {
+        if (u_clip > 0.5 && v_pos.y < 0.0) discard;
         vec3 N = normalize(v_nrm);
         vec3 V = u_cam - v_pos;
         float dist = length(V); V /= dist;
@@ -638,6 +690,7 @@ static const char *fs_scene = GLSL(
             vec3 alb = scene_albedo(v_kind, v_pos, N);
             float diff = max(dot(N, u_sun), 0.0);
             if (v_kind > 18.5 && v_kind < 20.5) diff = max(diff, 0.35 * max(-dot(N, u_sun), 0.0));   /* leaves let light through */
+            diff *= shadow_at(v_pos, N);
             c = lit(alb * (0.30 + 0.10 * N.y + 0.72 * diff * sunc));
         }
         /* haze: towards the horizon's own colour */
@@ -645,6 +698,11 @@ static const char *fs_scene = GLSL(
         vec3 hz = sky(normalize(vec3(-V.x, 0.015, -V.z)));
         o = vec4(gam(mix(c, hz, f)), 1.0);
     }
+);
+
+static const char *fs_depth = GLSL(
+    out vec4 o;
+    void main() { o = vec4(1.0); }
 );
 
 /* --- water body side faces (visible through glass walls) --- */
@@ -798,7 +856,11 @@ struct view3d {
 
     GLuint p_bg, p_surf, p_solid, p_sides, p_glass, p_ovl, p_caus, p_fill, p_mark, p_scene;
     GLuint vao_scene, vbo_scene; int n_scene;
+    int cast_off, cast_n;           /* the part of it that casts shadows: not the ground, not the hills */
     int scene_on, scene_dirty;      /* the house is drawn; its geometry needs rebuilding */
+    GLuint p_depth;
+    GLuint fbo_sh, tex_sh; int sh_size, sh_valid; float sh_sun[3]; float lvp[16], sbias;   /* the sun's shadow map */
+    GLuint fbo_rf, tex_rf, rb_rf; int rf_w, rf_h;                  /* the reflection, half the window */
     GLuint vao_mark, vbo_mark; int n_mark;
     GLuint vao_obj, vbo_obj;
     GLuint vao_caus, vbo_caus, ebo_caus; int n_caus_int, n_caus_all;   /* caustic mesh (rect: padded grid; disk: light-map grid) */
@@ -841,6 +903,12 @@ static void mat_lookat(float *m, const float *eye, const float *fwd, const float
     m[2] = -fwd[0];  m[6] = -fwd[1];  m[10] = -fwd[2];  m[14] =  (fwd[0]*eye[0] + fwd[1]*eye[1] + fwd[2]*eye[2]);
     m[3] = 0; m[7] = 0; m[11] = 0; m[15] = 1;
 }
+static void mat_ortho(float *m, float l, float r, float b, float t, float n, float f)
+{
+    memset(m, 0, 16 * sizeof(float));
+    m[0] = 2.0f / (r - l); m[5] = 2.0f / (t - b); m[10] = -2.0f / (f - n);
+    m[12] = -(r + l) / (r - l); m[13] = -(t + b) / (t - b); m[14] = -(f + n) / (f - n); m[15] = 1.0f;
+}
 static void mat_mul(float *r, const float *a, const float *b)   /* r = a * b */
 {
     float t[16];
@@ -870,9 +938,9 @@ static GLuint compile(GLenum type, const char *const *parts, int nparts)
 
 static GLuint program(const char *vs, const char *fs, int sides)
 {
-    const char *vp[3] = { glsl_header, glsl_common, vs };
-    const char *fp[3] = { glsl_header, glsl_common, fs };
-    GLuint v = compile(GL_VERTEX_SHADER, vp, 3), f = compile(GL_FRAGMENT_SHADER, fp, 3);
+    const char *vp[4] = { glsl_header, glsl_common, glsl_common2, vs };
+    const char *fp[4] = { glsl_header, glsl_common, glsl_common2, fs };
+    GLuint v = compile(GL_VERTEX_SHADER, vp, 4), f = compile(GL_FRAGMENT_SHADER, fp, 4);
     if (!v || !f) return 0;
     GLuint p = glCreateProgram();
     glAttachShader(p, v); glAttachShader(p, f);
@@ -1245,6 +1313,7 @@ static void build_scene(view3d *v)
         }
     }
 
+    v->cast_off = g.n;
     /* the house: 18 m of it behind the basin, its front 3.5 m back from the water */
     {
         const float hx0 = pcx - 9.5f, hx1 = pcx + 8.5f, zf = pcz + Z0, zb = zf - 8.0f;
@@ -1303,6 +1372,7 @@ static void build_scene(view3d *v)
     blob(&g, pcx + X0 - 1.0f, yl, pcz - 4.5f, 1.0f, 0.9f, 20.0f);
     blob(&g, pcx + X1 + 1.2f, yl, pcz + Z0 - 1.0f, 1.0f, 0.9f, 20.0f);
 
+    v->cast_n = g.n - v->cast_off;
     /* low hills on the horizon, 220 m off */
     {
         const int NH = 180;
@@ -1320,6 +1390,7 @@ static void build_scene(view3d *v)
     }
 
     v->n_scene = g.n;
+    v->sh_valid = 0;
     glBindBuffer(GL_ARRAY_BUFFER, v->vbo_scene);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(float) * 7 * (size_t)(g.n ? g.n : 1)), g.b, GL_STATIC_DRAW);
     free(g.b);
@@ -1579,7 +1650,8 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
     v->p_mark  = program(vs_mark, fs_mark, 0);
     v->p_res   = program(vs_resample, fs_resample, 0);
     v->p_scene = program(vs_solid, fs_scene, 0);
-    if (!v->p_scene || !v->p_res || !v->p_blur || !v->p_bg || !v->p_surf || !v->p_solid || !v->p_sides || !v->p_glass || !v->p_ovl || !v->p_caus || !v->p_fill || !v->p_mark) { free(v); return NULL; }
+    v->p_depth = program(vs_solid, fs_depth, 0);
+    if (!v->p_depth || !v->p_scene || !v->p_res || !v->p_blur || !v->p_bg || !v->p_surf || !v->p_solid || !v->p_sides || !v->p_glass || !v->p_ovl || !v->p_caus || !v->p_fill || !v->p_mark) { free(v); return NULL; }
 
     glGenVertexArrays(1, &v->vao_empty);
     glGenVertexArrays(1, &v->vao_surf); glGenBuffers(1, &v->vbo_surf); glGenBuffers(1, &v->ebo_surf);
@@ -1693,6 +1765,29 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
     }
     printf("caustics: %s\n", v->gpu_caustics ? "GPU" : "CPU");
 
+    /* the sun's shadow map, for the setting: a depth texture, read by hand (3 x 3 PCF) */
+    v->sh_size = 2048;
+    glGenTextures(1, &v->tex_sh);
+    glBindTexture(GL_TEXTURE_2D, v->tex_sh);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, v->sh_size, v->sh_size, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+    glGenFramebuffers(1, &v->fbo_sh);
+    glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_sh);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, v->tex_sh, 0);
+    { const GLenum none = GL_NONE; glDrawBuffers(1, &none); glReadBuffer(GL_NONE); }
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        fprintf(stderr, "no depth render target: the setting will have no shadows\n");
+        glDeleteFramebuffers(1, &v->fbo_sh); v->fbo_sh = 0;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    /* the reflection: colour texture and depth, sized on first use */
+    glGenTextures(1, &v->tex_rf);
+    glGenFramebuffers(1, &v->fbo_rf);
+    glGenRenderbuffers(1, &v->rb_rf);
+
     glGenTextures(1, &v->tex_ovl);
     glBindTexture(GL_TEXTURE_2D, v->tex_ovl);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -1721,6 +1816,9 @@ void view3d_destroy(view3d *v)
     if (v->fbo_lm) glDeleteFramebuffers(1, &v->fbo_lm);
     if (v->fbo_lm2) glDeleteFramebuffers(1, &v->fbo_lm2);
     if (v->fbo_hc) glDeleteFramebuffers(1, &v->fbo_hc);
+    if (v->fbo_sh) glDeleteFramebuffers(1, &v->fbo_sh);
+    if (v->fbo_rf) glDeleteFramebuffers(1, &v->fbo_rf);
+    if (v->rb_rf) glDeleteRenderbuffers(1, &v->rb_rf);
     if (v->ctx) SDL_GL_DeleteContext(v->ctx);
     free(v);
 }
@@ -2403,6 +2501,16 @@ static void set_common(view3d *v, GLuint p, const view3d_params *prm, const floa
     if ((l = U(p, "u_time")) >= 0) glUniform1f(l, v->time);
     if ((l = U(p, "u_sunny")) >= 0) glUniform1f(l, v->scene_on ? 1.0f : 0.0f);
     if ((l = U(p, "u_fog")) >= 0) glUniform1f(l, 260.0f);
+    if ((l = U(p, "u_shadow")) >= 0) glUniform1i(l, 2);
+    if ((l = U(p, "u_refl_tex")) >= 0) glUniform1i(l, 3);
+    if ((l = U(p, "u_shadow_on")) >= 0) glUniform1f(l, (v->scene_on && v->sh_valid) ? 1.0f : 0.0f);
+    if ((l = U(p, "u_lvp")) >= 0) glUniformMatrix4fv(l, 1, GL_FALSE, v->lvp);
+    if ((l = U(p, "u_sbias")) >= 0) glUniform1f(l, v->sbias);
+    if ((l = U(p, "u_nosun")) >= 0) glUniform1f(l, 0.0f);
+    if ((l = U(p, "u_mirror")) >= 0) glUniform1f(l, 0.0f);
+    if ((l = U(p, "u_clip")) >= 0) glUniform1f(l, 0.0f);
+    if ((l = U(p, "u_refl")) >= 0) glUniform1f(l, (v->scene_on && v->rf_w > 0) ? 1.0f : 0.0f);
+    if ((l = U(p, "u_rd")) >= 0) glUniform1f(l, 12.0f);
     if ((l = U(p, "u_cam")) >= 0) glUniform3f(l, v->cam[0], v->cam[1], v->cam[2]);
     if ((l = U(p, "u_L")) >= 0) glUniform2f(l, v->Lx, v->Ly);
     if ((l = U(p, "u_depth")) >= 0) glUniform1f(l, v->depth);
@@ -2423,6 +2531,118 @@ static void set_common(view3d *v, GLuint p, const view3d_params *prm, const floa
     if ((l = U(p, "u_light")) >= 0) glUniform1i(l, 1);
 }
 
+/* The sun's shadow map: the casters seen from the sun, orthographically, fitted to
+ * the box they occupy.  Redrawn only when the sun moves or the setting is rebuilt. */
+static void shadow_pass(view3d *v, const view3d_params *p)
+{
+    if (!v->fbo_sh) return;
+    const float *s = p->sun;
+    if (v->sh_valid && fabsf(s[0] - v->sh_sun[0]) + fabsf(s[1] - v->sh_sun[1]) + fabsf(s[2] - v->sh_sun[2]) < 1e-5f) return;
+    const float ax = 0.5f * v->Lx, az = 0.5f * v->Ly, pcx = ax, pcz = az;
+    /* the casters' box: house, cabana, palms and their crowns */
+    const float bx0 = pcx - ax - 14.0f, bx1 = pcx + ax + 17.0f, by0 = -1.0f, by1 = 14.0f, bz0 = pcz - az - 18.0f, bz1 = pcz + az + 12.0f;
+    float fwd[3] = { -s[0], -s[1], -s[2] }, right[3], up[3];
+    v3norm(fwd);
+    float wup[3] = { 0, 1, 0 };
+    if (fabsf(fwd[1]) > 0.99f) { wup[1] = 0; wup[2] = 1; }
+    v3cross(fwd, wup, right); v3norm(right);
+    v3cross(right, fwd, up); v3norm(up);
+    const float eye[3] = { 0.5f * (bx0 + bx1), 0.5f * (by0 + by1), 0.5f * (bz0 + bz1) };
+    float view[16], proj[16];
+    mat_lookat(view, eye, fwd, right, up);
+    float lo[3] = { 1e30f, 1e30f, 1e30f }, hi[3] = { -1e30f, -1e30f, -1e30f };
+    for (int c = 0; c < 8; c++) {
+        const float P[3] = { (c & 1) ? bx1 : bx0, (c & 2) ? by1 : by0, (c & 4) ? bz1 : bz0 };
+        for (int k = 0; k < 3; k++) {
+            const float q = view[k] * P[0] + view[4 + k] * P[1] + view[8 + k] * P[2] + view[12 + k];
+            if (q < lo[k]) lo[k] = q;
+            if (q > hi[k]) hi[k] = q;
+        }
+    }
+    /* the receivers lie below the casters' box, as far down as the pool floor: extend the far plane */
+    const float n = -hi[2] - 1.0f, f = -lo[2] + v->depth + 30.0f;
+    mat_ortho(proj, lo[0], hi[0], lo[1], hi[1], n, f);
+    mat_mul(v->lvp, proj, view);
+    v->sbias = 0.04f / (f - n) * 2.0f;          /* 4 cm, in [0,1] depth */
+    glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_sh);
+    glViewport(0, 0, v->sh_size, v->sh_size);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(1.5f, 2.0f);
+    glUseProgram(v->p_depth);
+    glUniformMatrix4fv(U(v->p_depth, "u_vp"), 1, GL_FALSE, v->lvp);
+    glBindVertexArray(v->vao_scene);
+    glDrawArrays(GL_TRIANGLES, v->cast_off, v->cast_n);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    memcpy(v->sh_sun, s, sizeof v->sh_sun);
+    v->sh_valid = 1;
+}
+
+/* The setting as the water mirrors it: the sky and the scene drawn through the camera
+ * reflected in the plane of the still water, into a texture half the window's size. */
+static void reflection_pass(view3d *v, const view3d_params *p, const float *vp, float *vpref)
+{
+    const int rw = v->W / 2 > 1 ? v->W / 2 : 1, rh = v->H / 2 > 1 ? v->H / 2 : 1;
+    if (rw != v->rf_w || rh != v->rf_h) {
+        glBindTexture(GL_TEXTURE_2D, v->tex_rf);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, rw, rh, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glBindRenderbuffer(GL_RENDERBUFFER, v->rb_rf);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, rw, rh);
+        glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_rf);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, v->tex_rf, 0);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, v->rb_rf);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            fprintf(stderr, "no reflection target: the water will mirror the sky only\n");
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDeleteFramebuffers(1, &v->fbo_rf); v->fbo_rf = 0;
+            v->rf_w = v->rf_h = 0;
+            return;
+        }
+        v->rf_w = rw; v->rf_h = rh;
+    }
+    /* y -> -y, then the camera's own view and projection */
+    static const float S[16] = { 1,0,0,0, 0,-1,0,0, 0,0,1,0, 0,0,0,1 };
+    mat_mul(vpref, vp, S);
+    glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_rf);
+    glViewport(0, 0, rw, rh);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    /* the sky, mirrored, without the sun's disc (the water adds that back at full strength) */
+    glDisable(GL_DEPTH_TEST);
+    set_common(v, v->p_bg, p, vp);
+    glUniform3f(U(v->p_bg, "u_fwd"), v->fwd[0], v->fwd[1], v->fwd[2]);
+    glUniform3f(U(v->p_bg, "u_right"), v->right[0], v->right[1], v->right[2]);
+    glUniform3f(U(v->p_bg, "u_up"), v->up[0], v->up[1], v->up[2]);
+    glUniform1f(U(v->p_bg, "u_tanhalf"), v->tanhalf);
+    glUniform1f(U(v->p_bg, "u_aspect"), v->aspect);
+    glUniform1f(U(v->p_bg, "u_mirror"), 1.0f);
+    glUniform1f(U(v->p_bg, "u_nosun"), 1.0f);
+    glBindVertexArray(v->vao_empty);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    /* the scene, from the mirrored eye, nothing below the water */
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    const float cy = v->cam[1];
+    v->cam[1] = -cy;
+    set_common(v, v->p_scene, p, vpref);
+    v->cam[1] = cy;
+    glUniform1f(U(v->p_scene, "u_clip"), 1.0f);
+    glUniform1f(U(v->p_scene, "u_nosun"), 1.0f);
+    glBindVertexArray(v->vao_scene);
+    glDrawArrays(GL_TRIANGLES, 0, v->n_scene);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 void view3d_render(view3d *v, const wave *w, const view3d_params *p)
 {
     update_camera(v);
@@ -2440,6 +2660,20 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
     mat_perspective(proj, 45.0f * (float)M_PI / 180.0f, v->aspect, 0.01f * L, v->scene_on ? fmaxf(40.0f * L, 600.0f) : 40.0f * L);
     mat_lookat(view, v->cam, v->fwd, v->right, v->up);
     mat_mul(vp, proj, view);
+
+    /* the setting's light: the sun's shadow map, then the water's mirror image */
+    float vpref[16];
+    memcpy(vpref, vp, sizeof vpref);
+    if (v->scene_on) {
+        shadow_pass(v, p);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, v->tex_sh);
+        glActiveTexture(GL_TEXTURE0);
+        if (v->fbo_rf) reflection_pass(v, p, vp, vpref);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, v->tex_rf);
+        glActiveTexture(GL_TEXTURE0);
+    }
 
     /* per-frame data */
     const int m = p->glass;   /* 0 opaque, 1 floor only, 2 glass walls, 3 glass walls+bottom, 4 nothing */
@@ -2488,6 +2722,7 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
     }
 
     set_common(v, v->p_surf, p, vp);
+    glUniformMatrix4fv(U(v->p_surf, "u_vpref"), 1, GL_FALSE, vpref);
     glBindVertexArray(v->vao_surf);
     glDrawElements(GL_TRIANGLES, v->n_surf_idx, GL_UNSIGNED_INT, (void *)0);
 
