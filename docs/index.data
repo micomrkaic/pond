@@ -66,6 +66,47 @@ at 54   warp 0.25
 
 at 75   warp 1   say ""
 at 75   loop
+# pond: a house by the pool.               ./pond --script demos/house.pond
+#
+# The 12 m pool sunk in a terrace, a low house with a glass wall under a deep
+# roof, a cabana, palms, a lawn running out to the hills.  A day, a breeze,
+# some rain at night, and the round pool.  Four minutes, on a loop.
+
+at 0     clear  shape rect  preset pool  glass opaque  floor tiles  setting house  damping 0.05
+at 0     rain off  breeze off  wind 0  paddle off  boat off  floats 0  shake off  view off
+at 0     sun-elev 55  sun-azim 100
+at 0     camera 35,32,1.9
+at 0     say "a house by the pool"
+at 2     yaw -= 50 over 40
+at 4     drop 0.3,0.6 0.05
++3       drop 0.7,0.35 0.04
+at 20    breeze on  breeze-gain 0.4
+at 20    say "a breath of wind across the water"
+at 44    pitch 14 over 16  dist 1.3 over 16
+at 44    say "from the lawn"
+at 62    floats 4
+at 66    yaw += 40 over 50
+at 80    sun-elev 4 over 40  sun-azim 250 over 40
+at 82    say "afternoon into dusk"
+at 122   sun-elev -15 over 12
+at 124   say "night: the rooms light up"
+at 140   rain on  rain-rate 3
+at 140   say "rain at night"
+at 160   rain off  floats 0
+at 162   sun-elev 55 over 16  sun-azim 100 over 16  camera 20,34,1.9 over 16
+at 164   say "morning"
+at 182   breeze off
+at 184   clear
+at 185   shape disk
+at 185   camera 25,36,1.9
+at 185   say "the round pool"
+at 186   paddle on  paddle-span 1  paddle-freq 1.2  paddle-stroke 0.4  paddle-mark off
+at 188   yaw += 60 over 40
+at 228   paddle off  paddle-stroke 1  paddle-mark on
+at 230   say ""
+at 232   clear
+at 233   shape rect
+at 234   loop
 # the ring maker.                      ./pond --script demos/rings.pond
 
 at 0    clear  shape disk  preset 3  glass glass+bottom  rain off  breeze off
@@ -115,7 +156,7 @@ at 215   say ""
 at 220   loop
 # pond: everything it does, once.          ./pond --script demos/showcase.pond
 #
-# Ten minutes through every source, basin, container, light and sound the
+# Ten minutes through every source, basin, container, setting, light and sound the
 # program has, from the 30 cm tray to the 80 m sea.  Loops.  Escape stops it;
 # any key on a parameter the script is moving takes that parameter over.
 #
@@ -126,7 +167,7 @@ at 220   loop
 # --- the tray: millimetre water ------------------------------------------
 at 0     clear  shape rect  preset tray  glass opaque  floor checker  warp 1  gain 1  damping 0.03
 at 0     rain off  breeze off  wind 0  paddle off  boat off  floats 0  shake off
-at 0     nonlinear off  view off  paused off  paddle-mark on  paddle-stroke 1  drop-size 0
+at 0     nonlinear off  view off  paused off  paddle-mark on  paddle-stroke 1  drop-size 0  setting none
 at 0     sun-elev 50  sun-azim 200
 at 0     camera 30,50,2.0
 at 0     say "the 30 cm tray: millimetre water, where surface tension rules"
@@ -206,23 +247,26 @@ at 313   boat-speed 0.3 over 8
 at 313   say "slower: a short wake, and the floats settle"
 at 328   boat off  floats 0  damping 0.03
 
-# --- the sun ---------------------------------------------------------------
-at 329   breeze on  breeze-gain 0.5
-at 329   sun-elev 4 over 20  sun-azim 270 over 20  yaw += 60 over 60
-at 329   say "the sun is a parameter.  dusk: long glints, a red sky"
-at 351   sun-elev -15 over 15
-at 353   say "night: the moon on the water, and stars"
-at 375   sun-elev 50 over 15  sun-azim 200 over 15
-at 375   say "and morning"
+# --- the house, and the sun -------------------------------------------------
+at 329   setting house  breeze on  breeze-gain 0.5  sun-azim 100
+at 329   camera 15,22,1.7 over 8
+at 329   say "a setting: the pool in a terrace, a house, a cabana, palms"
+at 337   yaw += 40 over 60
+at 341   sun-elev 4 over 20  sun-azim 250 over 20
+at 341   say "the sun is a parameter.  dusk: long glints, a red sky"
+at 363   sun-elev -15 over 12
+at 365   say "night: the moon on the water, and the rooms lit"
+at 381   sun-elev 50 over 10  sun-azim 100 over 10
+at 381   say "and morning"
 at 391   breeze off
 
 # --- the disk ---------------------------------------------------------------
 at 393   clear
 at 394   shape disk  preset pool  glass opaque  floor tiles  damping 0.05
-at 394   sun-elev 35 over 4  sun-azim 30 over 4
+at 394   sun-elev 35 over 4  sun-azim 60 over 4
 at 394   paddle on  paddle-span 1  paddle-freq 1.2  paddle-pos 0.5  paddle-stroke 0.4
-at 394   camera 30,40,1.9
-at 394   say "a disk, the whole rim a wavemaker: rings converging on the centre"
+at 394   camera 20,40,1.9
+at 394   say "a round pool, the whole rim a wavemaker: rings converging on the centre"
 at 400   yaw += 120 over 50
 at 410   paddle-span 0.15 over 6
 at 410   say "a sector of the rim, going round"
@@ -235,7 +279,7 @@ at 452   paddle off  paddle-stroke 1  breeze-gain 1
 
 # --- the sea ----------------------------------------------------------------
 at 454   clear
-at 455   shape rect  preset sea  glass opaque  floor sand  damping 0.05
+at 455   shape rect  preset sea  glass opaque  floor sand  damping 0.05  setting none
 at 455   sun-elev 50  sun-azim 200
 at 455   wind 6  sound.breeze 1.5  sound.harsh 0.6
 at 455   camera 40,28,1.7 over 10
