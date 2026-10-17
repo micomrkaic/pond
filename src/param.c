@@ -296,6 +296,7 @@ G(g_fgain, a->finger_gain)          S(s_fgain, a->finger_gain = v)
 
 /* display */
 G(g_glass, a->p3.glass)             S(s_glass, a->p3.glass = (int)v)
+G(g_setting, a->p3.setting)         S(s_setting, a->p3.setting = (int)v)
 G(g_floor, a->p3.floor_style)       S(s_floor, a->rp.floor_style = a->p3.floor_style = (int)v)
 G(g_gain, a->p3.gain)               S(s_gain, a->rp.gain = a->p3.gain = (float)v)
 G(g_hud, a->show_hud)               S(s_hud, a->show_hud = v > 0.5)
@@ -335,6 +336,7 @@ static const char *const shape_names[]  = { "rect", "disk", NULL };
 static const char *const wall_names[]   = { "x=0", "x=Lx", "y=0", "y=Ly", NULL };
 static const char *const glass_names[]  = { "opaque", "floor", "glass", "glass+bottom", "none", NULL };
 static const char *const floor_names[]  = { "tiles", "checker", "sand", NULL };
+static const char *const setting_names[] = { "none", "house", NULL };
 
 #define B(name, grp, help, g, s)                  { name, PK_BOOL, grp, help, 0, 1, 0, 1, 0, 0, NULL, g, s }
 #define E(name, grp, help, names, g, s)           { name, PK_ENUM, grp, help, 0, 0, 1, 1, 0, 0, names, g, s }
@@ -375,6 +377,7 @@ static const param params[] = {
     /* display */
     E("glass", "display",   "the container: opaque, floor only, glass, glass+bottom, none", glass_names, g_glass, s_glass),
     E("floor", "display",   "floor pattern", floor_names, g_floor, s_floor),
+    E("setting", "display", "what is around the basin: none, or a house, terrace and garden (basins 4-40 m)", setting_names, g_setting, s_setting),
     RM("gain", "display",   "display gain on the height field", 0.01, 1000, 1.5, 0, g_gain, s_gain),
     B("hud", "display",     "the settings box, and the wavemaker outline", g_hud, s_hud),
     B("help", "display",    "the help panel", g_help, s_help),

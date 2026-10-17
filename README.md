@@ -73,6 +73,7 @@ appears only on devices without a fine pointer.
 | `PgUp` `PgDn` | zoom, same held behaviour (a factor of 2 per second) |
 | wheel, `o` / `Home` | zoom, reset camera |
 | `t` | container: opaque → floor only → glass walls → glass walls + bottom → none |
+| `` ` `` | setting: none → a house, terrace and garden round the basin (basins 4–40 m) |
 | `n` | basin shape: rectangle ↔ disk (the field starts over) |
 | `y` | nonlinear (HOS) correction on/off (rectangle only) |
 | `m` `a`/`A` | sound on/off, volume down/up |
@@ -225,8 +226,9 @@ then the program. Scripts do not clear the water between events unless told
 to; the old waves decaying under the new ones is the good part. (Do clear
 before shrinking a basin, though: 80 m of sea in a 3 m pond is a tsunami.)
 
-`demos/` has ten: `showcase` (every feature once, from the tray to the sea,
-ten minutes, loops), `tour` (a bit of everything, three minutes, loops),
+`demos/` has eleven: `showcase` (every feature once, from the tray to the sea,
+ten minutes, loops), `house` (the pool in its setting through a day, a
+breeze, rain at night, then the round pool), `tour` (a bit of everything, three minutes, loops),
 `wavemaker` (frequency, span, position, walls), `rings` (the disk with its
 rim as the wavemaker), `storm` (the sea under a rising and falling wind),
 `dispersion` (one drop in a still pool, then the same in the tray where the
@@ -744,6 +746,32 @@ costs nothing unless a glass face is on screen.
 Every drop pulls a bubble under — the one the ear already hears ring — and
 it is now drawn: a third of the crater's radius, starting a couple of radii
 down and rising back in half a second, visible through the glass.
+
+### The setting
+
+`setting house` (`` ` ``) puts the basin in a garden: a pale travertine
+terrace flush with the coping, 15 cm above the water; behind it a low
+mid-century house, 18 m long, salmon-pink end walls and a glass wall under a
+flat roof cantilevered 2.3 m over the terrace on slim steel posts, a stone
+chimney through the roof; a cabana with two loungers on the far side, two
+more loungers facing the water; palms and shrubs round the edges, a mown
+lawn running out to low hills 220 m off, hazed towards the horizon. The sky
+deepens and the pool's tiles turn a stronger blue while it is on.
+
+It is independent of the container (`t`): the walls stop 15 cm above the
+water and their top becomes the coping, but whether they are tiled, glass or
+absent is still yours to choose, and a ray that leaves the water through a
+glass wall finds earth, not sky. Everything is in metres, placed off the
+basin's centre and half-sizes, so the same house sits round any rectangle or
+disk from 4 to 40 m; outside that range nothing is drawn and the settings
+box says why.
+
+The glass wall has rooms behind it, found by following the view ray into a
+box 7.4 m deep with partitions every 4.8 m (interior mapping): floor,
+ceiling, a back wall with a picture on it, all dim by day under the sky's
+reflection, lit warm after sunset. The whole setting is a few thousand
+triangles drawn once a frame; it costs nothing measurable. It does not yet
+cast shadows, nor appear reflected in the water.
 
 ## Sound (`src/audio.c`, `src/dsp.c`)
 

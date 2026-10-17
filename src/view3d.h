@@ -30,6 +30,7 @@ typedef struct {
     int floor_style;   /* 0 tiles, 1 checkerboard, 2 sand */
     int glass;         /* 0 opaque; 1 floor only (walls invisible, floor continues as a table);
                           2 glass walls; 3 glass walls and bottom; 4 no container at all */
+    int setting;       /* 0 nothing around the basin; 1 a house with a terrace and garden (basins 4-40 m) */
     float sun[3];      /* unit vector towards the light (the sun, or the moon at night), y up */
     float day, dusk, lk; int night;   /* 1 at noon .. 0 at night; 1 with the sun on the horizon; the light level; moon */
     int cpu_caustics;  /* 1: force the CPU splat instead of the GPU pass */
@@ -56,6 +57,7 @@ view3d  *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics);   /* g
 void     view3d_destroy(view3d *v);
 
 void     view3d_set_pool(view3d *v, const wave *w);    /* rebuild the basin geometry */
+int      view3d_setting_fits(double Lx, double Ly);    /* 1 if the house fits this basin: 4..40 m */
 void     view3d_reset_camera(view3d *v, const wave *w);
 void     view3d_orbit(view3d *v, float dyaw_deg, float dpitch_deg);
 void     view3d_zoom(view3d *v, float factor);

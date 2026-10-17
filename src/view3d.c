@@ -64,6 +64,7 @@ static const char *glsl_common = GLSL(
     uniform float u_night;    /* 1 when the light is the moon */
     uniform float u_lk;       /* how much light there is to see by: 1 noon, ~0.12 moonlight */
     uniform float u_time;
+    uniform float u_sunny;    /* 1 with the house around the basin: a deeper sky, a bluer pool */
     const vec3 ZENITH  = vec3(0.30, 0.52, 0.86);
     const vec3 HORIZON = vec3(0.80, 0.86, 0.92);
     const vec3 GROUND  = vec3(0.07, 0.075, 0.09);
@@ -79,15 +80,17 @@ static const char *glsl_common = GLSL(
     vec3 sky(vec3 d) {
         float h = clamp(d.y, 0.0, 1.0);
         /* the day sky, warming at the horizon as the sun goes down */
-        vec3 hor = mix(HORIZON, vec3(1.00, 0.52, 0.28), 0.85 * u_dusk);
-        vec3 zen = mix(ZENITH, vec3(0.22, 0.26, 0.52), 0.75 * u_dusk);
+        vec3 hor0 = mix(HORIZON, vec3(0.66, 0.82, 0.96), u_sunny);
+        vec3 zen0 = mix(ZENITH, vec3(0.10, 0.36, 0.86), u_sunny);
+        vec3 hor = mix(hor0, vec3(1.00, 0.52, 0.28), 0.85 * u_dusk);
+        vec3 zen = mix(zen0, vec3(0.22, 0.26, 0.52), 0.75 * u_dusk);
         vec3 c;
         if (d.y >= 0.0) c = mix(hor, zen, sqrt(h));
-        else            c = mix(hor * 0.45, GROUND, pow(clamp(-d.y, 0.0, 1.0), 0.4));
+        else            c = mix(mix(hor * 0.45, GROUND, pow(clamp(-d.y, 0.0, 1.0), 0.4)), hor * 0.92, u_sunny);   /* the garden: haze to the ground */
         c *= u_day;
         /* the night sky, with stars */
         vec3 nz = vec3(0.012, 0.018, 0.045), nh = vec3(0.035, 0.040, 0.070);
-        vec3 n = d.y >= 0.0 ? mix(nh, nz, sqrt(h)) : mix(nh * 0.5, GROUND * 0.3, pow(clamp(-d.y, 0.0, 1.0), 0.4));
+        vec3 n = d.y >= 0.0 ? mix(nh, nz, sqrt(h)) : mix(mix(nh * 0.5, GROUND * 0.3, pow(clamp(-d.y, 0.0, 1.0), 0.4)), nh * 0.9, u_sunny);
         if (d.y > 0.02) {
             vec3 cell = floor(d * 90.0);
             float r = hash31(cell);
@@ -113,9 +116,9 @@ static const char *glsl_common = GLSL(
         if (style == 0) {
             vec2 u = q / tile;
             vec2 f = fract(u);
-            if (f.x < 0.045 || f.y < 0.045) return vec3(0.40, 0.44, 0.47);
+            if (f.x < 0.045 || f.y < 0.045) return mix(vec3(0.40, 0.44, 0.47), vec3(0.78, 0.84, 0.88), u_sunny);
             float b = 0.94 + 0.06 * hash21(floor(u));
-            return vec3(0.72, 0.80, 0.80) * b;
+            return mix(vec3(0.72, 0.80, 0.80), vec3(0.40, 0.66, 0.90), u_sunny) * b;
         } else if (style == 1) {
             float c = mod(floor(q.x / tile) + floor(q.y / tile), 2.0);
             return c > 0.5 ? vec3(0.88, 0.87, 0.80) : vec3(0.20, 0.26, 0.34);
@@ -125,6 +128,41 @@ static const char *glsl_common = GLSL(
         }
     }
     vec3 gam(vec3 c) { return pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)); }
+
+    /* the house and garden: albedo by kind, at a point with a normal.  Kinds from
+     * 10 up; the basin's own faces are 0 .. 3 */
+    vec3 scene_albedo(float k, vec3 p, vec3 n) {
+        if (k < 10.5) {                                   /* terrace: travertine slabs, 1.2 m */
+            vec2 q = (abs(n.y) > 0.5 ? p.xz : (abs(n.x) > 0.5 ? p.zy : p.xy)) / 1.2;
+            vec2 f = fract(q);
+            float j = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y));
+            float b = 0.93 + 0.07 * hash21(floor(q));
+            return vec3(0.93, 0.88, 0.79) * b * (j < 0.012 ? 0.80 : 1.0);
+        }
+        if (k < 11.5) return vec3(0.97, 0.95, 0.90);      /* coping */
+        if (k < 12.5) {                                   /* lawn, mown in stripes, with a slow mottle */
+            float s = 0.95 + 0.05 * smoothstep(0.35, 0.65, abs(fract(p.x / 2.4) * 2.0 - 1.0));
+            float m = 0.92 + 0.08 * sin(p.x * 0.31 + 1.3 * sin(p.z * 0.23)) * sin(p.z * 0.27 + 0.7);
+            return vec3(0.22, 0.43, 0.15) * s * m;
+        }
+        if (k < 13.5) return vec3(0.92, 0.36, 0.31);      /* the colour-washed walls: salmon pink */
+        if (k < 14.5) return vec3(0.96, 0.95, 0.92);      /* white render, fascia, soffit */
+        if (k < 15.5) return vec3(0.60, 0.58, 0.54) * (0.88 + 0.12 * hash21(floor(p.xz * 6.0)));   /* roof gravel */
+        if (k < 16.5) return vec3(0.0);                   /* glass: shaded on its own */
+        if (k < 17.5) {                                   /* stacked stone */
+            vec2 q = (abs(n.x) > 0.5 ? p.zy : p.xy) * vec2(2.4, 6.5);
+            q.x += 0.5 * mod(floor(q.y), 2.0);
+            vec2 f = fract(q);
+            float b = 0.78 + 0.22 * hash21(floor(q));
+            return vec3(0.74, 0.66, 0.55) * b * ((f.x < 0.05 || f.y < 0.08) ? 0.6 : 1.0);
+        }
+        if (k < 18.5) return vec3(0.52, 0.46, 0.38) * (0.82 + 0.18 * step(0.5, fract(p.y * 3.3)));   /* palm trunk, ringed */
+        if (k < 19.5) return vec3(0.22, 0.44, 0.14);      /* fronds */
+        if (k < 20.5) return vec3(0.17, 0.36, 0.14) * (0.85 + 0.15 * hash21(floor(p.xz * 5.0)));   /* shrubs */
+        if (k < 21.5) return vec3(0.11, 0.11, 0.12);      /* dark steel: posts, frames */
+        if (k < 22.5) return vec3(0.96, 0.95, 0.90);      /* loungers */
+        return vec3(0.42, 0.50, 0.40);                    /* far hills */
+    }
 );
 
 /* --- background sky: fullscreen triangle via gl_VertexID --- */
@@ -271,7 +309,7 @@ static const char *fs_surf = GLSL(
             }
         } else if (tw < tv) {
             path = tw;
-            if (u_walls == 1) c = sky(T);
+            if (u_walls == 1) c = u_sunny > 0.5 ? vec3(0.16, 0.13, 0.10) : sky(T);   /* sunk in the terrace: earth */
             else {
                 vec3 Q = P + tw * T;
                 vec2 q;
@@ -537,6 +575,9 @@ static const char *fs_solid = GLSL(
             }
             vec3 att = exp(-u_mu * max(t, 0.0));
             c = c * att + SCATTER * (1.0 - att);
+        } else if (v_kind > 9.5) {
+            /* the coping round a basin sunk in the terrace */
+            c = scene_albedo(v_kind, v_pos, N) * (0.35 + 0.65 * max(dot(N, u_sun), 0.0));
         } else {
             /* kind 1: wall or slab face; kind 3: floor outside the basin. Both sunlit. */
             vec2 q = abs(N.x) > 0.5 ? vec2(v_pos.z, v_pos.y) : (abs(N.z) > 0.5 ? vec2(v_pos.x, v_pos.y) : v_pos.xz);
@@ -544,6 +585,65 @@ static const char *fs_solid = GLSL(
             c = pattern(q, u_tile, u_style) * (0.35 + 0.65 * diff);
         }
         o = vec4(gam(lit(c)), 1.0);
+    }
+);
+
+/* --- the house and garden --- */
+static const char *fs_scene = GLSL(
+    in vec3 v_pos;
+    in vec3 v_nrm;
+    in float v_kind;
+    uniform vec3 u_cam;
+    uniform float u_fog;      /* metres: the haze's e-folding distance */
+    out vec4 o;
+    void main() {
+        vec3 N = normalize(v_nrm);
+        vec3 V = u_cam - v_pos;
+        float dist = length(V); V /= dist;
+        if (dot(N, V) < 0.0) N = -N;                       /* fronds and leaves: both sides */
+        vec3 sunc = mix(vec3(1.0), vec3(1.0, 0.62, 0.42), u_dusk);
+        vec3 c;
+        if (v_kind > 15.5 && v_kind < 16.5) {
+            /* glass: the sky in it at a glance, the room behind it straight on; the
+             * rooms light up after dark.  Mullions every 1.6 m, a transom at 2.3 m */
+            float cv = max(dot(N, V), 0.0);
+            float F = 0.08 + 0.92 * pow(1.0 - cv, 5.0);
+            float fx = fract(v_pos.x / 1.6), fy = v_pos.y - 0.15;
+            if (fx < 0.025 || abs(fy - 2.3) < 0.03) { c = lit(scene_albedo(21.0, v_pos, N) * 0.6); }
+            else {
+                /* the rooms behind: a box 7.4 m deep from floor to ceiling, partitioned
+                 * every 4.8 m, found by following the view ray in (interior mapping) */
+                vec3 D = -V;
+                float tb = 7.4 / max(-D.z, 1e-4), t = tb;
+                int face = 0;                                   /* 0 back, 1 floor, 2 ceiling, 3 partition */
+                if (D.y < 0.0) { float tf = (0.15 - v_pos.y) / D.y; if (tf < t) { t = tf; face = 1; } }
+                if (D.y > 0.0) { float tc = (2.95 - v_pos.y) / D.y; if (tc < t) { t = tc; face = 2; } }
+                float xr = v_pos.x / 4.8;
+                if (abs(D.x) > 1e-4) {
+                    float xs = (D.x > 0.0 ? floor(xr) + 1.0 : ceil(xr) - 1.0) * 4.8;
+                    float ts = (xs - v_pos.x) / D.x;
+                    if (ts < t) { t = ts; face = 3; }
+                }
+                vec3 Q = v_pos + t * D;
+                float room = floor((v_pos.x + 0.5 * t * D.x) / 4.8);
+                vec3 a = face == 0 ? vec3(0.86, 0.82, 0.74) : face == 1 ? vec3(0.50, 0.36, 0.24) : face == 2 ? vec3(0.82, 0.80, 0.74) : vec3(0.78, 0.66, 0.56);
+                if (face == 0 && abs(fract(Q.x / 4.8) - 0.5) < 0.18 && Q.y > 0.9 && Q.y < 2.0) a = vec3(0.20, 0.30, 0.40);   /* a picture on the back wall */
+                float shade = face == 1 ? 1.0 : face == 2 ? 0.55 : 0.8;
+                vec3 day = a * shade * (0.30 - 0.025 * t);       /* daylight through the glass, falling off inwards */
+                float lamp = (1.0 - u_day) * (0.45 + 0.55 * hash21(vec2(room, 7.0)));
+                vec3 glow = a * vec3(1.00, 0.74, 0.46) * 1.3 * lamp * shade * (1.0 - 0.06 * t);
+                c = mix(lit(max(day, vec3(0.0))) + glow, sky(reflect(-V, N)), F);
+            }
+        } else {
+            vec3 alb = scene_albedo(v_kind, v_pos, N);
+            float diff = max(dot(N, u_sun), 0.0);
+            if (v_kind > 18.5 && v_kind < 20.5) diff = max(diff, 0.35 * max(-dot(N, u_sun), 0.0));   /* leaves let light through */
+            c = lit(alb * (0.30 + 0.10 * N.y + 0.72 * diff * sunc));
+        }
+        /* haze: towards the horizon's own colour */
+        float f = 1.0 - exp(-max(dist - 60.0, 0.0) / u_fog);     /* clear air near the house */
+        vec3 hz = sky(normalize(vec3(-V.x, 0.015, -V.z)));
+        o = vec4(gam(mix(c, hz, f)), 1.0);
     }
 );
 
@@ -696,7 +796,9 @@ struct view3d {
     int slab_off, slab_n, walls_off, walls_n, table_off, table_n, inner_off, inner_n;
     float yaw, pitch, dist, cx, cz;
 
-    GLuint p_bg, p_surf, p_solid, p_sides, p_glass, p_ovl, p_caus, p_fill, p_mark;
+    GLuint p_bg, p_surf, p_solid, p_sides, p_glass, p_ovl, p_caus, p_fill, p_mark, p_scene;
+    GLuint vao_scene, vbo_scene; int n_scene;
+    int scene_on, scene_dirty;      /* the house is drawn; its geometry needs rebuilding */
     GLuint vao_mark, vbo_mark; int n_mark;
     GLuint vao_obj, vbo_obj;
     GLuint vao_caus, vbo_caus, ebo_caus; int n_caus_int, n_caus_all;   /* caustic mesh (rect: padded grid; disk: light-map grid) */
@@ -855,7 +957,9 @@ static void build_solid(view3d *v)
 {
     const float L = v->Lx, Lz = v->Ly, h = v->depth;
     const float Lmax = L > Lz ? L : Lz;
-    const float t = 0.03f * Lmax, fb = 0.06f * Lmax, E = 0.15f * Lmax;
+    /* sunk in the terrace, the walls stop 15 cm above the water, and their top is the coping */
+    const float t = 0.03f * Lmax, fb = v->scene_on ? 0.15f : 0.06f * Lmax, E = 0.15f * Lmax;
+    const float kt = v->scene_on ? 11.0f : 1.0f;
     float *buf;
     int n = 0;
     if (v->shape == 0) {
@@ -864,10 +968,10 @@ static void build_solid(view3d *v)
         box_faces(buf, &n, -t, L + t, -h - t, -h, -t, Lz + t, 0.0f, 1.0f);   /* slab: top face is the floor */
         v->slab_n = n - v->slab_off;
         v->walls_off = n;
-        box_faces(buf, &n, -t, 0.0f,  -h, fb, -t, Lz + t, 1.0f, 1.0f);
-        box_faces(buf, &n, L, L + t,  -h, fb, -t, Lz + t, 1.0f, 1.0f);
-        box_faces(buf, &n, 0.0f, L,   -h, fb, -t, 0.0f,   1.0f, 1.0f);
-        box_faces(buf, &n, 0.0f, L,   -h, fb, Lz, Lz + t, 1.0f, 1.0f);
+        box_faces(buf, &n, -t, 0.0f,  -h, fb, -t, Lz + t, kt, 1.0f);
+        box_faces(buf, &n, L, L + t,  -h, fb, -t, Lz + t, kt, 1.0f);
+        box_faces(buf, &n, 0.0f, L,   -h, fb, -t, 0.0f,   kt, 1.0f);
+        box_faces(buf, &n, 0.0f, L,   -h, fb, Lz, Lz + t, kt, 1.0f);
         v->walls_n = n - v->walls_off;
         /* a table the basin sits on when the walls are invisible: floor plane continues */
         v->table_off = n;
@@ -924,7 +1028,7 @@ static void build_solid(view3d *v)
             float qc[3] = { qb[0], fb, qb[2] }, qd[3] = { qa[0], fb, qa[2] };
             quad(buf, &n, qa, qb, qc, qd, no, 1.0f);
             /* top ring */
-            quad(buf, &n, pd, pc, qc, qd, up, 1.0f);
+            quad(buf, &n, pd, pc, qc, qd, up, kt);
         }
         v->walls_n = n - v->walls_off;
         v->table_off = n;
@@ -946,6 +1050,279 @@ static void build_solid(view3d *v)
     glBindBuffer(GL_ARRAY_BUFFER, v->vbo_solid);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(float) * 7 * n), buf, GL_STATIC_DRAW);
     free(buf);
+}
+
+/* ------------------------------------------------------------------ the house and garden
+ * Everything in metres, placed off the basin's centre and half-sizes, so it sits the
+ * same round any basin from 4 to 40 m.  The terrace is flush with the coping, 15 cm
+ * above the water; the lawn a step below it.  The house is behind the basin (-z),
+ * its glass wall facing the water under a deep cantilevered roof; a cabana on the
+ * -x side; palms and shrubs round the edges; low hills far off for a horizon. */
+typedef struct { float *b; int n, cap; } gbuf;
+static void gb_need(gbuf *g, int more)
+{
+    if (g->n + more <= g->cap) return;
+    while (g->n + more > g->cap) g->cap = g->cap ? 2 * g->cap : 4096;
+    g->b = realloc(g->b, sizeof(float) * 7 * (size_t)g->cap);
+}
+static void gb_box(gbuf *g, float x0, float x1, float y0, float y1, float z0, float z1, float ktop, float k)
+{ gb_need(g, 36); box_faces(g->b, &g->n, x0, x1, y0, y1, z0, z1, ktop, k); }
+static void gb_quad(gbuf *g, const float *a, const float *b, const float *c, const float *d, const float *nrm, float k)
+{ gb_need(g, 6); quad(g->b, &g->n, a, b, c, d, nrm, k); }
+static void gb_quadn(gbuf *g, const float *a, const float *b, const float *c, const float *d, float k)
+{
+    /* normal from the corners */
+    float e1[3] = { c[0]-a[0], c[1]-a[1], c[2]-a[2] }, e2[3] = { d[0]-b[0], d[1]-b[1], d[2]-b[2] }, nn[3];
+    v3cross(e1, e2, nn); v3norm(nn);
+    gb_quad(g, a, b, c, d, nn, k);
+}
+
+int view3d_setting_fits(double Lx, double Ly)
+{
+    const double L = Lx > Ly ? Lx : Ly;
+    return L >= 4.0 && L <= 40.0;
+}
+
+/* the basin's hole in the terrace, along direction (c, s) from its centre */
+static float hole_reach(const view3d *v, float c, float s, float t)
+{
+    if (v->shape == 1) return 0.5f * v->Lx + t;
+    const float ax = 0.5f * v->Lx + t, az = 0.5f * v->Ly + t;
+    float r = 1e30f;
+    if (fabsf(c) > 1e-7f) r = fminf(r, ax / fabsf(c));
+    if (fabsf(s) > 1e-7f) r = fminf(r, az / fabsf(s));
+    return r;
+}
+static float rect_reach(float c, float s, float x0, float x1, float z0, float z1)
+{
+    float r = 1e30f;
+    if (c > 1e-7f) r = fminf(r, x1 / c); else if (c < -1e-7f) r = fminf(r, x0 / c);
+    if (s > 1e-7f) r = fminf(r, z1 / s); else if (s < -1e-7f) r = fminf(r, z0 / s);
+    return r;
+}
+static int cmpf(const void *a, const void *b) { float x = *(const float *)a, y = *(const float *)b; return (x > y) - (x < y); }
+
+static void palm(gbuf *g, float bx, float by, float bz, float H, float lx, float lz, float seed)
+{
+    /* a trunk curving with the lean, thinning upwards, and a crown of drooping fronds */
+    const int SEG = 14, SIDES = 8;
+    float prev[SIDES + 1][3], cur[SIDES + 1][3];
+    float top[3] = { 0 };
+    for (int i = 0; i <= SEG; i++) {
+        float s = (float)i / SEG;
+        float cx = bx + lx * s * s, cy = by + H * s, cz = bz + lz * s * s;
+        float r = 0.24f * (1.0f - 0.45f * s) * (i == 0 ? 1.25f : 1.0f);
+        for (int k = 0; k <= SIDES; k++) {
+            float a = 2.0f * (float)M_PI * k / SIDES;
+            cur[k][0] = cx + r * cosf(a); cur[k][1] = cy; cur[k][2] = cz + r * sinf(a);
+        }
+        if (i > 0)
+            for (int k = 0; k < SIDES; k++) {
+                float a = 2.0f * (float)M_PI * (k + 0.5f) / SIDES, nrm[3] = { cosf(a), 0.0f, sinf(a) };
+                gb_quad(g, prev[k], prev[k + 1], cur[k + 1], cur[k], nrm, 18.0f);
+            }
+        memcpy(prev, cur, sizeof cur);
+        top[0] = cx; top[1] = cy; top[2] = cz;
+    }
+    const int NF = 13, FS = 7;
+    for (int f = 0; f < NF; f++) {
+        float az = 2.0f * (float)M_PI * (f + 0.37f * sinf(seed * 7.1f + f * 2.3f)) / NF + seed;
+        float len = 3.6f + 0.8f * sinf(seed * 3.0f + f * 1.7f);
+        float rise = 0.9f + 0.5f * cosf(seed + f * 2.9f);
+        float dx = cosf(az), dz = sinf(az), px = -dz, pz = dx;
+        float Lp[3], Rp[3], Lc[3], Rc[3];
+        for (int i = 0; i <= FS; i++) {
+            float u = (float)i / FS;
+            float w = 0.55f * sinf((float)M_PI * fminf(1.0f, u * 1.15f + 0.05f));
+            float cxp = top[0] + dx * len * u, cyp = top[1] + rise * u - 3.0f * u * u, czp = top[2] + dz * len * u;
+            /* leaflets droop either side of the rib: a shallow V */
+            Lc[0] = cxp + px * w; Lc[1] = cyp - 0.35f * w; Lc[2] = czp + pz * w;
+            Rc[0] = cxp - px * w; Rc[1] = cyp - 0.35f * w; Rc[2] = czp - pz * w;
+            float Cc[3] = { cxp, cyp, czp };
+            if (i > 0) {
+                float Cprev[3] = { top[0] + dx * len * (i - 1.0f) / FS, top[1] + rise * (i - 1.0f) / FS - 3.0f * ((i - 1.0f) / FS) * ((i - 1.0f) / FS), top[2] + dz * len * (i - 1.0f) / FS };
+                gb_quadn(g, Cprev, Cc, Lc, Lp, 19.0f);
+                gb_quadn(g, Cprev, Rp, Rc, Cc, 19.0f);
+            }
+            memcpy(Lp, Lc, sizeof Lc); memcpy(Rp, Rc, sizeof Rc);
+        }
+    }
+}
+
+static void blob(gbuf *g, float cx, float by, float cz, float r, float hy, float k)
+{
+    /* a shrub: a lumpy half-ellipsoid on the ground */
+    const int NA = 18, NB = 7;
+    float P[NB + 1][NA + 1][3], Nm[NB + 1][NA + 1][3];
+    for (int j = 0; j <= NB; j++)
+        for (int i = 0; i <= NA; i++) {
+            float th = 0.5f * (float)M_PI * j / NB, ph = 2.0f * (float)M_PI * i / NA;
+            float lump = 1.0f + 0.10f * sinf(3.0f * ph + cx) * cosf(2.0f * th + cz);
+            P[j][i][0] = cx + r * lump * cosf(th) * cosf(ph);
+            P[j][i][1] = by + hy * lump * sinf(th);
+            P[j][i][2] = cz + r * lump * cosf(th) * sinf(ph);
+            Nm[j][i][0] = cosf(th) * cosf(ph) / r; Nm[j][i][1] = sinf(th) / hy + (j == NB ? 1.0f : 0.0f); Nm[j][i][2] = cosf(th) * sinf(ph) / r;
+            v3norm(Nm[j][i]);
+        }
+    /* smooth: each corner keeps its own normal */
+    for (int j = 0; j < NB; j++)
+        for (int i = 0; i < NA; i++) {
+            const int cj[6] = { j, j, j + 1, j, j + 1, j + 1 }, ci[6] = { i, i + 1, i + 1, i, i + 1, i };
+            gb_need(g, 6);
+            for (int q = 0; q < 6; q++) {
+                float *o = g->b + 7 * (size_t)g->n++;
+                memcpy(o, P[cj[q]][ci[q]], 3 * sizeof(float));
+                memcpy(o + 3, Nm[cj[q]][ci[q]], 3 * sizeof(float));
+                o[6] = k;
+            }
+        }
+}
+
+static void lounger(gbuf *g, float x, float y0, float z, float dir)
+{
+    /* a sun lounger along z: a flat bed and a raised back at the far end (dir = +1 or -1) */
+    const float w = 0.34f;
+    float za = z, zb = z + dir * 1.35f;
+    gb_box(g, x - w, x + w, y0 + 0.24f, y0 + 0.32f, fminf(za, zb), fmaxf(za, zb), 22.0f, 22.0f);
+    gb_box(g, x - w, x - w + 0.05f, y0, y0 + 0.24f, fminf(za, zb), fminf(za, zb) + 0.05f, 21.0f, 21.0f);
+    gb_box(g, x + w - 0.05f, x + w, y0, y0 + 0.24f, fminf(za, zb), fminf(za, zb) + 0.05f, 21.0f, 21.0f);
+    gb_box(g, x - w, x - w + 0.05f, y0, y0 + 0.24f, fmaxf(za, zb) - 0.05f, fmaxf(za, zb), 21.0f, 21.0f);
+    gb_box(g, x + w - 0.05f, x + w, y0, y0 + 0.24f, fmaxf(za, zb) - 0.05f, fmaxf(za, zb), 21.0f, 21.0f);
+    float a[3] = { x - w, y0 + 0.32f, zb }, b[3] = { x + w, y0 + 0.32f, zb };
+    float c[3] = { x + w, y0 + 0.88f, zb + dir * 0.55f }, d[3] = { x - w, y0 + 0.88f, zb + dir * 0.55f };
+    gb_quadn(g, a, b, c, d, 22.0f);
+}
+
+static void build_scene(view3d *v)
+{
+    gbuf g = { 0 };
+    const float Lmax = v->Lx > v->Ly ? v->Lx : v->Ly;
+    const float t = 0.03f * Lmax;                         /* the walls' thickness, as in build_solid */
+    const float pcx = 0.5f * v->Lx, pcz = 0.5f * v->Ly;
+    const float ax = 0.5f * v->Lx, az = 0.5f * v->Ly;
+    const float y0 = 0.15f, yl = y0 - 0.06f;              /* terrace top (= coping), lawn */
+    /* the terrace, relative to the basin's centre */
+    const float X0 = -ax - 7.0f, X1 = ax + 5.0f, Z0 = -az - 3.5f, Z1 = az + 4.0f;
+    const float up[3] = { 0, 1, 0 };
+
+    /* terrace: a ring from the basin's hole out to its rectangle, fanned about the centre */
+    {
+        float ang[256 + 8];
+        int na = 0;
+        for (int i = 0; i < 256; i++) ang[na++] = -(float)M_PI + 2.0f * (float)M_PI * i / 256;
+        if (v->shape == 0) {
+            const float hx = ax + t, hz = az + t;
+            ang[na++] = atan2f(hz, hx); ang[na++] = atan2f(hz, -hx); ang[na++] = atan2f(-hz, -hx); ang[na++] = atan2f(-hz, hx);
+        }
+        ang[na++] = atan2f(Z1, X1); ang[na++] = atan2f(Z1, X0); ang[na++] = atan2f(Z0, X0); ang[na++] = atan2f(Z0, X1);
+        qsort(ang, (size_t)na, sizeof ang[0], cmpf);
+        for (int i = 0; i < na; i++) {
+            float a0 = ang[i], a1 = (i + 1 < na) ? ang[i + 1] : ang[0] + 2.0f * (float)M_PI;
+            if (a1 - a0 < 1e-6f) continue;
+            float c0 = cosf(a0), s0 = sinf(a0), c1 = cosf(a1), s1 = sinf(a1);
+            float r0 = hole_reach(v, c0, s0, t), r1 = hole_reach(v, c1, s1, t);
+            float R0 = rect_reach(c0, s0, X0, X1, Z0, Z1), R1 = rect_reach(c1, s1, X0, X1, Z0, Z1);
+            float p0[3] = { pcx + r0 * c0, y0, pcz + r0 * s0 }, p1[3] = { pcx + r1 * c1, y0, pcz + r1 * s1 };
+            float q1[3] = { pcx + R1 * c1, y0, pcz + R1 * s1 }, q0[3] = { pcx + R0 * c0, y0, pcz + R0 * s0 };
+            gb_quad(&g, p0, p1, q1, q0, up, 10.0f);
+        }
+        /* its edge, down to the lawn */
+        const float xa = pcx + X0, xb = pcx + X1, za = pcz + Z0, zb = pcz + Z1;
+        float c[4][3] = { { xa, 0, za }, { xb, 0, za }, { xb, 0, zb }, { xa, 0, zb } };
+        const float nn[4][3] = { { 0, 0, -1 }, { 1, 0, 0 }, { 0, 0, 1 }, { -1, 0, 0 } };
+        for (int e = 0; e < 4; e++) {
+            const float *A = c[e], *B = c[(e + 1) % 4];
+            float a0[3] = { A[0], yl, A[2] }, b0[3] = { B[0], yl, B[2] }, b1[3] = { B[0], y0, B[2] }, a1[3] = { A[0], y0, A[2] };
+            gb_quad(&g, a0, b0, b1, a1, nn[e], 10.0f);
+        }
+        /* the lawn, everywhere else: four strips round the terrace, out to the hills */
+        const float G = 260.0f;
+        const float gx0 = pcx - G, gx1 = pcx + G, gz0 = pcz - G, gz1 = pcz + G;
+        float s[4][4] = { { gx0, gx1, gz0, za }, { gx0, gx1, zb, gz1 }, { gx0, xa, za, zb }, { xb, gx1, za, zb } };
+        for (int e = 0; e < 4; e++) {
+            float A[3] = { s[e][0], yl, s[e][2] }, B[3] = { s[e][1], yl, s[e][2] }, C[3] = { s[e][1], yl, s[e][3] }, D[3] = { s[e][0], yl, s[e][3] };
+            gb_quad(&g, A, B, C, D, up, 12.0f);
+        }
+    }
+
+    /* the house: 18 m of it behind the basin, its front 3.5 m back from the water */
+    {
+        const float hx0 = pcx - 9.5f, hx1 = pcx + 8.5f, zf = pcz + Z0, zb = zf - 8.0f;
+        const float yw = y0 + 2.8f;                        /* the roof's underside */
+        gb_box(&g, hx0, hx1, yl, yw, zb, zb + 0.25f, 14.0f, 14.0f);               /* back wall */
+        gb_box(&g, hx0, hx0 + 0.3f, yl, yw, zb, zf, 13.0f, 13.0f);                /* end walls, colour-washed */
+        gb_box(&g, hx1 - 0.3f, hx1, yl, yw, zb, zf, 13.0f, 13.0f);
+        gb_box(&g, hx0, hx0 + 5.5f, yl, yw, zf - 0.3f, zf, 13.0f, 13.0f);         /* the solid bay of the front */
+        {
+            float a[3] = { hx0 + 5.5f, y0, zf - 0.15f }, b[3] = { hx1 - 0.3f, y0, zf - 0.15f };
+            float c[3] = { hx1 - 0.3f, yw, zf - 0.15f }, d[3] = { hx0 + 5.5f, yw, zf - 0.15f };
+            const float nz[3] = { 0, 0, 1 };
+            gb_quad(&g, a, b, c, d, nz, 16.0f);                                   /* the glass wall */
+            gb_box(&g, hx0 + 5.5f, hx1 - 0.3f, yl, y0 + 0.02f, zf - 0.3f, zf, 21.0f, 21.0f);   /* its sill */
+        }
+        /* the roof: a thin slab, deep over the terrace, white edges and gravel on top */
+        gb_box(&g, hx0 - 0.8f, hx1 + 1.6f, yw, yw + 0.32f, zb - 0.8f, zf + 2.3f, 15.0f, 14.0f);
+        /* slim posts under the overhang's edge */
+        for (int i = 0; i < 4; i++) {
+            float px = hx0 + 6.8f + 4.4f * i;
+            gb_box(&g, px - 0.06f, px + 0.06f, y0, yw, zf + 2.0f, zf + 2.12f, 21.0f, 21.0f);
+        }
+        /* the chimney, stacked stone, through the roof at the solid end */
+        gb_box(&g, hx0 + 1.4f, hx0 + 2.8f, yl, yw + 1.7f, zb + 2.2f, zb + 3.6f, 17.0f, 17.0f);
+        /* a planter of stone along the solid bay */
+        gb_box(&g, hx0 + 0.6f, hx0 + 4.9f, yl, y0 + 0.45f, zf + 0.25f, zf + 0.85f, 17.0f, 17.0f);
+        blob(&g, hx0 + 1.6f, y0 + 0.45f, zf + 0.55f, 0.55f, 0.55f, 20.0f);
+        blob(&g, hx0 + 3.7f, y0 + 0.45f, zf + 0.55f, 0.65f, 0.7f, 20.0f);
+    }
+
+    /* the cabana on the -x side: a roof on two posts and a pink back wall */
+    {
+        const float x0 = pcx - ax - 6.3f, x1 = pcx - ax - 2.2f, z0 = pcz - 1.9f, z1 = pcz + 2.4f, yr = y0 + 2.45f;
+        gb_box(&g, x0, x0 + 0.25f, yl, yr, z0, z1, 13.0f, 13.0f);
+        gb_box(&g, x0 - 0.2f, x1 + 0.3f, yr, yr + 0.22f, z0 - 0.3f, z1 + 0.3f, 15.0f, 14.0f);
+        gb_box(&g, x1 - 0.06f, x1 + 0.06f, y0, yr, z0 + 0.05f, z0 + 0.17f, 21.0f, 21.0f);
+        gb_box(&g, x1 - 0.06f, x1 + 0.06f, y0, yr, z1 - 0.17f, z1 - 0.05f, 21.0f, 21.0f);
+        lounger(&g, x0 + 1.4f, y0, z0 + 0.6f, 1.0f);
+        lounger(&g, x0 + 2.6f, y0, z0 + 0.6f, 1.0f);
+    }
+    /* two loungers on the near side, facing the water */
+    lounger(&g, pcx - 2.4f, y0, pcz + az + 1.4f, 1.0f);
+    lounger(&g, pcx - 1.2f, y0, pcz + az + 1.4f, 1.0f);
+
+    /* palms and shrubs round the edges */
+    /* a pair at the house's far corner, one leaning out over the terrace; one behind
+     * the roof; one by the cabana; one alone on the lawn */
+    palm(&g, pcx + 10.6f,     yl, pcz + Z0 - 1.2f,  8.6f, -1.6f,  1.4f, 0.3f);
+    palm(&g, pcx + 11.6f,     yl, pcz + Z0 + 0.2f,  6.8f,  0.8f,  0.9f, 1.9f);
+    palm(&g, pcx - 3.0f,      yl, pcz + Z0 - 9.8f,  9.6f,  0.7f, -0.4f, 3.1f);
+    palm(&g, pcx + X0 - 1.6f, yl, pcz - 3.6f,       7.6f, -0.9f, -0.5f, 4.4f);
+    palm(&g, pcx + X1 + 6.5f, yl, pcz + Z1 + 3.0f,  8.2f,  0.6f,  0.8f, 5.6f);
+    blob(&g, pcx + X1 + 1.3f, yl, pcz + 1.5f, 1.1f, 0.9f, 20.0f);
+    blob(&g, pcx + X1 + 1.1f, yl, pcz - 2.5f, 0.9f, 0.8f, 20.0f);
+    blob(&g, pcx + X0 - 1.2f, yl, pcz + 4.0f, 1.2f, 1.0f, 20.0f);
+    blob(&g, pcx + X0 - 1.0f, yl, pcz - 4.5f, 1.0f, 0.9f, 20.0f);
+    blob(&g, pcx + X1 + 1.2f, yl, pcz + Z0 - 1.0f, 1.0f, 0.9f, 20.0f);
+
+    /* low hills on the horizon, 220 m off */
+    {
+        const int NH = 180;
+        const float RH = 220.0f;
+        for (int i = 0; i < NH; i++) {
+            float a0 = 2.0f * (float)M_PI * i / NH, a1 = 2.0f * (float)M_PI * (i + 1) / NH;
+            float h0 = 7.0f + 6.0f * sinf(3.0f * a0 + 0.7f) + 3.5f * sinf(7.0f * a0 + 1.9f) + 1.5f * sinf(17.0f * a0);
+            float h1 = 7.0f + 6.0f * sinf(3.0f * a1 + 0.7f) + 3.5f * sinf(7.0f * a1 + 1.9f) + 1.5f * sinf(17.0f * a1);
+            float A[3] = { pcx + RH * cosf(a0), yl - 1.0f, pcz + RH * sinf(a0) }, B[3] = { pcx + RH * cosf(a1), yl - 1.0f, pcz + RH * sinf(a1) };
+            float C[3] = { B[0], yl + h1, B[2] }, D[3] = { A[0], yl + h0, A[2] };
+            float am = 0.5f * (a0 + a1), nrm[3] = { -cosf(am), 0.35f, -sinf(am) };
+            v3norm(nrm);
+            gb_quad(&g, A, B, C, D, nrm, 23.0f);
+        }
+    }
+
+    v->n_scene = g.n;
+    glBindBuffer(GL_ARRAY_BUFFER, v->vbo_scene);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(float) * 7 * (size_t)(g.n ? g.n : 1)), g.b, GL_STATIC_DRAW);
+    free(g.b);
 }
 
 static void build_surface(view3d *v)
@@ -1201,11 +1578,13 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
     v->p_blur  = program(vs_fill, fs_blur, 0);
     v->p_mark  = program(vs_mark, fs_mark, 0);
     v->p_res   = program(vs_resample, fs_resample, 0);
-    if (!v->p_res || !v->p_blur || !v->p_bg || !v->p_surf || !v->p_solid || !v->p_sides || !v->p_glass || !v->p_ovl || !v->p_caus || !v->p_fill || !v->p_mark) { free(v); return NULL; }
+    v->p_scene = program(vs_solid, fs_scene, 0);
+    if (!v->p_scene || !v->p_res || !v->p_blur || !v->p_bg || !v->p_surf || !v->p_solid || !v->p_sides || !v->p_glass || !v->p_ovl || !v->p_caus || !v->p_fill || !v->p_mark) { free(v); return NULL; }
 
     glGenVertexArrays(1, &v->vao_empty);
     glGenVertexArrays(1, &v->vao_surf); glGenBuffers(1, &v->vbo_surf); glGenBuffers(1, &v->ebo_surf);
     glGenVertexArrays(1, &v->vao_solid); glGenBuffers(1, &v->vbo_solid);
+    glGenVertexArrays(1, &v->vao_scene); glGenBuffers(1, &v->vbo_scene);
     glGenVertexArrays(1, &v->vao_sides); glGenBuffers(1, &v->vbo_sides); glGenBuffers(1, &v->ebo_sides);
     glGenVertexArrays(1, &v->vao_mark); glGenBuffers(1, &v->vbo_mark);
     glGenVertexArrays(1, &v->vao_obj); glGenBuffers(1, &v->vbo_obj);
@@ -1232,7 +1611,16 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void *)(3 * sizeof(float)));
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void *)(6 * sizeof(float)));
+    glBindVertexArray(v->vao_scene);
+    glBindBuffer(GL_ARRAY_BUFFER, v->vbo_scene);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void *)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void *)(3 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void *)(6 * sizeof(float)));
     glBindVertexArray(0);
+    v->scene_dirty = 1;
 
     build_surface(v);
     build_sides(v);
@@ -1344,6 +1732,7 @@ void view3d_set_pool(view3d *v, const wave *w)
     else { v->dx = (float)w->dx; v->dy = (float)w->dy; }
     v->cx = 0.5f * v->Lx; v->cz = 0.5f * v->Ly;
     build_solid(v);
+    v->scene_dirty = 1;
 }
 
 void view3d_reset_camera(view3d *v, const wave *w)
@@ -2012,6 +2401,8 @@ static void set_common(view3d *v, GLuint p, const view3d_params *prm, const floa
     if ((l = U(p, "u_night")) >= 0) glUniform1f(l, prm->night ? 1.0f : 0.0f);
     if ((l = U(p, "u_lk")) >= 0) glUniform1f(l, prm->lk);
     if ((l = U(p, "u_time")) >= 0) glUniform1f(l, v->time);
+    if ((l = U(p, "u_sunny")) >= 0) glUniform1f(l, v->scene_on ? 1.0f : 0.0f);
+    if ((l = U(p, "u_fog")) >= 0) glUniform1f(l, 260.0f);
     if ((l = U(p, "u_cam")) >= 0) glUniform3f(l, v->cam[0], v->cam[1], v->cam[2]);
     if ((l = U(p, "u_L")) >= 0) glUniform2f(l, v->Lx, v->Ly);
     if ((l = U(p, "u_depth")) >= 0) glUniform1f(l, v->depth);
@@ -2036,8 +2427,17 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
 {
     update_camera(v);
     const float L = v->Lx > v->Ly ? v->Lx : v->Ly;
+    {
+        const int on = p->setting == 1 && view3d_setting_fits(v->Lx, v->Ly);
+        if (on != v->scene_on || v->scene_dirty) {
+            v->scene_on = on;
+            build_solid(v);                   /* the walls' freeboard and coping follow the setting */
+            if (on) build_scene(v);
+            v->scene_dirty = 0;
+        }
+    }
     float proj[16], view[16], vp[16];
-    mat_perspective(proj, 45.0f * (float)M_PI / 180.0f, v->aspect, 0.01f * L, 40.0f * L);
+    mat_perspective(proj, 45.0f * (float)M_PI / 180.0f, v->aspect, 0.01f * L, v->scene_on ? fmaxf(40.0f * L, 600.0f) : 40.0f * L);
     mat_lookat(view, v->cam, v->fwd, v->right, v->up);
     mat_mul(vp, proj, view);
 
@@ -2081,6 +2481,11 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
     if (m == 0) { glDrawArrays(GL_TRIANGLES, v->slab_off, v->slab_n); glDrawArrays(GL_TRIANGLES, v->walls_off, v->walls_n); }
     if (m == 1) { glDrawArrays(GL_TRIANGLES, v->table_off, v->table_n); glDrawArrays(GL_TRIANGLES, v->inner_off, v->inner_n); }
     if (m == 2) { glDrawArrays(GL_TRIANGLES, v->slab_off, v->slab_n); }
+    if (v->scene_on) {
+        set_common(v, v->p_scene, p, vp);
+        glBindVertexArray(v->vao_scene);
+        glDrawArrays(GL_TRIANGLES, 0, v->n_scene);
+    }
 
     set_common(v, v->p_surf, p, vp);
     glBindVertexArray(v->vao_surf);
