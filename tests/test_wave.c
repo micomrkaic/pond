@@ -318,6 +318,69 @@ int main(void)
         wave_destroy(q);
     }
 
+    /* --- gusts: the same kicks through the grid with a mask of one are the plain breeze;
+     * a strong gust roughens its patch, and the basin as a whole gets the same energy --- */
+    {
+        const int n = 128;
+        const double L = 12.0, k0 = 2.0 * M_PI * 8.0 / L, amp = 3.0e-4 * L, dt = 1.0 / 60.0;
+        wave *u1 = wave_create(n, n, L, L, 2.0), *u2 = wave_create(n, n, L, L, 2.0);
+        wave_gusts one = { 1, 1.0f, { 6.0f }, { 6.0f }, { 1.0f }, { 0.0f } };
+        wave_breeze(u1, k0, amp, dt); wave_step(u1, dt, 0);
+        wave_breeze_gusty(u2, k0, amp, dt, &one); wave_step(u2, dt, 0);
+        double worst = 0, scale = 0;
+        for (int i = 0; i < n * n; i++) { worst = fmax(worst, fabs(u1->A[i] - u2->A[i])); scale = fmax(scale, fabs(u1->A[i])); }
+        ok = worst < 1e-4 * scale;
+        printf("gusty breeze with a mask of one is the plain breeze: max diff %.1e of the peak  %s\n", worst / scale, ok ? "ok" : "FAIL");
+        fails += !ok;
+        wave_destroy(u1); wave_destroy(u2);
+
+        /* 40 s of each: uniform, and one strong gust parked in the middle */
+        wave *a = wave_create(n, n, L, L, 2.0), *b = wave_create(n, n, L, L, 2.0);
+        wave_set_damping(a, 0.4); wave_set_damping(b, 0.4);
+        wave_gusts g = { 1, 0.25f, { 6.0f }, { 6.0f }, { 2.0f }, { 3.0f } };
+        double ea = 0, eb = 0, ein = 0, eout = 0; int nin = 0, nout = 0, samples = 0;
+        for (int it = 0; it < 60 * 40; it++) {
+            wave_breeze(a, k0, amp, dt); wave_step(a, dt, 4);
+            wave_breeze_gusty(b, k0, amp, dt, &g); wave_step(b, dt, 4);
+            if (it > 60 * 15 && it % 30 == 0) {
+                wave_realize(a); wave_realize(b);
+                for (int j = 0; j < n; j++)
+                    for (int i = 0; i < n; i++) {
+                        const double x = (i + 0.5) * a->dx - 6.0, y = (j + 0.5) * a->dy - 6.0, r = sqrt(x * x + y * y);
+                        const double ha = a->eta[i + n * j], hb = b->eta[i + n * j];
+                        ea += ha * ha; eb += hb * hb;
+                        /* slopes are what the eye sees; the height spreads by its group velocity */
+                        if (i > 0 && i < n - 1) {
+                            const double sx = (b->eta[i + 1 + n * j] - b->eta[i - 1 + n * j]) / (2 * b->dx);
+                            if (r < 1.5) { ein += sx * sx; nin++; }
+                            else if (r > 4.5) { eout += sx * sx; nout++; }
+                        }
+                    }
+                samples++;
+            }
+        }
+        const double ratio = sqrt((ein / nin) / (eout / nout)), en = sqrt(eb / ea);
+        ok = ratio > 1.5;
+        printf("a gust 2 m across: slopes under it %.2f times those away from it  %s\n", ratio, ok ? "ok" : "FAIL");
+        fails += !ok;
+        ok = en > 0.7 && en < 1.4;
+        printf("   and the basin's rms height %.2f of the even breeze's (same energy in, unevenly)  %s\n", en, ok ? "ok" : "FAIL");
+        fails += !ok;
+        wave_destroy(a); wave_destroy(b);
+
+        /* the disk takes the same path through its own transform */
+        wave *d = wave_create_disk(64, 32, 12.0, 2.0);
+        if (d) {
+            wave_gusts gd = { 2, 0.15f, { 4.0f, 8.0f }, { 6.0f, 5.0f }, { 2.0f, 1.5f }, { 2.0f, 1.0f } };
+            for (int it = 0; it < 120; it++) { wave_breeze_gusty(d, 2.0 * M_PI * 8.0 / 12.0, amp, dt, &gd); wave_step(d, dt, 2); }
+            double e = wave_norm(d);
+            ok = isfinite(e) && e > 0.0;
+            printf("the disk takes gusts too: energy %.2e, finite  %s\n", e, ok ? "ok" : "FAIL");
+            fails += !ok;
+            wave_destroy(d);
+        }
+    }
+
     printf("%s\n", fails ? "SOME TESTS FAILED" : "all wave tests passed");
     return fails ? 1 : 0;
 }

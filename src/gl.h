@@ -172,6 +172,7 @@ typedef void          GLvoid;
     X(void,          glUniform2i,               (GLint, GLint, GLint)) \
     X(void,          glUniform3f,               (GLint, GLfloat, GLfloat, GLfloat)) \
     X(void,          glUniform4f,               (GLint, GLfloat, GLfloat, GLfloat, GLfloat)) \
+    X(void,          glUniform4fv,              (GLint, GLsizei, const GLfloat*)) \
     X(void,          glUniformMatrix4fv,        (GLint, GLsizei, GLboolean, const GLfloat*)) \
     X(void,          glGenTextures,             (GLsizei, GLuint*)) \
     X(void,          glDeleteTextures,          (GLsizei, const GLuint*)) \

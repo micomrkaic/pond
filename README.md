@@ -777,6 +777,35 @@ slope in the shading only and faded with distance before they can alias
 (basins of 2 m and up; the tray's ripples are its own). `look animation` is
 the render as it was, and the physics underneath is the same in both.
 
+### Glitter and cat's paws
+
+Sunlight on real water is a field of sparkles, from facets far smaller than a
+pixel. The video look treats what the grid and the ripples cannot hold as a
+slope distribution, Gaussian and isotropic, of mean square s² (Cox and Munk
+measured about 0.003 + 0.005 U for the whole sea; here only the sub-grid
+part, 0.0008 + 0.0011 U, more under a gust), plus what the pixel itself
+averages away (the spread of the normal across it, which is why the glitter
+path widens towards the horizon instead of shimmering). The glint is the
+sun's irradiance times the share of facets turned to send it to the eye,
+Fresnel-weighted, and it twinkles: cells a few pixels across take a fresh
+heavy-tailed weight of mean one 24 times a second, as a few large facets
+do. The sun's disc is no longer mirrored in the water in this look; the
+glitter is that reflection, spread as the water spreads it.
+
+Wind on water comes in gusts. With `gusts on` (the default) the breeze
+touches down in patches a sixth to a third of the basin across, two to
+four at a time over a calmer base of 0.15, each drifting downwind at 0.6 of the
+wind speed and swelling and fading over a crossing. This is in the solver,
+in both looks: the breeze's random kicks are taken to the grid, weighted by
+the patches, normalised so the basin's mean square forcing is unchanged, and
+handed back as a displacement source (one inverse transform a frame; the
+forward one is shared with the drops). The test parks a 2 m gust in a 12 m
+pool: slopes under it are eight times those away from it, and the basin's
+rms height is the even breeze's to a few per cent. The video look also
+roughens the sub-grid slopes and strengthens the ripples under the gusts,
+so the patches show as darker, glittering cat's paws sliding across.
+`gusts off` gives the even breeze of earlier releases.
+
 ### The setting
 
 `setting house` (`` ` ``) puts the basin in a garden: a pale travertine

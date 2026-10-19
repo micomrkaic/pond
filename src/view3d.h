@@ -32,6 +32,11 @@ typedef struct {
                           2 glass walls; 3 glass walls and bottom; 4 no container at all */
     int setting;       /* 0 nothing around the basin; 1 a house with a terrace and garden (basins 4-40 m) */
     int look;          /* 0 animation: the clean render; 1 video: as a camera would film it */
+    /* the wind on the water, for the shading: 0 calm; its speed, m/s; the gust patches */
+    float wind_u;
+    int   ngust;
+    float gust[8][4];  /* x, z, radius, strength now */
+    float gust_base, gust_norm;
     float sun[3];      /* unit vector towards the light (the sun, or the moon at night), y up */
     float day, dusk, lk; int night;   /* 1 at noon .. 0 at night; 1 with the sun on the horizon; the light level; moon */
     int cpu_caustics;  /* 1: force the CPU splat instead of the GPU pass */

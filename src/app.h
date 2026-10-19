@@ -91,6 +91,10 @@ typedef struct app {
     double fl_x[NFLOAT_MAX], fl_y[NFLOAT_MAX], fl_vx[NFLOAT_MAX], fl_vy[NFLOAT_MAX];
     /* wind: m/s, 0 leaves the breeze on its own knobs */
     double wind;
+    /* gusts: where the wind touches down, drifting downwind (cat's paws) */
+    int    gusts;                         /* 1: the breeze comes in gusts (default) */
+    int    ngust;
+    double gu_x[WAVE_NGUST], gu_y[WAVE_NGUST], gu_r[WAVE_NGUST], gu_a[WAVE_NGUST], gu_age[WAVE_NGUST], gu_life[WAVE_NGUST];
     float *fl_u, *fl_v; size_t fl_n;   /* the surface velocity, for the floats */
     /* drops: Gaussian width in metres; 0 = physical, with a floor of a few cells */
     double drop_size;

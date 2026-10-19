@@ -518,6 +518,72 @@ static void drift_floats(app *a, double dts)
     }
 }
 
+/* the breeze's own speed: the wind if it is set, else what its knobs amount to */
+static double breeze_speed(const app *a)
+{
+    double U = a->wind > 0 ? a->wind : 3.0 * a->breeze_gain;
+    return U < 1.0 ? 1.0 : (U > 20.0 ? 20.0 : U);
+}
+
+static double frand(void) { return (double)rand() / ((double)RAND_MAX + 1.0); }
+
+/* Gusts: patches a sixth to a third of the basin across, touching down anywhere upwind
+ * of the far wall, drifting downwind (+x) at 0.6 of the wind speed, swelling and fading
+ * over a crossing or so.  Two to four at a time, over a calmer base of 0.15. */
+static void gusts_step(app *a, double dts, wave_gusts *g)
+{
+    const wave *w = a->w;
+    const double U = breeze_speed(a), v = 0.6 * U;
+    const double Lx = w->Lx, Ly = w->Ly, L = Lx > Ly ? Lx : Ly;
+    g->n = 0; g->base = 0.15f;
+    if (!a->gusts) { a->ngust = 0; a->p3.ngust = 0; a->p3.wind_u = (float)U; a->p3.gust_base = 1.0f; a->p3.gust_norm = 1.0f; return; }
+    /* age, move, retire */
+    int n = 0;
+    for (int i = 0; i < a->ngust; i++) {
+        a->gu_age[i] += dts;
+        a->gu_x[i] += v * dts;
+        a->gu_y[i] += 0.08 * v * dts * sin(0.7 * a->gu_age[i] + i);
+        if (a->gu_age[i] >= a->gu_life[i] || a->gu_x[i] - a->gu_r[i] > Lx) continue;
+        if (n != i) {
+            a->gu_x[n] = a->gu_x[i]; a->gu_y[n] = a->gu_y[i]; a->gu_r[n] = a->gu_r[i];
+            a->gu_a[n] = a->gu_a[i]; a->gu_age[n] = a->gu_age[i]; a->gu_life[n] = a->gu_life[i];
+        }
+        n++;
+    }
+    a->ngust = n;
+    /* touch down: keep at least two, sometimes up to four */
+    while (a->ngust < WAVE_NGUST && (a->ngust < 2 || (a->ngust < 4 && frand() < dts * 0.4))) {
+        const int i = a->ngust++;
+        a->gu_r[i] = L * (0.08 + 0.09 * frand());
+        a->gu_x[i] = -a->gu_r[i] + frand() * (0.8 * Lx + a->gu_r[i]);
+        a->gu_y[i] = frand() * Ly;
+        a->gu_a[i] = 0.8 + 0.8 * frand();
+        a->gu_age[i] = 0.0;
+        a->gu_life[i] = (0.6 + 0.7 * frand()) * (Lx + 2.0 * a->gu_r[i]) / v;
+    }
+    /* what the solver and the shading see: each swells and fades over its life */
+    double s2 = 0.0;
+    g->n = a->ngust;
+    for (int i = 0; i < a->ngust; i++) {
+        const double e = sin(M_PI * a->gu_age[i] / a->gu_life[i]);
+        g->x[i] = (float)a->gu_x[i]; g->y[i] = (float)a->gu_y[i];
+        g->r[i] = (float)a->gu_r[i]; g->a[i] = (float)(a->gu_a[i] * e * e);
+    }
+    /* the mask's mean square on a coarse grid, for the shading's normalisation */
+    for (int j = 0; j < 16; j++)
+        for (int i = 0; i < 16; i++) {
+            const double m = wave_gust_mask(w, g, (i + 0.5) * Lx / 16, (j + 0.5) * Ly / 16);
+            s2 += m * m;
+        }
+    a->p3.wind_u = (float)U;
+    a->p3.ngust = g->n;
+    for (int i = 0; i < g->n && i < 8; i++) {
+        a->p3.gust[i][0] = g->x[i]; a->p3.gust[i][1] = g->y[i]; a->p3.gust[i][2] = g->r[i]; a->p3.gust[i][3] = g->a[i];
+    }
+    a->p3.gust_base = g->base;
+    a->p3.gust_norm = (float)(1.0 / sqrt(s2 / 256.0));
+}
+
 static void apply_sources(app *a, double dts)
 {
     wave *w = a->w;
@@ -598,7 +664,12 @@ static void apply_sources(app *a, double dts)
             amp = a->breeze_gain * 0.25 * Hs * sqrt(2.0 * gam);
         }
         double gust = a->au ? 0.5 + audio_gust(a->au) : 1.0;   /* the gusts you hear roughen the water */
-        wave_breeze(w, k0, amp * gust, dts);
+        wave_gusts wg;
+        gusts_step(a, dts, &wg);
+        wave_breeze_gusty(w, k0, amp * gust, dts, &wg);
+    } else {
+        a->ngust = 0;
+        a->p3.ngust = 0; a->p3.wind_u = 0.0f;
     }
     /* continuous layers */
     if (a->au) {
@@ -889,6 +960,7 @@ POND_MAIN(int argc, char **argv)
     a.warp = 1.0;
     a.rain_rate = 2.0;
     a.boat_froude = 0.4;
+    a.gusts = 1;
     a.shake_amp = 0.5; a.shake_freq = 4.0;
     a.paddle_div = 8.0;                    /* eight wavelengths across, whatever the basin */
     a.paddle_wall = 0; a.paddle_pos = 0.5; a.paddle_span = 1.0; a.paddle_mark = 1;

@@ -298,6 +298,7 @@ G(g_fgain, a->finger_gain)          S(s_fgain, a->finger_gain = v)
 G(g_glass, a->p3.glass)             S(s_glass, a->p3.glass = (int)v)
 G(g_setting, a->p3.setting)         S(s_setting, a->p3.setting = (int)v)
 G(g_look, a->p3.look)               S(s_look, a->p3.look = (int)v)
+G(g_gusts, a->gusts)                S(s_gusts, a->gusts = v > 0.5)
 G(g_floor, a->p3.floor_style)       S(s_floor, a->rp.floor_style = a->p3.floor_style = (int)v)
 G(g_gain, a->p3.gain)               S(s_gain, a->rp.gain = a->p3.gain = (float)v)
 G(g_hud, a->show_hud)               S(s_hud, a->show_hud = v > 0.5)
@@ -361,6 +362,7 @@ static const param params[] = {
     B("breeze", "sources",  "wind sea on", g_breeze, s_breeze),
     RM("drop-size", "sources", "a raindrop's crater width, metres (0: 2 cm, or a few cells on a coarse grid; a click is twice it)", 0, 10, 1.5, 0.005, g_dropsz, s_dropsz),
     RA("wind", "sources",   "wind speed, m/s: a fetch-limited sea over the basin's length (0: the breeze's own knobs)", 0, 30, 1, 0, g_wind, s_wind),
+    B("gusts", "sources",   "the breeze comes in gusts that roughen drifting patches (cat's paws); off: evenly", g_gusts, s_gusts),
     RM("breeze-gain", "sources", "multiplier on the wind forcing", 0.01, 100, 1.5, 0, g_bgain, s_bgain),
     B("boat", "sources",    "a boat driving round the basin, leaving its wake", g_boat, s_boat),
     RM("boat-speed", "sources", "the boat's speed as a Froude number U / sqrt(g L_boat); 0.4 is a dinghy under way", 0.1, 2, 1.25, 0, g_boat_fr, s_boat_fr),

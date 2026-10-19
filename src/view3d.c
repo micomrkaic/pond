@@ -117,7 +117,7 @@ static const char *glsl_common = GLSL(
         vec3 col = day * u_day + vec3(0.035, 0.040, 0.055) * (1.0 - u_day);
         return mix(c, col, amt * 0.92);
     }
-    vec3 sky(vec3 d) {
+    vec3 sky_s(vec3 d, float withsun) {
         float h = clamp(d.y, 0.0, 1.0);
         /* the day sky, warming at the horizon as the sun goes down */
         vec3 hor0 = mix(HORIZON, vec3(0.66, 0.82, 0.96), u_sunny);
@@ -141,10 +141,11 @@ static const char *glsl_common = GLSL(
             }
         }
         c += n * (1.0 - u_day);
-        if (u_nosun < 0.5) c += sun_term(d);
+        if (u_nosun < 0.5 && withsun > 0.5) c += sun_term(d);
         if (u_video > 0.5) c = clouds(d, c);
         return c;
     }
+    vec3 sky(vec3 d) { return sky_s(d, 1.0); }
     float hash21(vec2 p) {
         p = fract(p * vec2(123.34, 456.21));
         p += dot(p, p + 45.32);
@@ -315,7 +316,8 @@ static const char *vs_surf = GLSL(
         gl_Position = u_vp * vec4(v_pos, 1.0);
     }
 );
-static const char *fs_surf = GLSL(
+/* --- water surface: declarations, the wind's detail and glitter, then the shading --- */
+static const char *fs_surf_head = GLSL(
     in vec3 v_pos;
     in vec3 v_nrm;
     uniform vec3 u_cam;
@@ -334,8 +336,81 @@ static const char *fs_surf = GLSL(
     uniform sampler2D u_refl_tex;
     uniform mat4 u_vpref;     /* world -> the mirrored view the reflection was drawn in */
     uniform float u_rd;       /* how far off the reflected things are, metres: sets how far a tilt displaces them */
+    uniform float u_wind;     /* the breeze's speed, m/s; 0 calm */
+    uniform int u_ngust;
+    uniform vec4 u_gust[8];   /* x, z, radius, strength */
+    uniform float u_gbase, u_gnorm;
     out vec4 o;
 
+);
+static const char *glsl_water = GLSL(
+    /* the gusts here: 1 on average over the basin, more under a cat's paw */
+    float gust_at(vec2 q) {
+        if (u_ngust == 0) return 1.0;
+        float m = u_gbase;
+        for (int i = 0; i < 8; i++) {
+            if (i >= u_ngust) break;
+            vec2 dd = q - u_gust[i].xy;
+            float qq = dot(dd, dd) / (u_gust[i].z * u_gust[i].z);
+            m += u_gust[i].w * exp(-qq);
+        }
+        return m * u_gnorm;
+    }
+
+    /* the small stuff a real pool is never without: eight short wave trains, 9 to 60 cm,
+     * moving at their own phase speeds (gravity and surface tension), each fading out
+     * with distance before it can alias.  Slopes, added to the simulated normal. */
+    vec3 ripples(vec3 N, vec3 P) {
+        if (u_video < 0.5 || max(u_L.x, u_L.y) < 2.0) return N;
+        float dist = length(u_cam - P);
+        float amp = u_wind > 0.0 ? 0.25 + min(0.9 * gust_at(P.xz) * sqrt(u_wind / 3.0), 2.8) : 0.35;
+        vec2 g = vec2(0.0);
+        for (int k = 0; k < 8; k++) {
+            float fk = float(k);
+            float lam = 0.09 * pow(1.31, fk);
+            float a = 2.39996 * fk + 0.6;
+            vec2 dir = vec2(cos(a), sin(a));
+            float kw = 6.28318 / lam;
+            float om = sqrt(9.81 * kw + 0.072 / 1000.0 * kw * kw * kw);
+            float fade = smoothstep(260.0 * lam, 60.0 * lam, dist);
+            g += dir * (0.010 * amp * fade) * cos(kw * dot(dir, P.xz) - om * u_time + 13.7 * fk);
+        }
+        return normalize(N + vec3(-g.x, 0.0, -g.y));
+    }
+
+    /* Sun glitter.  What the grid and the ripples cannot hold is a slope distribution:
+     * Gaussian, isotropic, of mean square s2 (Cox and Munk: about 0.003 + 0.005 U for the
+     * whole sea; here only the sub-grid part, rising with the wind and under the gusts,
+     * plus what the pixel itself averages away).  The glint is the sun's irradiance times
+     * the share of facets turned to send it to the eye; it twinkles, as a few large
+     * facets do, with a heavy-tailed weight of mean one, fresh at 24 Hz. */
+    vec3 glitter(vec3 N, vec3 V, vec3 P) {
+        vec3 L = u_sun;
+        if (L.y <= 0.0) return vec3(0.0);
+        vec3 Hh = normalize(L + V);
+        float cb = max(dot(Hh, N), 1e-3);
+        float t2 = (1.0 - cb * cb) / (cb * cb);
+        float s2 = (u_wind > 0.0 ? (0.0008 + 0.0011 * u_wind) * gust_at(P.xz) : 0.0004);
+        vec3 dnx = dFdx(N), dny = dFdy(N);
+        s2 += clamp(0.5 * (dot(dnx, dnx) + dot(dny, dny)), 0.0, 0.08);
+        float p = exp(-t2 / s2) / (3.14159 * s2);
+        float vh = max(dot(V, Hh), 0.0);
+        float F = 0.02 + 0.98 * pow(1.0 - vh, 5.0);
+        float g = F * p / (4.0 * cb * cb * cb * cb * max(dot(N, V), 0.08));
+        /* twinkle: cells about three pixels across, a fresh draw 24 times a second */
+        float dist = length(u_cam - P);
+        float cs = 0.0025 * dist + 0.004;
+        vec2 id = floor(P.xz / cs);
+        float fr = floor(u_time * 24.0 + 8.0 * hash31(vec3(id, 1.7)));
+        float h = hash31(vec3(id, fr));
+        float tw = 0.15 + 0.85 * 12.0 * pow(h, 11.0);        /* mean one; most cells dim, a few blazing */
+        vec3 E = u_night < 0.5 ? SUNCOL * mix(vec3(1.0), vec3(1.0, 0.50, 0.25), u_dusk) * 2.5 * max(u_day, 0.15)
+                               : MOONCOL * 0.25;
+        return min(E * g * tw, vec3(30.0)) * shadow_at(P, vec3(0.0, 1.0, 0.0));
+    }
+
+);
+static const char *fs_surf = GLSL(
     bool in_basin(vec2 q) {
         if (u_shape == 1) return length(q - 0.5 * u_L) <= 0.5 * u_L.x;
         return q.x >= 0.0 && q.x <= u_L.x && q.y >= 0.0 && q.y <= u_L.y;
@@ -403,26 +478,6 @@ static const char *fs_surf = GLSL(
         return lit(c * att + SCATTER * (1.0 - att));
     }
 
-    /* the small stuff a real pool is never without: eight short wave trains, 9 to 60 cm,
-     * moving at their own phase speeds (gravity and surface tension), each fading out
-     * with distance before it can alias.  Slopes, added to the simulated normal. */
-    vec3 ripples(vec3 N, vec3 P) {
-        if (u_video < 0.5 || max(u_L.x, u_L.y) < 2.0) return N;
-        float dist = length(u_cam - P);
-        vec2 g = vec2(0.0);
-        for (int k = 0; k < 8; k++) {
-            float fk = float(k);
-            float lam = 0.09 * pow(1.31, fk);
-            float a = 2.39996 * fk + 0.6;
-            vec2 dir = vec2(cos(a), sin(a));
-            float kw = 6.28318 / lam;
-            float om = sqrt(9.81 * kw + 0.072 / 1000.0 * kw * kw * kw);
-            float fade = smoothstep(260.0 * lam, 60.0 * lam, dist);
-            g += dir * (0.010 * fade) * cos(kw * dot(dir, P.xz) - om * u_time + 13.7 * fk);
-        }
-        return normalize(N + vec3(-g.x, 0.0, -g.y));
-    }
-
     void main() {
         vec3 N = ripples(normalize(v_nrm), v_pos);
         vec3 V = normalize(u_cam - v_pos);
@@ -434,6 +489,7 @@ static const char *fs_surf = GLSL(
             vec3 R = reflect(-V, N);
             vec3 T = refract(-V, N, 1.0 / 1.333);
             vec3 rc;
+            bool glint = u_video > 0.5;
             if (u_refl > 0.5) {
                 /* the mirrored scene, looked up where the reflected ray, u_rd metres out,
                  * lands in the mirrored view: flat water finds the image straight below
@@ -441,9 +497,11 @@ static const char *fs_surf = GLSL(
                 vec3 Rr = vec3(R.x, max(R.y, 0.01), R.z);
                 vec4 cq = u_vpref * vec4(v_pos + Rr * u_rd, 1.0);
                 vec2 uv = clamp(cq.xy / max(cq.w, 1e-4) * 0.5 + 0.5, vec2(0.001), vec2(0.999));
-                rc = pow(texture(u_refl_tex, uv).rgb, vec3(2.2)) + sun_term(R) * shadow_at(v_pos, vec3(0.0, 1.0, 0.0));
-            } else rc = sky(R);
+                rc = pow(texture(u_refl_tex, uv).rgb, vec3(2.2));
+                if (!glint) rc += sun_term(R) * shadow_at(v_pos, vec3(0.0, 1.0, 0.0));
+            } else rc = sky_s(R, glint ? 0.0 : 1.0);
             c = mix(inside(v_pos, T), rc, F);
+            if (glint) c += glitter(N, V, v_pos);
         } else {
             vec3 Nn = -N;
             float cv = max(dot(Nn, V), 0.0);
@@ -1088,11 +1146,12 @@ static GLuint compile(GLenum type, const char *const *parts, int nparts)
     return s;
 }
 
-static GLuint program(const char *vs, const char *fs, int sides)
+static GLuint program_parts(const char *vs, const char *const *fs, int nfs, int sides)
 {
     const char *vp[4] = { glsl_header, glsl_common, glsl_common2, vs };
-    const char *fp[4] = { glsl_header, glsl_common, glsl_common2, fs };
-    GLuint v = compile(GL_VERTEX_SHADER, vp, 4), f = compile(GL_FRAGMENT_SHADER, fp, 4);
+    const char *fp[8] = { glsl_header, glsl_common, glsl_common2 };
+    for (int i = 0; i < nfs && i < 5; i++) fp[3 + i] = fs[i];
+    GLuint v = compile(GL_VERTEX_SHADER, vp, 4), f = compile(GL_FRAGMENT_SHADER, fp, 3 + (nfs < 5 ? nfs : 5));
     if (!v || !f) return 0;
     GLuint p = glCreateProgram();
     glAttachShader(p, v); glAttachShader(p, f);
@@ -1116,6 +1175,8 @@ static GLuint program(const char *vs, const char *fs, int sides)
     }
     return p;
 }
+
+static GLuint program(const char *vs, const char *fs, int sides) { return program_parts(vs, &fs, 1, sides); }
 
 static GLint U(GLuint p, const char *name) { return glGetUniformLocation(p, name); }
 
@@ -1793,7 +1854,10 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
     printf("GL: %s / %s\n", (const char *)glGetString(GL_RENDERER), (const char *)glGetString(GL_VERSION));
 
     v->p_bg    = program(vs_bg, fs_bg, 0);
-    v->p_surf  = program(vs_surf, fs_surf, 0);
+    {
+        const char *parts[3] = { fs_surf_head, glsl_water, fs_surf };
+        v->p_surf = program_parts(vs_surf, parts, 3, 0);
+    }
     v->p_solid = program(vs_solid, fs_solid, 0);
     v->p_sides = program(vs_sides, fs_sides, 1);
     v->p_glass = program(vs_solid, fs_glass, 0);
@@ -2679,6 +2743,11 @@ static void set_common(view3d *v, GLuint p, const view3d_params *prm, const floa
     if ((l = U(p, "u_refl")) >= 0) glUniform1f(l, (v->scene_on && v->rf_w > 0) ? 1.0f : 0.0f);
     if ((l = U(p, "u_rd")) >= 0) glUniform1f(l, 12.0f);
     if ((l = U(p, "u_video")) >= 0) glUniform1f(l, v->video_on ? 1.0f : 0.0f);
+    if ((l = U(p, "u_wind")) >= 0) glUniform1f(l, prm->wind_u);
+    if ((l = U(p, "u_ngust")) >= 0) glUniform1i(l, prm->ngust < 8 ? prm->ngust : 8);
+    if ((l = U(p, "u_gust")) >= 0) glUniform4fv(l, 8, &prm->gust[0][0]);
+    if ((l = U(p, "u_gbase")) >= 0) glUniform1f(l, prm->gust_base);
+    if ((l = U(p, "u_gnorm")) >= 0) glUniform1f(l, prm->gust_norm);
     if ((l = U(p, "u_linear")) >= 0) glUniform1f(l, v->video_on ? 1.0f : 0.0f);
     if ((l = U(p, "u_cam")) >= 0) glUniform3f(l, v->cam[0], v->cam[1], v->cam[2]);
     if ((l = U(p, "u_L")) >= 0) glUniform2f(l, v->Lx, v->Ly);

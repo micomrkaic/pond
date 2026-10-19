@@ -210,6 +210,7 @@ void wave_destroy(wave *w)
 {
     if (!w) return;
     free(w->A); free(w->B); free(w->omega); free(w->gamma); free(w->kmag);
+    free(w->gbuf);
     free(w->Rr); free(w->Ri); free(w->eta); free(w->src_d); free(w->src_v); free(w->src_p); free(w->fara); free(w->vtmp); free(w->tmp);
     for (int p = 2; p <= WAVE_MAXPOW; p++) { free(w->Rpr[p]); free(w->Rpi[p]); }
     free(w->bz_idx); free(w->bz_w);
@@ -774,7 +775,7 @@ static double breeze_taper(double k, double kn)
     return c * c;
 }
 
-void wave_breeze(wave *w, double k0, double amp, double dt)
+static void breeze_band(wave *w, double k0)
 {
     const size_t N = (size_t)w->nx * w->ny;
     if (w->bz_k0 != k0 && w->shape == WAVE_DISK) {
@@ -825,9 +826,72 @@ void wave_breeze(wave *w, double k0, double amp, double dt)
         w->bz_n = n; w->bz_k0 = k0;
         w->bz_norm = W > 0 ? (float)(0.5 * (double)N / sqrt(W)) : 0.0f;
     }
+    (void)N;
+}
+
+void wave_breeze(wave *w, double k0, double amp, double dt)
+{
+    breeze_band(w, k0);
     const float sq = (float)(amp * sqrt(dt)) * w->bz_norm;
     for (int j = 0; j < w->bz_n; j++)
         w->A[w->bz_idx[j]] += sq * w->bz_w[j] * (float)rng_gauss(&w->rng);
+}
+
+double wave_gust_mask(const wave *w, const wave_gusts *g, double x, double y)
+{
+    (void)w;
+    double m = g->base;
+    for (int i = 0; i < g->n; i++) {
+        const double dx = x - g->x[i], dy = y - g->y[i], r2 = (double)g->r[i] * g->r[i];
+        const double q = (dx * dx + dy * dy) / r2;
+        if (q < 9.0) m += g->a[i] * exp(-q);
+    }
+    return m;
+}
+
+/* The same kicks as wave_breeze, taken to the grid, weighted by the gusts, and handed
+ * back through the displacement source: one inverse transform here, the forward one
+ * shared with the drops in the next step. */
+void wave_breeze_gusty(wave *w, double k0, double amp, double dt, const wave_gusts *g)
+{
+    if (!g || g->n == 0) { wave_breeze(w, k0, amp, dt); return; }
+    const size_t N = (size_t)w->nx * w->ny, NM = (size_t)w->nmodes;
+    if (!w->gbuf) { w->gbuf = malloc((N > NM ? N : NM) * sizeof(float)); if (!w->gbuf) { wave_breeze(w, k0, amp, dt); return; } }
+    breeze_band(w, k0);
+    float *modes = w->tmpm;
+    memset(modes, 0, NM * sizeof(float));
+    const float sq = (float)(amp * sqrt(dt)) * w->bz_norm;
+    for (int j = 0; j < w->bz_n; j++)
+        modes[w->bz_idx[j]] += sq * w->bz_w[j] * (float)rng_gauss(&w->rng);
+    float *f = w->gbuf;
+    if (w->shape == WAVE_DISK) disk_inverse(w, modes, f);
+    else { memcpy(f, modes, N * sizeof(float)); dct2_inverse(&w->px, &w->py, f, w->tmp); }
+    /* the mask on the grid, and its mean square (area-weighted on the disk) */
+    double s2 = 0.0, wsum = 0.0;
+    if (w->shape == WAVE_DISK) {
+        for (int i = 0; i < w->nr; i++) {
+            const double r = (i + 0.5) * w->dr;
+            for (int j = 0; j < w->nt; j++) {
+                const double th = j * w->dth;
+                const double m = wave_gust_mask(w, g, w->R + r * cos(th), w->R + r * sin(th));
+                const size_t k = (size_t)j + (size_t)w->nt * i;
+                f[k] *= (float)m;
+                s2 += m * m * r; wsum += r;
+            }
+        }
+    } else {
+        for (int j = 0; j < w->ny; j++) {
+            const double y = (j + 0.5) * w->dy;
+            for (int i = 0; i < w->nx; i++) {
+                const double m = wave_gust_mask(w, g, (i + 0.5) * w->dx, y);
+                f[(size_t)i + (size_t)w->nx * j] *= (float)m;
+                s2 += m * m; wsum += 1.0;
+            }
+        }
+    }
+    const float norm = (float)(1.0 / sqrt(s2 / wsum));
+    for (size_t k = 0; k < N; k++) w->src_d[k] += f[k] * norm;
+    w->dirty_d = 1;
 }
 
 void wave_set_mode(wave *w, int m, int n, float a, float b)

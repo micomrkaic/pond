@@ -71,6 +71,7 @@ typedef struct {
     double steep_max;          /* saturation: extra damping once the rms steepness passes this (0 = none) */
     float *fara;               /* per mode: g k tanh(kh) / omega, the modulation's strength (built with the rotor) */
     float *vtmp;               /* grid scratch for wave_velocity */
+    float *gbuf;               /* grid scratch for the gusty breeze (allocated on first use) */
     double steep;              /* the rms steepness, sqrt(sum k^2 (A^2 + B^2)) over the energy norm, last step */
 
     float *eta;                /* real-space surface, valid after wave_realize() */
@@ -156,6 +157,14 @@ int   wave_velocity_at(const wave *w, double x, double y, double *u, double *v);
  * amp is the surface-elevation rms added per sqrt(second); steady state under
  * uniform damping gamma0 is roughly amp / sqrt(2 gamma0). */
 void  wave_breeze(wave *w, double k0, double amp, double dt);
+
+/* Gusts: patches where the wind touches down -- cat's paws.  The breeze's forcing is
+ * multiplied in physical space by base + sum a_i exp(-|x - c_i|^2 / r_i^2), normalised
+ * so its mean square over the basin is one: the same energy goes in, unevenly. */
+#define WAVE_NGUST 8
+typedef struct { int n; float base; float x[WAVE_NGUST], y[WAVE_NGUST], r[WAVE_NGUST], a[WAVE_NGUST]; } wave_gusts;
+void  wave_breeze_gusty(wave *w, double k0, double amp, double dt, const wave_gusts *g);
+double wave_gust_mask(const wave *w, const wave_gusts *g, double x, double y);   /* unnormalised */
 /* Set a single mode directly (tests). */
 void  wave_set_mode(wave *w, int m, int n, float a, float b);
 
