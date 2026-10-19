@@ -74,6 +74,7 @@ appears only on devices without a fine pointer.
 | wheel, `o` / `Home` | zoom, reset camera |
 | `t` | container: opaque → floor only → glass walls → glass walls + bottom → none |
 | `` ` `` | setting: none → a house, terrace and garden round the basin (basins 4–40 m) |
+| `Tab` | look: animation (the clean render) → video (as a camera would film it) |
 | `n` | basin shape: rectangle ↔ disk (the field starts over) |
 | `y` | nonlinear (HOS) correction on/off (rectangle only) |
 | `m` `a`/`A` | sound on/off, volume down/up |
@@ -747,6 +748,34 @@ costs nothing unless a glass face is on screen.
 Every drop pulls a bubble under — the one the ear already hears ring — and
 it is now drawn: a third of the crater's radius, starting a couple of radii
 down and rising back in half a second, visible through the glass.
+
+### The video look
+
+`look video` (`Tab`) films the scene instead of drawing it. The frame is
+rendered in linear light into a 4x multisampled half-float target, resolved
+into a mipmapped texture, and handed through what a camera does to light:
+
+- **Metering.** A centre-weighted geometric mean of the frame's luminance,
+  read off a small mip, sets the exposure, which follows the light over about
+  a second; the key falls with the light, so night stays dark (the exposure
+  is capped) and the sensor's grain shows more.
+- **Bloom.** Whatever is brighter than white after exposure, at a quarter
+  size, blurred twice each way: the glints and lit windows halo.
+- **Film tone.** The ACES curve, applied to luminance so the hues keep their
+  saturation, highlights rolling off towards white, then a print's S-curve.
+- **Lens.** A little lateral colour towards the corners, a little softness,
+  a vignette.
+- **Grain.** Fresh each frame, stronger in the shadows.
+- **The hand.** The camera wanders by a few tenths of a degree, and trembles
+  faintly.
+
+And two things the scene gains: fair-weather cumulus drifting overhead (lit
+white on top, grey beneath, warm at dusk), which the water mirrors, and the
+small stuff a real pool is never without, eight short wave trains of 9 to
+60 cm moving at their own phase speeds, added to the simulated surface's
+slope in the shading only and faded with distance before they can alias
+(basins of 2 m and up; the tray's ripples are its own). `look animation` is
+the render as it was, and the physics underneath is the same in both.
 
 ### The setting
 

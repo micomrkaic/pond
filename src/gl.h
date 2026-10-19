@@ -118,6 +118,11 @@ typedef void          GLvoid;
 #define GL_DEPTH_ATTACHMENT 0x8D00
 #define GL_RENDERBUFFER 0x8D41
 #define GL_POLYGON_OFFSET_FILL 0x8037
+#define GL_RGBA16F 0x881A
+#define GL_READ_FRAMEBUFFER 0x8CA8
+#define GL_DRAW_FRAMEBUFFER 0x8CA9
+#define GL_LINEAR_MIPMAP_LINEAR 0x2703
+#define GL_MAX_SAMPLES 0x8D57
 
 #define GL_FUNCTIONS(X) \
     X(void,          glClear,                   (GLbitfield)) \
@@ -187,7 +192,11 @@ typedef void          GLvoid;
     X(void,          glFramebufferRenderbuffer, (GLenum, GLenum, GLenum, GLuint)) \
     X(void,          glDrawBuffers,             (GLsizei, const GLenum*)) \
     X(void,          glReadBuffer,              (GLenum)) \
-    X(void,          glPolygonOffset,           (GLfloat, GLfloat))
+    X(void,          glPolygonOffset,           (GLfloat, GLfloat)) \
+    X(void,          glRenderbufferStorageMultisample, (GLenum, GLsizei, GLenum, GLsizei, GLsizei)) \
+    X(void,          glBlitFramebuffer,         (GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum)) \
+    X(void,          glGenerateMipmap,          (GLenum)) \
+    X(void,          glGetIntegerv,             (GLenum, GLint*))
 
 #define GL_DECL(ret, name, args) extern ret (*name) args;
 GL_FUNCTIONS(GL_DECL)

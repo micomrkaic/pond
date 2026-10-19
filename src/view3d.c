@@ -66,6 +66,8 @@ static const char *glsl_common = GLSL(
     uniform float u_time;
     uniform float u_sunny;    /* 1 with the house around the basin: a deeper sky, a bluer pool */
     uniform float u_nosun;    /* 1: the sky without the sun's disc (the reflection pass; the water adds it back) */
+    uniform float u_video;    /* 1: the video look -- clouds, ripples */
+    uniform float u_linear;   /* 1: write linear light for the camera pipeline, not display gamma */
     uniform sampler2D u_shadow;
     uniform mat4 u_lvp;       /* world -> the sun's shadow map */
     uniform float u_shadow_on;
@@ -87,6 +89,33 @@ static const char *glsl_common = GLSL(
         float s = max(dot(d, u_sun), 0.0);
         if (u_night < 0.5) return SUNCOL * mix(vec3(1.0), vec3(1.0, 0.45, 0.20), u_dusk) * (5.0 * pow(s, 800.0) + 0.12 * pow(s, 12.0)) * max(u_day, 0.15);
         return MOONCOL * (2.0 * pow(s, 3000.0) + 0.025 * pow(s, 20.0));
+    }
+    /* value noise and its fractal sum, for the clouds */
+    float vnoise(vec2 p) {
+        vec2 i = floor(p), f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float a = hash31(vec3(i, 0.37)), b = hash31(vec3(i + vec2(1.0, 0.0), 0.37));
+        float c = hash31(vec3(i + vec2(0.0, 1.0), 0.37)), e = hash31(vec3(i + vec2(1.0, 1.0), 0.37));
+        return mix(mix(a, b, f.x), mix(c, e, f.x), f.y);
+    }
+    float fbm(vec2 p) {
+        float s = 0.0, a = 0.5;
+        for (int k = 0; k < 5; k++) { s += a * vnoise(p); p = p * 2.03 + vec2(1.7, 9.2); a *= 0.5; }
+        return s;
+    }
+    /* fair-weather cumulus on a layer overhead, drifting; lit white on top, grey
+     * beneath, warm at dusk, faint under the moon */
+    vec3 clouds(vec3 d, vec3 c) {
+        if (d.y <= 0.0) return c;
+        vec2 p = d.xz / (d.y + 0.08) * 0.45 + vec2(u_time * 0.006, u_time * 0.0025);
+        float n = fbm(p);
+        float amt = smoothstep(0.44, 0.70, n) * smoothstep(0.0, 0.12, d.y);
+        float thick = smoothstep(0.55, 0.95, n);
+        float s = max(dot(d, u_sun), 0.0);
+        vec3 day = mix(vec3(1.00, 0.99, 0.97), vec3(0.62, 0.66, 0.72), thick * 0.8) * (0.85 + 0.35 * pow(s, 6.0));
+        day = mix(day, day * vec3(1.00, 0.62, 0.45), u_dusk);
+        vec3 col = day * u_day + vec3(0.035, 0.040, 0.055) * (1.0 - u_day);
+        return mix(c, col, amt * 0.92);
     }
     vec3 sky(vec3 d) {
         float h = clamp(d.y, 0.0, 1.0);
@@ -113,6 +142,7 @@ static const char *glsl_common = GLSL(
         }
         c += n * (1.0 - u_day);
         if (u_nosun < 0.5) c += sun_term(d);
+        if (u_video > 0.5) c = clouds(d, c);
         return c;
     }
     float hash21(vec2 p) {
@@ -135,7 +165,7 @@ static const char *glsl_common = GLSL(
             return vec3(0.80, 0.72, 0.54) * b;
         }
     }
-    vec3 gam(vec3 c) { return pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)); }
+    vec3 gam(vec3 c) { return u_linear > 0.5 ? max(c, vec3(0.0)) : pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)); }
 );
 
 /* shared, second part (ISO C caps a string literal at 4095 characters): the
@@ -373,8 +403,28 @@ static const char *fs_surf = GLSL(
         return lit(c * att + SCATTER * (1.0 - att));
     }
 
+    /* the small stuff a real pool is never without: eight short wave trains, 9 to 60 cm,
+     * moving at their own phase speeds (gravity and surface tension), each fading out
+     * with distance before it can alias.  Slopes, added to the simulated normal. */
+    vec3 ripples(vec3 N, vec3 P) {
+        if (u_video < 0.5 || max(u_L.x, u_L.y) < 2.0) return N;
+        float dist = length(u_cam - P);
+        vec2 g = vec2(0.0);
+        for (int k = 0; k < 8; k++) {
+            float fk = float(k);
+            float lam = 0.09 * pow(1.31, fk);
+            float a = 2.39996 * fk + 0.6;
+            vec2 dir = vec2(cos(a), sin(a));
+            float kw = 6.28318 / lam;
+            float om = sqrt(9.81 * kw + 0.072 / 1000.0 * kw * kw * kw);
+            float fade = smoothstep(260.0 * lam, 60.0 * lam, dist);
+            g += dir * (0.010 * fade) * cos(kw * dot(dir, P.xz) - om * u_time + 13.7 * fk);
+        }
+        return normalize(N + vec3(-g.x, 0.0, -g.y));
+    }
+
     void main() {
-        vec3 N = normalize(v_nrm);
+        vec3 N = ripples(normalize(v_nrm), v_pos);
         vec3 V = normalize(u_cam - v_pos);
         vec3 c;
         float R0 = 0.02;
@@ -700,6 +750,99 @@ static const char *fs_scene = GLSL(
     }
 );
 
+/* --- the camera: exposure, bloom, film tone, lens, grain --- */
+static const char *fs_adapt = GLSL(
+    in vec2 v_uv;
+    uniform sampler2D u_hdr;
+    uniform sampler2D u_prev;
+    uniform float u_lod;
+    uniform float u_rate;
+    out vec4 o;
+    void main() {
+        /* metering: a centre-weighted geometric mean over a 5 x 5 grid of a small mip */
+        float s = 0.0, w = 0.0;
+        for (int j = 0; j < 5; j++)
+            for (int i = 0; i < 5; i++) {
+                vec2 q = vec2(0.1 + 0.2 * float(i), 0.1 + 0.2 * float(j));
+                float wt = exp(-6.0 * dot(q - 0.5, q - 0.5));
+                vec3 c = textureLod(u_hdr, q, u_lod).rgb;
+                s += wt * log(max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-4));
+                w += wt;
+            }
+        float avg = exp(s / w);
+        /* a camera keeps night darker than day: the key falls with the light */
+        float key = 0.24 * mix(0.40, 1.0, smoothstep(0.03, 0.25, avg));
+        float ex = clamp(key / avg, 0.30, 1.6);
+        float prev = texelFetch(u_prev, ivec2(0), 0).r;
+        o = vec4(prev > 0.0 ? mix(prev, ex, u_rate) : ex, 0.0, 0.0, 1.0);
+    }
+);
+static const char *fs_bright = GLSL(
+    in vec2 v_uv;
+    uniform sampler2D u_hdr;
+    uniform sampler2D u_ex;
+    out vec4 o;
+    void main() {
+        float ex = texelFetch(u_ex, ivec2(0), 0).r;
+        vec3 c = textureLod(u_hdr, v_uv, 2.0).rgb * ex;
+        o = vec4(max(c - vec3(0.9), vec3(0.0)), 1.0);
+    }
+);
+static const char *fs_bloom = GLSL(
+    in vec2 v_uv;
+    uniform sampler2D u_src;
+    uniform vec2 u_dir;
+    out vec4 o;
+    void main() {
+        const float W[7] = float[7](0.1596, 0.1473, 0.1159, 0.0776, 0.0443, 0.0215, 0.0089);
+        vec3 c = texture(u_src, v_uv).rgb * W[0];
+        for (int k = 1; k < 7; k++) {
+            c += texture(u_src, v_uv + u_dir * float(k)).rgb * W[k];
+            c += texture(u_src, v_uv - u_dir * float(k)).rgb * W[k];
+        }
+        o = vec4(c, 1.0);
+    }
+);
+static const char *fs_post = GLSL(
+    in vec2 v_uv;
+    uniform sampler2D u_hdr;
+    uniform sampler2D u_bloom;
+    uniform sampler2D u_ex;
+    uniform vec2 u_res;
+    out vec4 o;
+    vec3 aces(vec3 x) { return clamp(x * (2.51 * x + 0.03) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+    void main() {
+        float ex = texelFetch(u_ex, ivec2(0), 0).r;
+        vec2 d = v_uv - 0.5;
+        float r2 = dot(d * vec2(u_res.x / u_res.y, 1.0), d * vec2(u_res.x / u_res.y, 1.0));
+        /* lens: lateral colour towards the corners, and a little softness */
+        vec2 off = d * 0.0025 * r2;
+        vec3 c;
+        c.r = textureLod(u_hdr, v_uv - off, 0.0).r;
+        c.g = textureLod(u_hdr, v_uv, 0.0).g;
+        c.b = textureLod(u_hdr, v_uv + off, 0.0).b;
+        c = mix(c, textureLod(u_hdr, v_uv, 1.0).rgb, 0.10);
+        c = c * ex + texture(u_bloom, v_uv).rgb * 0.35;
+        /* vignette */
+        c *= 1.0 - 0.33 * pow(clamp(r2 / 0.6, 0.0, 1.0), 1.4);
+        /* film tone, a touch of saturation and warmth */
+        /* film tone on the luminance, so the hues keep their saturation; only what
+         * is past white rolls off towards white, as film does */
+        float li = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-5);
+        float lo = aces(vec3(li)).r;
+        c = c * (lo / li);
+        c = mix(c, vec3(lo), smoothstep(0.75, 1.0, lo) * 0.6);
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        c = mix(vec3(l), c, 1.05) * vec3(1.02, 1.0, 0.975);
+        c = pow(clamp(c, 0.0, 1.0), vec3(1.0 / 2.2));
+        c = mix(c, c * c * (3.0 - 2.0 * c), 0.30);           /* the print's S-curve */
+        /* sensor grain: per frame, stronger in the shadows and when the exposure is pushed */
+        float n = hash21(gl_FragCoord.xy + fract(u_time * 7.13) * vec2(91.7, 47.3)) + hash21(gl_FragCoord.yx * 1.37 + fract(u_time * 3.7) * 61.0) - 1.0;
+        c += n * 0.020 * clamp(sqrt(ex), 0.7, 2.0) * (1.0 - 0.6 * l);
+        o = vec4(c, 1.0);
+    }
+);
+
 static const char *fs_depth = GLSL(
     out vec4 o;
     void main() { o = vec4(1.0); }
@@ -861,6 +1004,15 @@ struct view3d {
     GLuint p_depth;
     GLuint fbo_sh, tex_sh; int sh_size, sh_valid; float sh_sun[3]; float lvp[16], sbias;   /* the sun's shadow map */
     GLuint fbo_rf, tex_rf, rb_rf; int rf_w, rf_h;                  /* the reflection, half the window */
+    /* the video look: the frame in linear light, multisampled and resolved into a mipmapped
+     * float texture, then metered, bloomed, tone-mapped, given a lens and grain */
+    int video_on, video_ok;          /* this frame; -1 untried, 0 no float target here, 1 fine */
+    GLuint fbo_ms, rb_ms_c, rb_ms_d; int ms_samples;
+    GLuint fbo_hdr, tex_hdr, rb_hdr_d; int hdr_w, hdr_h, hdr_levels;
+    GLuint fbo_bl[2], tex_bl[2]; int bl_w, bl_h;
+    GLuint fbo_ex[2], tex_ex[2]; int ex_i;
+    GLuint p_adapt, p_bright, p_bloom, p_post;
+    float last_time;
     GLuint vao_mark, vbo_mark; int n_mark;
     GLuint vao_obj, vbo_obj;
     GLuint vao_caus, vbo_caus, ebo_caus; int n_caus_int, n_caus_all;   /* caustic mesh (rect: padded grid; disk: light-map grid) */
@@ -1595,6 +1747,8 @@ static void build_sides(view3d *v)
     free(verts); free(idx);
 }
 
+static void video_free(view3d *v);
+
 /* ------------------------------------------------------------------ public */
 void view3d_gl_attributes(int msaa)
 {
@@ -1651,7 +1805,11 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
     v->p_res   = program(vs_resample, fs_resample, 0);
     v->p_scene = program(vs_solid, fs_scene, 0);
     v->p_depth = program(vs_solid, fs_depth, 0);
-    if (!v->p_depth || !v->p_scene || !v->p_res || !v->p_blur || !v->p_bg || !v->p_surf || !v->p_solid || !v->p_sides || !v->p_glass || !v->p_ovl || !v->p_caus || !v->p_fill || !v->p_mark) { free(v); return NULL; }
+    v->p_adapt = program(vs_fill, fs_adapt, 0);
+    v->p_bright = program(vs_fill, fs_bright, 0);
+    v->p_bloom = program(vs_fill, fs_bloom, 0);
+    v->p_post = program(vs_fill, fs_post, 0);
+    if (!v->p_adapt || !v->p_bright || !v->p_bloom || !v->p_post || !v->p_depth || !v->p_scene || !v->p_res || !v->p_blur || !v->p_bg || !v->p_surf || !v->p_solid || !v->p_sides || !v->p_glass || !v->p_ovl || !v->p_caus || !v->p_fill || !v->p_mark) { free(v); return NULL; }
 
     glGenVertexArrays(1, &v->vao_empty);
     glGenVertexArrays(1, &v->vao_surf); glGenBuffers(1, &v->vbo_surf); glGenBuffers(1, &v->ebo_surf);
@@ -1803,6 +1961,7 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
         for (int j = 0; j < nx; j++) { v->cs_tab[2 * j] = cosf(2.0f * (float)M_PI * j / nx); v->cs_tab[2 * j + 1] = sinf(2.0f * (float)M_PI * j / nx); }
     }
     v->ovl_dirty = 1;
+    v->video_ok = -1;
     v->yaw = 35.0f; v->pitch = 42.0f;
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) fprintf(stderr, "GL error during init: 0x%x\n", err);
@@ -1819,6 +1978,7 @@ void view3d_destroy(view3d *v)
     if (v->fbo_sh) glDeleteFramebuffers(1, &v->fbo_sh);
     if (v->fbo_rf) glDeleteFramebuffers(1, &v->fbo_rf);
     if (v->rb_rf) glDeleteRenderbuffers(1, &v->rb_rf);
+    video_free(v);
     if (v->ctx) SDL_GL_DeleteContext(v->ctx);
     free(v);
 }
@@ -1875,7 +2035,14 @@ static void update_camera(view3d *v)
     if (v->H < 1) v->H = 1;
     v->aspect = (float)v->W / (float)v->H;
     v->tanhalf = tanf(0.5f * 45.0f * (float)M_PI / 180.0f);
-    float yaw = v->yaw * (float)M_PI / 180.0f, pitch = v->pitch * (float)M_PI / 180.0f;
+    float yaw_d = v->yaw, pitch_d = v->pitch;
+    if (v->video_on) {
+        /* hand-held: a slow wander of a few tenths of a degree, and a faint tremor */
+        const float t = v->time;
+        yaw_d   += 0.22f * sinf(0.37f * t) + 0.11f * sinf(0.83f * t + 1.3f) + 0.035f * sinf(2.3f * t + 0.4f);
+        pitch_d += 0.15f * sinf(0.29f * t + 2.0f) + 0.08f * sinf(0.71f * t + 0.7f) + 0.03f * sinf(2.1f * t + 2.2f);
+    }
+    float yaw = yaw_d * (float)M_PI / 180.0f, pitch = pitch_d * (float)M_PI / 180.0f;
     v->cam[0] = v->cx + v->dist * cosf(pitch) * sinf(yaw);
     v->cam[1] = v->dist * sinf(pitch);
     v->cam[2] = v->cz + v->dist * cosf(pitch) * cosf(yaw);
@@ -2511,6 +2678,8 @@ static void set_common(view3d *v, GLuint p, const view3d_params *prm, const floa
     if ((l = U(p, "u_clip")) >= 0) glUniform1f(l, 0.0f);
     if ((l = U(p, "u_refl")) >= 0) glUniform1f(l, (v->scene_on && v->rf_w > 0) ? 1.0f : 0.0f);
     if ((l = U(p, "u_rd")) >= 0) glUniform1f(l, 12.0f);
+    if ((l = U(p, "u_video")) >= 0) glUniform1f(l, v->video_on ? 1.0f : 0.0f);
+    if ((l = U(p, "u_linear")) >= 0) glUniform1f(l, v->video_on ? 1.0f : 0.0f);
     if ((l = U(p, "u_cam")) >= 0) glUniform3f(l, v->cam[0], v->cam[1], v->cam[2]);
     if ((l = U(p, "u_L")) >= 0) glUniform2f(l, v->Lx, v->Ly);
     if ((l = U(p, "u_depth")) >= 0) glUniform1f(l, v->depth);
@@ -2627,6 +2796,7 @@ static void reflection_pass(view3d *v, const view3d_params *p, const float *vp, 
     glUniform1f(U(v->p_bg, "u_aspect"), v->aspect);
     glUniform1f(U(v->p_bg, "u_mirror"), 1.0f);
     glUniform1f(U(v->p_bg, "u_nosun"), 1.0f);
+    glUniform1f(U(v->p_bg, "u_linear"), 0.0f);
     glBindVertexArray(v->vao_empty);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     /* the scene, from the mirrored eye, nothing below the water */
@@ -2638,13 +2808,185 @@ static void reflection_pass(view3d *v, const view3d_params *p, const float *vp, 
     v->cam[1] = cy;
     glUniform1f(U(v->p_scene, "u_clip"), 1.0f);
     glUniform1f(U(v->p_scene, "u_nosun"), 1.0f);
+    glUniform1f(U(v->p_scene, "u_linear"), 0.0f);
     glBindVertexArray(v->vao_scene);
     glDrawArrays(GL_TRIANGLES, 0, v->n_scene);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+static GLuint float_tex(int w, int h, int mip)
+{
+    GLuint t;
+    glGenTextures(1, &t);
+    glBindTexture(GL_TEXTURE_2D, t);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, mip ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+    return t;
+}
+static int fbo_for(GLuint *fbo, GLuint tex)
+{
+    glGenFramebuffers(1, fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, *fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    return glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+}
+static void video_free(view3d *v)
+{
+    GLuint f[7] = { v->fbo_ms, v->fbo_hdr, v->fbo_bl[0], v->fbo_bl[1], v->fbo_ex[0], v->fbo_ex[1], 0 };
+    GLuint t[5] = { v->tex_hdr, v->tex_bl[0], v->tex_bl[1], v->tex_ex[0], v->tex_ex[1] };
+    GLuint r[3] = { v->rb_ms_c, v->rb_ms_d, v->rb_hdr_d };
+    for (int i = 0; i < 6; i++) if (f[i]) glDeleteFramebuffers(1, &f[i]);
+    for (int i = 0; i < 5; i++) if (t[i]) glDeleteTextures(1, &t[i]);
+    for (int i = 0; i < 3; i++) if (r[i]) glDeleteRenderbuffers(1, &r[i]);
+    v->fbo_ms = v->fbo_hdr = v->fbo_bl[0] = v->fbo_bl[1] = v->fbo_ex[0] = v->fbo_ex[1] = 0;
+    v->tex_hdr = v->tex_bl[0] = v->tex_bl[1] = v->tex_ex[0] = v->tex_ex[1] = 0;
+    v->rb_ms_c = v->rb_ms_d = v->rb_hdr_d = 0;
+    v->hdr_w = v->hdr_h = 0;
+}
+/* the video look's targets, at the window's size; 0 if this GL cannot render to float */
+static int video_setup(view3d *v)
+{
+    if (v->video_ok == 0) return 0;
+    if (v->hdr_w == v->W && v->hdr_h == v->H && v->fbo_hdr) return 1;
+    video_free(v);
+    int ok = 1;
+    const int W = v->W, H = v->H;
+    v->tex_hdr = float_tex(W, H, 1);
+    v->hdr_levels = 1;
+    for (int m = W > H ? W : H; m > 1; m >>= 1) v->hdr_levels++;
+    ok &= fbo_for(&v->fbo_hdr, v->tex_hdr);
+    /* multisampled: a float colour and a depth buffer, resolved into the texture each frame */
+    GLint maxs = 0;
+    glGetIntegerv(GL_MAX_SAMPLES, &maxs);
+    v->ms_samples = maxs >= 4 ? 4 : 0;
+    if (ok && v->ms_samples) {
+        glGenRenderbuffers(1, &v->rb_ms_c);
+        glBindRenderbuffer(GL_RENDERBUFFER, v->rb_ms_c);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, v->ms_samples, GL_RGBA16F, W, H);
+        glGenRenderbuffers(1, &v->rb_ms_d);
+        glBindRenderbuffer(GL_RENDERBUFFER, v->rb_ms_d);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, v->ms_samples, GL_DEPTH_COMPONENT24, W, H);
+        glGenFramebuffers(1, &v->fbo_ms);
+        glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_ms);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, v->rb_ms_c);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, v->rb_ms_d);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            glDeleteFramebuffers(1, &v->fbo_ms); v->fbo_ms = 0;
+            v->ms_samples = 0;
+        }
+    }
+    if (ok && !v->fbo_ms) {
+        /* no multisampling: draw straight into the texture, with its own depth */
+        glGenRenderbuffers(1, &v->rb_hdr_d);
+        glBindRenderbuffer(GL_RENDERBUFFER, v->rb_hdr_d);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, W, H);
+        glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_hdr);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, v->rb_hdr_d);
+        ok &= glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    }
+    v->bl_w = W / 4 > 1 ? W / 4 : 1; v->bl_h = H / 4 > 1 ? H / 4 : 1;
+    for (int i = 0; i < 2 && ok; i++) { v->tex_bl[i] = float_tex(v->bl_w, v->bl_h, 0); ok &= fbo_for(&v->fbo_bl[i], v->tex_bl[i]); }
+    for (int i = 0; i < 2 && ok; i++) {
+        v->tex_ex[i] = float_tex(1, 1, 0); ok &= fbo_for(&v->fbo_ex[i], v->tex_ex[i]);
+        glClearColor(0, 0, 0, 1); glClear(GL_COLOR_BUFFER_BIT);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (!ok) {
+        fprintf(stderr, "no float render target: the video look is not available here\n");
+        video_free(v);
+        v->video_ok = 0;
+        return 0;
+    }
+    v->hdr_w = W; v->hdr_h = H;
+    if (v->video_ok < 0) printf("video look: %s\n", v->ms_samples ? "4x multisampled float" : "float, no multisampling");
+    v->video_ok = 1;
+    return 1;
+}
+static void fill_pass(view3d *v) { glBindVertexArray(v->vao_empty); glDrawArrays(GL_TRIANGLES, 0, 3); }
+/* the frame as a camera hands it over: metered, bloomed, tone-mapped, through a lens, with grain */
+static void video_post(view3d *v, float dt)
+{
+    const int W = v->W, H = v->H;
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glDepthMask(GL_FALSE);
+    if (v->fbo_ms) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, v->fbo_ms);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, v->fbo_hdr);
+        glBlitFramebuffer(0, 0, W, H, 0, 0, W, H, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    }
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, v->tex_hdr);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    /* metering, eased: the exposure follows the light over about a second */
+    const int nx = 1 - v->ex_i;
+    glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_ex[nx]);
+    glViewport(0, 0, 1, 1);
+    glUseProgram(v->p_adapt);
+    glUniform1i(U(v->p_adapt, "u_hdr"), 0);
+    glUniform1i(U(v->p_adapt, "u_prev"), 1);
+    glUniform1f(U(v->p_adapt, "u_lod"), (float)(v->hdr_levels > 6 ? v->hdr_levels - 6 : 0));
+    glUniform1f(U(v->p_adapt, "u_rate"), 1.0f - expf(-dt / 0.9f));
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, v->tex_ex[v->ex_i]);
+    fill_pass(v);
+    v->ex_i = nx;
+    /* bloom: what is brighter than white, at a quarter size, blurred twice each way */
+    glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_bl[0]);
+    glViewport(0, 0, v->bl_w, v->bl_h);
+    glUseProgram(v->p_bright);
+    glUniform1i(U(v->p_bright, "u_hdr"), 0);
+    glUniform1i(U(v->p_bright, "u_ex"), 1);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, v->tex_ex[v->ex_i]);
+    fill_pass(v);
+    glUseProgram(v->p_bloom);
+    glUniform1i(U(v->p_bloom, "u_src"), 0);
+    glActiveTexture(GL_TEXTURE0);
+    for (int it = 0; it < 2; it++) {
+        const float step = it == 0 ? 1.0f : 2.0f;
+        glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_bl[1]);
+        glBindTexture(GL_TEXTURE_2D, v->tex_bl[0]);
+        glUniform2f(U(v->p_bloom, "u_dir"), step / (float)v->bl_w, 0.0f);
+        fill_pass(v);
+        glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_bl[0]);
+        glBindTexture(GL_TEXTURE_2D, v->tex_bl[1]);
+        glUniform2f(U(v->p_bloom, "u_dir"), 0.0f, step / (float)v->bl_h);
+        fill_pass(v);
+    }
+    /* the picture */
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, W, H);
+    glUseProgram(v->p_post);
+    glUniform1i(U(v->p_post, "u_hdr"), 0);
+    glUniform1i(U(v->p_post, "u_bloom"), 1);
+    glUniform1i(U(v->p_post, "u_ex"), 2);
+    glUniform2f(U(v->p_post, "u_res"), (float)W, (float)H);
+    glUniform1f(U(v->p_post, "u_time"), v->time);
+    glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, v->tex_hdr);
+    glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, v->tex_bl[0]);
+    glActiveTexture(GL_TEXTURE2); glBindTexture(GL_TEXTURE_2D, v->tex_ex[v->ex_i]);
+    fill_pass(v);
+    glActiveTexture(GL_TEXTURE0);
+    glDepthMask(GL_TRUE);
+}
+
 void view3d_render(view3d *v, const wave *w, const view3d_params *p)
 {
+    {
+        /* the clock: the stars' twinkle, the clouds' drift, the grain, the hand-held drift */
+        const float now = (float)SDL_GetTicks() / 1000.0f;
+        v->last_time = v->time > 0.0f ? v->time : now;
+        v->time = now;
+    }
+    if (p->look == 1) {
+        SDL_GL_GetDrawableSize(v->win, &v->W, &v->H);
+        if (v->H < 1) v->H = 1;
+        v->video_on = video_setup(v);
+    } else v->video_on = 0;
     update_camera(v);
     const float L = v->Lx > v->Ly ? v->Lx : v->Ly;
     {
@@ -2689,6 +3031,7 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, v->tex_h);
 
+    if (v->video_on) glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_ms ? v->fbo_ms : v->fbo_hdr);
     glViewport(0, 0, v->W, v->H);
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
@@ -2756,6 +3099,7 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
         glDisable(GL_BLEND);
     }
 
+    if (v->video_on) video_post(v, v->time - v->last_time);
     draw_overlay(v);
     glBindVertexArray(0);
     if (v->want_capture) {

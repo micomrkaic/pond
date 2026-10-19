@@ -55,6 +55,7 @@ static const char *const help_lines[] = {
     "g / G   f                 display gain;  floor pattern",
     "t                         container: opaque, floor, glass, +bottom, none",
     "`                         setting: none / a house and garden (4-40 m basins)",
+    "Tab                       look: animation / video (as a camera would film it)",
     "",
     "r   i / I                 rain on / off;  rain rate",
     "w / W                     wind, m/s: a fetch-limited sea over the basin",
@@ -164,8 +165,9 @@ static void update_hud(app *a)
                  a->caption[0] ? "  -  " : "", a->caption);
     else if (a->caption[0]) snprintf(line5, sizeof line5, "\n%s", a->caption);
     const char *setting = !a->p3.setting ? "" : view3d_setting_fits(a->w->Lx, a->w->Ly) ? "  house" : "  house (4-40 m basins)";
-    snprintf(buf, sizeof buf, "%s  %s  h=%.3g m  %s%s\n%s%s%s%s",
-             presets[a->preset].name, dims, a->w->depth, glass_names[a->p3.glass], setting, line2, line3, line4, line5);
+    snprintf(buf, sizeof buf, "%s  %s  h=%.3g m  %s%s%s\n%s%s%s%s",
+             presets[a->preset].name, dims, a->w->depth, glass_names[a->p3.glass], setting,
+             a->p3.look ? "  video" : "", line2, line3, line4, line5);
     if (a->v3) view3d_set_overlay(a->v3, buf, help_lines, NHELP, a->show_help, a->show_hud);
     char title[300];
     snprintf(title, sizeof title, "pond  |  %s  %s  h=%.3g m  |  %s",
@@ -266,6 +268,7 @@ static const keybind keybinds[] = {
     { SDLK_f, -1, "floor", +1 },
     { SDLK_t, -1, "glass", +1 },
     { SDLK_BACKQUOTE, -1, "setting", +1 },
+    { SDLK_TAB, -1, "look", +1 },
     { SDLK_d,  0, "hud", 0 },             { SDLK_d, 1, "paddle-mark", 0 },
     { SDLK_v, -1, "view", 0 },
     { SDLK_SPACE, -1, "paused", 0 },
