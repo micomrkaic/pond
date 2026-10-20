@@ -104,7 +104,8 @@ void app_jolt_step(app *a, double dts)
 void app_reset_camera(app *a)
 {
     a->cam_yaw = 35.0f; a->cam_pitch = 42.0f; a->cam_dist = 1.5f;
-    if (a->v3) { view3d_reset_camera(a->v3, a->w); view3d_get_camera(a->v3, &a->cam_yaw, &a->cam_pitch, &a->cam_dist); }
+    a->cam_ox = a->cam_oz = 0.0f;
+    if (a->v3) { view3d_set_target(a->v3, 0.0f, 0.0f); view3d_reset_camera(a->v3, a->w); view3d_get_camera(a->v3, &a->cam_yaw, &a->cam_pitch, &a->cam_dist); }
 }
 
 int app_set_shape(app *a, int shape)
@@ -323,6 +324,8 @@ static double g_dist(const app *a)  { float y, p, d; cam_get(a, &y, &p, &d); ret
 static void s_yaw(app *a, double v)   { float y, p, d; cam_get(a, &y, &p, &d); cam_put(a, (float)v, p, d); }
 static void s_pitch(app *a, double v) { float y, p, d; cam_get(a, &y, &p, &d); cam_put(a, y, (float)v, d); }
 static void s_dist(app *a, double v)  { float y, p, d; cam_get(a, &y, &p, &d); cam_put(a, y, p, (float)v); }
+G(g_camx, a->cam_ox)                S(s_camx, { a->cam_ox = (float)v; if (a->v3) view3d_set_target(a->v3, a->cam_ox, a->cam_oz); })
+G(g_camz, a->cam_oz)                S(s_camz, { a->cam_oz = (float)v; if (a->v3) view3d_set_target(a->v3, a->cam_ox, a->cam_oz); })
 
 /* sound: shadowed in the app so a run without a device still keeps the numbers */
 G(g_volume, a->volume)              S(s_volume, { a->volume = v; if (a->au) audio_set_volume(a->au, v); })
@@ -393,6 +396,8 @@ static const param params[] = {
     RA("sun-azim", "display", "the sun's azimuth, degrees", 0, 360, 10, 1, g_sun_az, s_sun_az),
     RA("yaw", "camera",    "camera yaw, degrees", 0, 360, 5, 1, g_yaw, s_yaw),
     RA("pitch", "camera",  "camera pitch, degrees above the water", -89, 89, 3, 0, g_pitch, s_pitch),
+    RA("cam-x", "camera",  "what the camera looks at: across the basin from its centre, -0.5..0.5", -0.5, 0.5, 0.02, 0, g_camx, s_camx),
+    RA("cam-z", "camera",  "what the camera looks at: along the basin from its centre, -0.5..0.5", -0.5, 0.5, 0.02, 0, g_camz, s_camz),
     RM("dist", "camera",   "camera distance, in basin lengths", 0.15, 12, 1.25, 0, g_dist, s_dist),
     /* sound */
     RM("volume", "sound", "master volume", 0, 1, 1.25, 0.05, g_volume, s_volume),

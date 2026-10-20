@@ -69,6 +69,8 @@ void     view3d_orbit(view3d *v, float dyaw_deg, float dpitch_deg);
 void     view3d_zoom(view3d *v, float factor);
 void     view3d_set_camera(view3d *v, float yaw_deg, float pitch_deg, float dist_rel);
 void     view3d_get_camera(const view3d *v, float *yaw_deg, float *pitch_deg, float *dist_rel);
+/* what the camera looks at: an offset from the basin's centre, in fractions of its sides */
+void     view3d_set_target(view3d *v, float ox, float oz);
 
 /* where a basin point is relative to the listener: pan -1..1 (left..right), att 0..1 (distance) */
 void     view3d_listen(const view3d *v, double x, double z, double *pan, double *att);

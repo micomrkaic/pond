@@ -54,6 +54,7 @@ typedef struct app {
     view3d_params p3;
     int mode3d, show_help, show_hud, fullscreen;
     float cam_yaw, cam_pitch, cam_dist;   /* the camera when there is no view to keep it */
+    float cam_ox, cam_oz;                 /* what it looks at: an offset from the basin's centre, fractions */
 
     wave *w;
     int nx, ny;                /* grid parameter (nx = ny = --grid) */

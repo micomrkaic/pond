@@ -1,0 +1,24 @@
+# pond: poolside.                          ./pond --script demos/poolside.pond
+#
+# Standing at the water's edge by the steps, as someone with a camera would:
+# the video look, the 12 m pool at 1.5 m deep in its setting, a light breeze in
+# gusts.  The steps throw their shadows down onto each other through the water,
+# the caustics wander over the mosaic, the sun glitters off the far side.
+
+at 0     clear  shape rect  preset pool  depth 1.5  glass opaque  floor tiles  setting house  look video
+at 0     rain off  paddle off  boat off  floats 0  shake off  wind 0  damping 0.04
+at 0     breeze on  breeze-gain 0.8  gusts on
+at 0     sun-elev 45  sun-azim 60
+at 0     cam-x -0.29  cam-z 0.40  camera 160,38,0.30
+at 0     say "poolside: the steps"
+at 6     drop 0.20,0.80 0.04
+at 20    yaw += 25 over 40   pitch 30 over 40
+at 40    say ""
+at 64    say "along to the bench"
+at 64    cam-x -0.42 over 30  cam-z 0.05 over 30  yaw 120 over 30  dist 0.35 over 30
+at 100   say "the sun lower: longer shadows, warmer light"
+at 100   sun-elev 18 over 40  sun-azim 80 over 40
+at 104   cam-x -0.29 over 30  cam-z 0.40 over 30  yaw 165 over 30  pitch 36 over 30  dist 0.30 over 30
+at 145   say ""
+at 150   sun-elev 45 over 15  sun-azim 60 over 15
+at 168   loop

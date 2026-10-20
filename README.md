@@ -227,7 +227,8 @@ then the program. Scripts do not clear the water between events unless told
 to; the old waves decaying under the new ones is the good part. (Do clear
 before shrinking a basin, though: 80 m of sea in a 3 m pond is a tsunami.)
 
-`demos/` has eleven: `showcase` (every feature once, from the tray to the sea,
+`demos/` has twelve: `poolside` (at the water's edge by the steps, in the
+video look), `showcase` (every feature once, from the tray to the sea,
 ten minutes, loops), `house` (the pool in its setting through a day, a
 breeze, rain at night, then the round pool), `tour` (a bit of everything, three minutes, loops),
 `wavemaker` (frequency, span, position, walls), `rings` (the disk with its
@@ -776,6 +777,48 @@ small stuff a real pool is never without, eight short wave trains of 9 to
 slope in the shading only and faded with distance before they can alias
 (basins of 2 m and up; the tray's ripples are its own). `look animation` is
 the render as it was, and the physics underneath is the same in both.
+
+### Tiles, stone and sky light
+
+Also in the video look, and only there (the animation look is bit-for-bit
+what it was):
+
+- **Mosaic.** On basins of 2 m and up the floor and walls are 2.5 cm tiles
+  in three blues with white grout and a slow mottle, and a band of darker
+  tile at the waterline. Each pixel's footprint is estimated from its
+  distance (through the water too), and past a tile the pattern gives way
+  to its own average, so it cannot shimmer.
+- **Caustics.** On the rectangle the light map is twice the grid, so the
+  focused lines come out thin and can reach ten times flat-water
+  irradiance.
+- **Sky light.** What the sun does not reach is lit by a hemisphere: the
+  sky's blue from above, the sunlit terrace's warmth from below. The pool
+  floor's fill is bluish and falls off into the corners, walls darken where
+  they meet the floor and the ground, and the terrace under the roofs sees
+  less sky.
+- **Wear.** The terrace, coping and stone carry stains, blotches and pits,
+  filtered by distance like the mosaic. The coping rolls over towards the
+  water in a 5 cm bullnose, with a line of grime at the lip.
+
+### Steps, a bench, and where the camera looks
+
+With the setting, in the video look, on a rectangle of 6 m and up, the pool
+gets a flight of steps along the wall at z = Ly (25 cm risers, 32 cm
+treads, as many as the depth holds) and a bench along x = 0, 55 cm down.
+They are traced, not meshed: a union of boxes standing on the floor, found
+by the same ray that finds the floor and walls through the water. Their
+faces are mosaic; their caustics are the floor's light map, taken where the
+refracted sunlight through them would have reached the floor and softened
+towards the surface; and they shadow one another and the floor, tested
+along the refracted sun. The solver still sees a flat floor: at a quarter
+of the pool's area and a quarter of its depth, the steps would shift the
+long waves' speed by a few per cent where they are, which is not what the
+eye is reading there.
+
+`cam-x` and `cam-z` move what the camera looks at, as an offset from the
+basin's centre in fractions of its sides (scripts can tween them like any
+parameter; `o` puts it back). `demos/poolside.pond` uses them to stand at
+the water's edge by the steps, the way someone with a camera would.
 
 ### Glitter and cat's paws
 

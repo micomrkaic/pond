@@ -171,6 +171,61 @@ static const char *glsl_common = GLSL(
 
 /* shared, second part (ISO C caps a string literal at 4095 characters): the
  * setting's shadows and materials */
+static const char *glsl_common3 = GLSL(
+    uniform float u_pix;      /* radians a pixel subtends: for filtering detail by its footprint */
+    uniform vec4 u_occl[2];   /* the roofs' footprints, x0 x1 z0 z1: the sky is hidden under them */
+    uniform int u_nocc;
+
+    /* a pool's mosaic: 2.5 cm tiles in three blues, white grout; past a pixel the
+     * pattern gives way to its own average, so it cannot shimmer */
+    vec3 mosaic(vec2 q, float fp, float band) {
+        const float s = 0.025, gw = 0.09;
+        vec2 u = q / s, id = floor(u), f = fract(u);
+        float h1 = hash21(id), h2 = hash21(id + 17.3);
+        vec3 base = mix(vec3(0.30, 0.60, 0.86), vec3(0.08, 0.22, 0.48), band);
+        vec3 tile = base * (0.82 + 0.30 * h1) + vec3(-0.03, 0.05, -0.02) * (h2 - 0.5);
+        vec3 grout = mix(vec3(0.80, 0.86, 0.88), vec3(0.62, 0.70, 0.74), band);
+        float e = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y));
+        vec3 c = e < 0.5 * gw ? grout : tile * (0.92 + 0.08 * smoothstep(0.5 * gw, 0.25, e));
+        vec3 avg = mix(base * 0.97, grout, 2.0 * gw);
+        /* a slow mottle, as real tile batches and dirt give */
+        float m = 0.94 + 0.06 * vnoise(q * 0.7) + 0.04 * vnoise(q * 3.1);
+        return mix(c, avg, smoothstep(0.25, 0.9, fp / s)) * m;
+    }
+    /* the basin's floor and walls: mosaic in the video look on basins of 2 m and up
+     * (a band of darker tile at the waterline), the old pattern otherwise */
+    vec3 tilework(vec2 q, float tile, int style, float fp, float y) {
+        if (u_video > 0.5 && style == 0 && tile >= 0.25)
+            return mosaic(q, fp, (y > -0.17 && y < 0.5) ? 1.0 : 0.0);
+        return pattern(q, tile, style);
+    }
+    /* light from the sky above and the sunlit ground below, by the way a surface faces */
+    vec3 hemi(vec3 n) {
+        vec3 skyl = mix(vec3(0.60, 0.76, 1.00), vec3(0.85, 0.62, 0.58), 0.6 * u_dusk);
+        vec3 gnd = vec3(1.00, 0.90, 0.78) * (0.10 + 0.55 * max(u_sun.y, 0.0));
+        return mix(gnd, skyl, 0.5 + 0.5 * n.y) * 0.42;
+    }
+    /* how much sky a point under a roof still sees */
+    float roof_occl(vec3 p) {
+        float o = 1.0;
+        for (int i = 0; i < 2; i++) {
+            if (i >= u_nocc) break;
+            vec4 b = u_occl[i];
+            float sd = max(max(b.x - p.x, p.x - b.y), max(b.z - p.z, p.z - b.w));   /* < 0 under the roof */
+            o = min(o, 1.0 - 0.55 * (1.0 - smoothstep(-0.4, 0.8, sd)));
+        }
+        return o;
+    }
+    /* stone that has been outside: stains, darker blotches, pits */
+    vec3 weathered(vec3 c, vec3 p, float fp) {
+        vec2 q = p.xz + vec2(0.37, 0.11) * p.y;
+        float st = fbm(q * 0.35);
+        c *= 0.90 + 0.16 * smoothstep(0.25, 0.75, st);
+        c *= 1.0 - 0.10 * smoothstep(0.55, 0.85, fbm(q * 0.9 + 7.0));
+        float pit = step(0.93, hash21(floor(q * 90.0))) * 0.18;
+        return c * (1.0 - mix(pit, 0.0126, smoothstep(0.002, 0.012, fp)));
+    }
+);
 static const char *glsl_common2 = GLSL(
     /* 1 lit .. 0 in the shadow of the house, the palms, the cabana: a 3 x 3 percentage-closer
      * lookup, the point pushed off its surface a little along the normal */
@@ -399,17 +454,79 @@ static const char *glsl_water = GLSL(
         float g = F * p / (4.0 * cb * cb * cb * cb * max(dot(N, V), 0.08));
         /* twinkle: cells about three pixels across, a fresh draw 24 times a second */
         float dist = length(u_cam - P);
-        float cs = 0.0025 * dist + 0.004;
-        vec2 id = floor(P.xz / cs);
+        float cs = 0.0015 * dist + 0.002;
+        vec2 cu = P.xz / cs, id = floor(cu), f = fract(cu) - 0.5;
         float fr = floor(u_time * 24.0 + 8.0 * hash31(vec3(id, 1.7)));
         float h = hash31(vec3(id, fr));
-        float tw = 0.15 + 0.85 * 12.0 * pow(h, 11.0);        /* mean one; most cells dim, a few blazing */
+        /* each glint a round point inside its cell, not the cell itself: the spot's mean
+         * over the cell is pi/18, so it is scaled back up to keep the average */
+        float spot = exp(-18.0 * dot(f, f)) / 0.1745;
+        float tw = 0.15 + 0.85 * 12.0 * pow(h, 11.0) * mix(spot, 1.0, smoothstep(0.004, 0.02, u_pix * dist));
         vec3 E = u_night < 0.5 ? SUNCOL * mix(vec3(1.0), vec3(1.0, 0.50, 0.25), u_dusk) * 2.5 * max(u_day, 0.15)
                                : MOONCOL * 0.25;
         return min(E * g * tw, vec3(30.0)) * shadow_at(P, vec3(0.0, 1.0, 0.0));
     }
 
 );
+/* steps and a bench in the pool, for the video look with the setting: a union of
+ * boxes standing on the floor, traced from inside the water */
+static const char *glsl_steps = GLSL(
+    uniform int u_nsteps;     /* 0: none */
+    uniform vec2 u_stepx;     /* their span along the wall z = Ly */
+    uniform float u_riser, u_tread;
+    uniform vec4 u_bench;     /* x0 x1 z0 z1 */
+    uniform float u_benchy;   /* its seat's height; >= 0: no bench */
+    float box_hit(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax, out vec3 n) {
+        vec3 inv = 1.0 / rd;
+        vec3 t0 = (bmin - ro) * inv, t1 = (bmax - ro) * inv;
+        vec3 tn = min(t0, t1), tf = max(t0, t1);
+        float a = max(max(tn.x, tn.y), tn.z), b = min(min(tf.x, tf.y), tf.z);
+        if (a > b || b < 1e-4 || a < 1e-4) return -1.0;
+        n = a == tn.x ? vec3(-sign(rd.x), 0.0, 0.0) : (a == tn.y ? vec3(0.0, -sign(rd.y), 0.0) : vec3(0.0, 0.0, -sign(rd.z)));
+        return a;
+    }
+    /* the nearest hit before tmax, and its normal; -1 if none */
+    float steps_trace(vec3 ro, vec3 rd, float tmax, out vec3 n) {
+        float best = -1.0;
+        vec3 nn;
+        for (int k = 1; k <= 8; k++) {
+            if (k > u_nsteps) break;
+            float t = box_hit(ro, rd, vec3(u_stepx.x, -u_depth - 0.01, u_L.y - u_tread * float(k)), vec3(u_stepx.y, -u_riser * float(k), u_L.y + 0.01), nn);
+            if (t > 0.0 && t < tmax && (best < 0.0 || t < best)) { best = t; n = nn; }
+        }
+        if (u_benchy < 0.0) {
+            float t = box_hit(ro, rd, vec3(u_bench.x - 0.01, -u_depth - 0.01, u_bench.z), vec3(u_bench.y, u_benchy, u_bench.w), nn);
+            if (t > 0.0 && t < tmax && (best < 0.0 || t < best)) { best = t; n = nn; }
+        }
+        return best;
+    }
+    /* sunlight under the water, at a point: blocked by a step on its way down? */
+    float steps_light(vec3 q) {
+        if (u_nsteps == 0 && u_benchy >= 0.0) return 1.0;
+        vec3 Lr = refract(-u_sun, vec3(0.0, 1.0, 0.0), 1.0 / 1.333);
+        if (Lr.y > -0.05) return 1.0;
+        vec3 n;
+        float t = steps_trace(q, -Lr, (-q.y) / (-Lr.y), n);
+        return t > 0.0 ? 0.0 : 1.0;
+    }
+    /* a step's face: mosaic, the floor's caustics carried up to its depth, its fill */
+    vec3 step_face(vec3 Q, vec3 n, vec3 P) {
+        vec2 q = abs(n.y) > 0.5 ? Q.xz : (abs(n.x) > 0.5 ? Q.zy : Q.xy);
+        vec3 col = tilework(q, u_tile, u_style, u_pix * length(u_cam - Q) / 0.6, -1e3);
+        vec3 Lr = refract(-u_sun, vec3(0.0, 1.0, 0.0), 1.0 / 1.333);
+        float direct = 0.0;
+        if (Lr.y < -0.05) {
+            vec3 Qf = Q + Lr * ((-u_depth - Q.y) / Lr.y);
+            float lm = texture(u_light, Qf.xz / u_L).r * u_lscale;
+            lm = mix(1.0, lm, clamp(-Q.y / u_depth, 0.25, 1.0));
+            float cosf = max(dot(n, -Lr), 0.0) / (-Lr.y);
+            direct = 0.70 * lm * cosf * shadow_under(Q) * steps_light(Q + 0.003 * n);
+        }
+        vec3 amb = vec3(0.25, 0.29, 0.33) * (n.y > 0.5 ? 1.0 : 0.8);
+        return col * (amb + direct);
+    }
+);
+
 static const char *fs_surf = GLSL(
     bool in_basin(vec2 q) {
         if (u_shape == 1) return length(q - 0.5 * u_L) <= 0.5 * u_L.x;
@@ -437,6 +554,15 @@ static const char *fs_surf = GLSL(
         if (T.y > 0.0) tv = (0.0 - P.y) / T.y;
         vec3 c;
         float path;
+        if (u_nsteps > 0 || u_benchy < 0.0) {
+            vec3 nb;
+            float tb = steps_trace(P, T, min(tw, tv), nb);
+            if (tb > 0.0) {
+                c = step_face(P + tb * T, nb, P);
+                vec3 att = exp(-u_mu * tb);
+                return lit(c * att + SCATTER * (1.0 - att));
+            }
+        }
         if (u_extend == 1) {
             /* walls are not there: the ray leaves the water at the wall plane and
              * lands on the floor plane, which continues outside the basin */
@@ -444,7 +570,7 @@ static const char *fs_surf = GLSL(
             if (T.y >= 0.0) { c = sky(T); }
             else {
                 vec3 Q = P + tv * T;
-                vec3 col = pattern(Q.xz, u_tile, u_style);
+                vec3 col = tilework(Q.xz, u_tile, u_style, u_pix * (length(u_cam - P) + tv) / 0.6, -1e3);
                 if (in_basin(Q.xz)) {
                     float lm = texture(u_light, Q.xz / u_L).r * u_lscale;
                     c = col * (0.30 + 0.70 * lm * shadow_under(Q));
@@ -463,7 +589,8 @@ static const char *fs_surf = GLSL(
                     bool xwall = (T.x < 0.0 && Q.x < 1e-4 * u_L.x) || (T.x > 0.0 && Q.x > u_L.x - 1e-4 * u_L.x);
                     q = xwall ? vec2(Q.z, Q.y) : vec2(Q.x, Q.y);
                 }
-                c = pattern(q, u_tile, u_style) * 0.55;
+                c = tilework(q, u_tile, u_style, u_pix * (length(u_cam - P) + tw) / 0.6, Q.y) * 0.55;
+                if (u_video > 0.5) c *= (1.0 - 0.40 * exp(-(Q.y + u_depth) / 0.30)) * vec3(0.85, 0.96, 1.08);
             }
         } else {
             path = tv;
@@ -471,7 +598,14 @@ static const char *fs_surf = GLSL(
             else {
                 vec3 Q = P + tv * T;
                 float lm = texture(u_light, Q.xz / u_L).r * u_lscale;
-                c = pattern(Q.xz, u_tile, u_style) * (0.30 + 0.70 * lm * shadow_under(Q));
+                vec3 amb = vec3(0.30);
+                if (u_video > 0.5) {
+                    /* the floor's sky light: bluish, and less of it in the corners */
+                    float dw = u_shape == 1 ? 0.5 * u_L.x - length(Q.xz - 0.5 * u_L)
+                                            : min(min(Q.x, u_L.x - Q.x), min(Q.z, u_L.y - Q.z));
+                    amb = vec3(0.25, 0.29, 0.33) * (1.0 - 0.40 * exp(-max(dw, 0.0) / 0.30));
+                }
+                c = tilework(Q.xz, u_tile, u_style, u_pix * (length(u_cam - P) + tv) / 0.6, -1e3) * (amb + 0.70 * lm * shadow_under(Q) * steps_light(Q));
             }
         }
         vec3 att = exp(-u_mu * max(path, 0.0));
@@ -556,7 +690,7 @@ static const char *fs_caus = GLSL(
         /* irradiance relative to flat water = |d(source)/d(floor)|, summed over sheets by blending */
         vec2 dx = dFdx(v_src), dy = dFdy(v_src);
         float det = abs(dx.x * dy.y - dx.y * dy.x) / (u_lcell.x * u_lcell.y);
-        o = vec4(min(det, 4.0), 0.0, 0.0, 1.0);
+        o = vec4(min(det, u_video > 0.5 ? 10.0 : 4.0), 0.0, 0.0, 1.0);
     }
 );
 /* disk: resample the polar height field (with mirrored rings past the rim) onto the
@@ -714,7 +848,7 @@ static const char *fs_solid = GLSL(
             /* interior floor: lit by the caustic map, seen through water along the
              * path from here towards the camera until it leaves the basin box */
             float lm = texture(u_light, v_pos.xz / u_L).r * u_lscale;
-            c = pattern(v_pos.xz, u_tile, u_style) * (0.30 + 0.70 * lm * shadow_at(v_pos, vec3(0.0, 1.0, 0.0)));
+            c = tilework(v_pos.xz, u_tile, u_style, u_pix * length(u_cam - v_pos), -1e3) * (0.30 + 0.70 * lm * shadow_under(v_pos));
             vec3 D = u_cam - v_pos;
             float dist = length(D); D /= dist;
             float t = dist;
@@ -735,12 +869,29 @@ static const char *fs_solid = GLSL(
             c = c * att + SCATTER * (1.0 - att);
         } else if (v_kind > 9.5) {
             /* the coping round a basin sunk in the terrace */
+            if (u_video > 0.5) {
+                /* a bullnose: the top rolls over towards the water in its last 5 cm */
+                vec2 C = 0.5 * u_L, d = v_pos.xz - C;
+                float e; vec2 out_dir;
+                if (u_shape == 1) { e = length(d) - 0.5 * u_L.x; out_dir = normalize(d); }
+                else {
+                    vec2 ad = abs(d) - 0.5 * u_L;
+                    if (ad.x > ad.y) { e = ad.x; out_dir = vec2(sign(d.x), 0.0); } else { e = ad.y; out_dir = vec2(0.0, sign(d.y)); }
+                }
+                if (N.y > 0.5 && e < 0.05) {
+                    float r = clamp(e / 0.05, 0.0, 1.0);
+                    N = normalize(vec3(0.0, 1.0, 0.0) * (0.2 + r) - vec3(out_dir.x, 0.0, out_dir.y) * (1.0 - r));
+                }
+                vec3 alb = weathered(scene_albedo(v_kind, v_pos, N), v_pos, u_pix * length(u_cam - v_pos));
+                if (e < 0.012) alb *= 0.85;                 /* the waterline's grime on the lip */
+                c = alb * (hemi(N) + 0.72 * max(dot(N, u_sun), 0.0) * shadow_at(v_pos, N));
+            } else
             c = scene_albedo(v_kind, v_pos, N) * (0.35 + 0.65 * max(dot(N, u_sun), 0.0) * shadow_at(v_pos, N));
         } else {
             /* kind 1: wall or slab face; kind 3: floor outside the basin. Both sunlit. */
             vec2 q = abs(N.x) > 0.5 ? vec2(v_pos.z, v_pos.y) : (abs(N.z) > 0.5 ? vec2(v_pos.x, v_pos.y) : v_pos.xz);
             float diff = max(dot(N, u_sun), 0.0);
-            c = pattern(q, u_tile, u_style) * (0.35 + 0.65 * diff);
+            c = tilework(q, u_tile, u_style, u_pix * length(u_cam - v_pos), v_pos.y) * (0.35 + 0.65 * diff);
         }
         o = vec4(gam(lit(c)), 1.0);
     }
@@ -799,6 +950,12 @@ static const char *fs_scene = GLSL(
             float diff = max(dot(N, u_sun), 0.0);
             if (v_kind > 18.5 && v_kind < 20.5) diff = max(diff, 0.35 * max(-dot(N, u_sun), 0.0));   /* leaves let light through */
             diff *= shadow_at(v_pos, N);
+            if (u_video > 0.5) {
+                if (v_kind < 11.5 || (v_kind > 16.5 && v_kind < 17.5)) alb = weathered(alb, v_pos, u_pix * dist);
+                vec3 amb = hemi(N) * roof_occl(v_pos);
+                if (abs(N.y) < 0.5) amb *= 1.0 - 0.35 * exp(-max(v_pos.y - 0.15, 0.0) / 0.25);   /* where walls meet the ground */
+                c = lit(alb * (amb + 0.72 * diff * sunc));
+            } else
             c = lit(alb * (0.30 + 0.10 * N.y + 0.72 * diff * sunc));
         }
         /* haze: towards the horizon's own colour */
@@ -1054,10 +1211,12 @@ struct view3d {
     /* vertex ranges in vbo_solid: slab, walls, table, inner floor */
     int slab_off, slab_n, walls_off, walls_n, table_off, table_n, inner_off, inner_n;
     float yaw, pitch, dist, cx, cz;
+    float tox, toz;                  /* the target's offset from the centre, fractions of Lx, Ly */
 
     GLuint p_bg, p_surf, p_solid, p_sides, p_glass, p_ovl, p_caus, p_fill, p_mark, p_scene;
     GLuint vao_scene, vbo_scene; int n_scene;
     int cast_off, cast_n;           /* the part of it that casts shadows: not the ground, not the hills */
+    float occl[2][4];               /* the house's and the cabana's roof footprints */
     int scene_on, scene_dirty;      /* the house is drawn; its geometry needs rebuilding */
     GLuint p_depth;
     GLuint fbo_sh, tex_sh; int sh_size, sh_valid; float sh_sun[3]; float lvp[16], sbias;   /* the sun's shadow map */
@@ -1148,10 +1307,10 @@ static GLuint compile(GLenum type, const char *const *parts, int nparts)
 
 static GLuint program_parts(const char *vs, const char *const *fs, int nfs, int sides)
 {
-    const char *vp[4] = { glsl_header, glsl_common, glsl_common2, vs };
-    const char *fp[8] = { glsl_header, glsl_common, glsl_common2 };
-    for (int i = 0; i < nfs && i < 5; i++) fp[3 + i] = fs[i];
-    GLuint v = compile(GL_VERTEX_SHADER, vp, 4), f = compile(GL_FRAGMENT_SHADER, fp, 3 + (nfs < 5 ? nfs : 5));
+    const char *vp[5] = { glsl_header, glsl_common, glsl_common2, glsl_common3, vs };
+    const char *fp[9] = { glsl_header, glsl_common, glsl_common2, glsl_common3 };
+    for (int i = 0; i < nfs && i < 5; i++) fp[4 + i] = fs[i];
+    GLuint v = compile(GL_VERTEX_SHADER, vp, 5), f = compile(GL_FRAGMENT_SHADER, fp, 4 + (nfs < 5 ? nfs : 5));
     if (!v || !f) return 0;
     GLuint p = glCreateProgram();
     glAttachShader(p, v); glAttachShader(p, f);
@@ -1544,6 +1703,7 @@ static void build_scene(view3d *v)
         }
         /* the roof: a thin slab, deep over the terrace, white edges and gravel on top */
         gb_box(&g, hx0 - 0.8f, hx1 + 1.6f, yw, yw + 0.32f, zb - 0.8f, zf + 2.3f, 15.0f, 14.0f);
+        v->occl[0][0] = hx0 - 0.8f; v->occl[0][1] = hx1 + 1.6f; v->occl[0][2] = zb - 0.8f; v->occl[0][3] = zf + 2.3f;
         /* slim posts under the overhang's edge */
         for (int i = 0; i < 4; i++) {
             float px = hx0 + 6.8f + 4.4f * i;
@@ -1562,6 +1722,7 @@ static void build_scene(view3d *v)
         const float x0 = pcx - ax - 6.3f, x1 = pcx - ax - 2.2f, z0 = pcz - 1.9f, z1 = pcz + 2.4f, yr = y0 + 2.45f;
         gb_box(&g, x0, x0 + 0.25f, yl, yr, z0, z1, 13.0f, 13.0f);
         gb_box(&g, x0 - 0.2f, x1 + 0.3f, yr, yr + 0.22f, z0 - 0.3f, z1 + 0.3f, 15.0f, 14.0f);
+        v->occl[1][0] = x0 - 0.2f; v->occl[1][1] = x1 + 0.3f; v->occl[1][2] = z0 - 0.3f; v->occl[1][3] = z1 + 0.3f;
         gb_box(&g, x1 - 0.06f, x1 + 0.06f, y0, yr, z0 + 0.05f, z0 + 0.17f, 21.0f, 21.0f);
         gb_box(&g, x1 - 0.06f, x1 + 0.06f, y0, yr, z1 - 0.17f, z1 - 0.05f, 21.0f, 21.0f);
         lounger(&g, x0 + 1.4f, y0, z0 + 0.6f, 1.0f);
@@ -1855,8 +2016,8 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
 
     v->p_bg    = program(vs_bg, fs_bg, 0);
     {
-        const char *parts[3] = { fs_surf_head, glsl_water, fs_surf };
-        v->p_surf = program_parts(vs_surf, parts, 3, 0);
+        const char *parts[4] = { fs_surf_head, glsl_water, glsl_steps, fs_surf };
+        v->p_surf = program_parts(vs_surf, parts, 4, 0);
     }
     v->p_solid = program(vs_solid, fs_solid, 0);
     v->p_sides = program(vs_sides, fs_sides, 1);
@@ -2052,7 +2213,7 @@ void view3d_set_pool(view3d *v, const wave *w)
     v->Lx = (float)w->Lx; v->Ly = (float)w->Ly; v->depth = (float)w->depth;
     if (w->shape == WAVE_DISK) { v->dx = (float)w->dth; v->dy = (float)w->dr; }
     else { v->dx = (float)w->dx; v->dy = (float)w->dy; }
-    v->cx = 0.5f * v->Lx; v->cz = 0.5f * v->Ly;
+    v->cx = (0.5f + v->tox) * v->Lx; v->cz = (0.5f + v->toz) * v->Ly;
     build_solid(v);
     v->scene_dirty = 1;
 }
@@ -2068,6 +2229,12 @@ void view3d_set_camera(view3d *v, float yaw_deg, float pitch_deg, float dist_rel
 {
     v->yaw = yaw_deg; v->pitch = pitch_deg;
     v->dist = dist_rel * (v->Lx > v->Ly ? v->Lx : v->Ly);
+}
+
+void view3d_set_target(view3d *v, float ox, float oz)
+{
+    v->tox = ox; v->toz = oz;
+    v->cx = (0.5f + ox) * v->Lx; v->cz = (0.5f + oz) * v->Ly;
 }
 
 void view3d_get_camera(const view3d *v, float *yaw_deg, float *pitch_deg, float *dist_rel)
@@ -2744,6 +2911,22 @@ static void set_common(view3d *v, GLuint p, const view3d_params *prm, const floa
     if ((l = U(p, "u_rd")) >= 0) glUniform1f(l, 12.0f);
     if ((l = U(p, "u_video")) >= 0) glUniform1f(l, v->video_on ? 1.0f : 0.0f);
     if ((l = U(p, "u_wind")) >= 0) glUniform1f(l, prm->wind_u);
+    if ((l = U(p, "u_pix")) >= 0) glUniform1f(l, 2.0f * v->tanhalf / (float)(v->H > 0 ? v->H : 1));
+    if ((l = U(p, "u_nocc")) >= 0) glUniform1i(l, v->scene_on ? 2 : 0);
+    {
+        /* steps along the wall z = Ly, a bench along x = 0: the video look, with the setting,
+         * on a rectangle long enough to hold them */
+        const int on = v->scene_on && v->video_on && v->shape == 0 && v->Lx >= 6.0f && v->Ly >= 6.0f && v->depth >= 0.8f;
+        int ns = on ? (int)((v->depth - 0.3f) / 0.25f) : 0;
+        if (ns > 8) ns = 8;
+        if ((l = U(p, "u_nsteps")) >= 0) glUniform1i(l, ns);
+        if ((l = U(p, "u_stepx")) >= 0) glUniform2f(l, 0.9f, 0.9f + fminf(3.2f, 0.4f * v->Lx));
+        if ((l = U(p, "u_riser")) >= 0) glUniform1f(l, 0.25f);
+        if ((l = U(p, "u_tread")) >= 0) glUniform1f(l, 0.32f);
+        if ((l = U(p, "u_bench")) >= 0) glUniform4f(l, 0.0f, 0.45f, 1.0f, v->Ly - 0.32f * (float)ns - 1.2f);
+        if ((l = U(p, "u_benchy")) >= 0) glUniform1f(l, on ? -0.55f : 1.0f);
+    }
+    if ((l = U(p, "u_occl")) >= 0) glUniform4fv(l, 2, &v->occl[0][0]);
     if ((l = U(p, "u_ngust")) >= 0) glUniform1i(l, prm->ngust < 8 ? prm->ngust : 8);
     if ((l = U(p, "u_gust")) >= 0) glUniform4fv(l, 8, &prm->gust[0][0]);
     if ((l = U(p, "u_gbase")) >= 0) glUniform1f(l, prm->gust_base);
@@ -3084,6 +3267,20 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, v->tex_rf);
         glActiveTexture(GL_TEXTURE0);
+    }
+
+    /* the video look's caustics: the rectangle's light map at twice the grid, so the
+     * focused lines come out thin; the animation look keeps the grid's own */
+    if (v->gpu_caustics && v->shape == 0) {
+        const int want = (v->video_on && v->nx <= 512) ? 2 * v->nx : v->nx;
+        if (want != v->lm_w) {
+            const int wh = (v->video_on && v->nx <= 512) ? 2 * v->ny : v->ny;
+            glBindTexture(GL_TEXTURE_2D, v->tex_lm);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, want, wh, 0, GL_RED, GL_HALF_FLOAT, NULL);
+            glBindTexture(GL_TEXTURE_2D, v->tex_lm2);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, want, wh, 0, GL_RED, GL_HALF_FLOAT, NULL);
+            v->lm_w = want; v->lm_h = wh;
+        }
     }
 
     /* per-frame data */
