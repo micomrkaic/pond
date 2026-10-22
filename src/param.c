@@ -167,6 +167,18 @@ void app_set_fullscreen(app *a, int on)
 #endif
 }
 
+/* For the ear, rain should plink like rain whatever the basin: a raindrop's crater
+ * of a few millimetres, 6 mm for a drop of the nominal size, so the rain's spread
+ * (0.5 to 1.5 of nominal) rings at 1.2 to 3.6 kHz, a click (twice) is a pebble and a
+ * shift-click (four times) a stone.  The drawn size has a floor of a few grid cells
+ * that the ear should not hear: before 0.33 the sound took the drawn size over the
+ * basin's, right while drops scaled with the basin, and since they stopped (0.24)
+ * every drop on the pond and the pool landed past 4 kHz and was clamped there. */
+double app_acoustic_size(const app *a, double s)
+{
+    return 0.006 * s / app_drop_size(a);
+}
+
 /* a drop into the water, seen and heard */
 void app_splash(app *a, double x, double y, double s, double amp)
 {
@@ -175,10 +187,7 @@ void app_splash(app *a, double x, double y, double s, double amp)
     if (!a->au) return;
     double pan = 0, att = 1;
     if (a->v3) view3d_listen(a->v3, x, y, &pan, &att);
-    /* for the ear, rain should plink like rain whatever the basin, so the acoustic size
-     * is the drop as it would be in the 30 cm tray: a raindrop's few millimetres, a click
-     * a small stone (the drawn size has a grid floor the ear should not hear) */
-    audio_splash(a->au, s * 0.3 / sqrt(a->w->Lx * a->w->Ly), pan, att);
+    audio_splash(a->au, app_acoustic_size(a, s), pan, att);
 }
 
 /* the bubble a drop pulls under: a third of the crater's radius (the same one the

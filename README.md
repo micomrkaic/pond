@@ -800,6 +800,33 @@ what it was):
   filtered by distance like the mosaic. The coping rolls over towards the
   water in a 5 cm bullnose, with a line of grime at the lip.
 
+### The garden, filmed
+
+The video look grows its own vegetation, and the animation look keeps the
+old (both live in the setting's vertex buffer; each look draws its own
+range, and the shadow map is redrawn when the look changes):
+
+- **Palms** have a smooth trunk of twenty rings, swelling at the foot,
+  ringed with old leaf bases and fibrous, greyer low down; a crown of
+  sixteen fronds, each a curving rib with two rows of narrow leaflets
+  angled forward and drooping at the tips, each leaflet its own green; and
+  a skirt of dry brown fronds hanging under the crown. Leaves pass light:
+  lit from behind they glow.
+- **Shrubs** are clusters of nine to thirteen lumpy mounds, with small
+  leaves catching the light and dark between them, darker towards the
+  ground.
+- **The lawn** has drier and greener patches and the speckle of blades,
+  under the mowing stripes.
+- **Render** on the house and cabana has a fine grain, slow blotches,
+  streaks where the rain runs off under the roof's edge, and the grey
+  splash line at the foot; the roof's gravel, the loungers' canvas and the
+  wooded hills have their own grain.
+- **Shadows** take sixteen samples over six texels: the sun's half-degree
+  penumbra at a few metres.
+
+Every fine detail fades to its own average once it is smaller than the
+pixel, as the mosaic does.
+
 ### Steps, a bench, and where the camera looks
 
 With the setting, in the video look, on a rectangle of 6 m and up, the pool

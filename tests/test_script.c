@@ -225,6 +225,22 @@ int main(void)
         }
     }
 
+    /* --- the ear's drop: the rain's spread rings at 1.2 to 3.6 kHz on every basin --- */
+    {
+        for (int pr = 0; pr < 4; pr++) {
+            app *a = make_app(512);
+            param_set(a, "preset", pr);
+            const double s0 = app_drop_size(a);
+            const double lo = app_acoustic_size(a, 0.5 * s0), hi = app_acoustic_size(a, 1.5 * s0);
+            /* Minnaert, as audio_splash takes it: R = 0.3 size, f = 3.26 / R */
+            const double f_hi = 3.26 / (0.3 * lo), f_lo = 3.26 / (0.3 * hi);
+            char what[160];
+            snprintf(what, sizeof what, "%-5s rain plinks at %.0f..%.0f Hz (inside 1000..4000)", presets[pr].name, f_lo, f_hi);
+            check(f_lo > 1000.0 && f_hi < 4000.0, what);
+            free_app(a);
+        }
+    }
+
     printf(fails ? "%d script test(s) failed\n" : "all script tests passed\n", fails);
     return fails ? 1 : 0;
 }

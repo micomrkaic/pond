@@ -137,7 +137,8 @@ double app_paddle_hz(const app *a);
 void  app_set_paddle_hz(app *a, double f);
 void  app_clamp_paddle(app *a);
 void  app_reset_camera(app *a);
-double app_boat_len(const app *a);      /* the hull's length: a twelfth of the basin */
+double app_boat_len(const app *a);
+double app_acoustic_size(const app *a, double drawn_size);   /* the crater the ear hears, metres */      /* the hull's length: a twelfth of the basin */
 double app_boat_speed(const app *a);    /* m/s */
 void  app_add_float(app *a);            /* one more, somewhere not too near a wall */
 void  app_clear_floats(app *a);
