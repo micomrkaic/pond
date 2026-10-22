@@ -248,6 +248,16 @@ static const char *glsl_common2 = GLSL(
                 lit += (s.z - u_sbias > texture(u_shadow, s.xy + vec2(float(i), float(j)) * tx).r) ? 0.0 : 1.0;
         return lit / 9.0;
     }
+    /* the sun's highlight, per unit of its irradiance: GGX, Smith-Schlick, Schlick */
+    float ggx(vec3 N, vec3 V, vec3 L, float F0, float r) {
+        vec3 H = normalize(L + V);
+        float nl = max(dot(N, L), 0.0), nv = max(dot(N, V), 1e-3), nh = max(dot(N, H), 0.0);
+        float a = r * r, a2 = a * a;
+        float d = nh * nh * (a2 - 1.0) + 1.0;
+        float k = 0.5 * a;
+        float F = F0 + (1.0 - F0) * pow(1.0 - max(dot(H, V), 0.0), 5.0);
+        return a2 / (3.14159 * d * d) * 0.25 / ((nl * (1.0 - k) + k) * (nv * (1.0 - k) + k)) * F * nl;
+    }
     /* a point under the water: its sunlight came in along the refracted ray, steeper
      * than the sun's, so the test is made where that ray crossed the surface */
     float shadow_under(vec3 q) {
@@ -836,6 +846,84 @@ static const char *vs_solid = GLSL(
         gl_Position = u_vp * vec4(a_pos, 1.0);
     }
 );
+/* the house and garden: in the video look the garden moves in the wind -- the palms
+ * lean and sway on their trunks, their fronds bob and their leaflets flutter, the
+ * bushes rock and tremble -- in the same breeze and the same gusts as the water */
+static const char *vs_scene = GLSL(
+    in vec3 a_pos;
+    in vec3 a_nrm;
+    in float a_kind;
+    in vec4 a_sw;             /* palm 1..8 or shrub 10+; height up it; out along the frond; phase (+2 at a leaflet's tip) */
+    uniform mat4 u_vp;
+    uniform vec4 u_palm[8];   /* each palm's crown, and its height */
+    uniform float u_wind;     /* the breeze, m/s, and its gusts: as the water has them */
+    uniform int u_ngust;
+    uniform vec4 u_gust[8];
+    out vec3 v_pos;
+    out vec3 v_rest;          /* where the point stands in still air: what its texture is pinned to */
+    out vec3 v_nrm;
+    out float v_kind;
+    /* the air in the garden, ~1 on average: the gusts over the pool, grown to the
+     * garden's scale, and stronger air sweeping through downwind at the wind's speed */
+    float garden_gust(vec2 q, float U) {
+        float g = 0.0;
+        for (int i = 0; i < 8; i++) {
+            if (i >= u_ngust) break;
+            vec2 d = q - u_gust[i].xy;
+            float R = 2.5 * u_gust[i].z + 2.0;
+            g += u_gust[i].w * exp(-dot(d, d) / (R * R));
+        }
+        float fr = vnoise(vec2(q.x - 0.9 * U * u_time, q.y + 0.2 * U * u_time) * 0.07);
+        return 0.50 + 0.35 * min(g, 1.5) + 0.80 * fr * fr * 1.6;
+    }
+    void main() {
+        vec3 P = a_pos, N = a_nrm;
+        if (u_video > 0.5 && a_sw.x > 0.5) {
+            float U = max(u_wind, 0.8);                    /* never quite still air */
+            const vec3 W = vec3(1.0, 0.0, 0.0), X = vec3(0.0, 0.0, 1.0);   /* downwind, across */
+            float ph = fract(a_sw.w), tip = step(1.5, a_sw.w);
+            if (a_sw.x < 9.5) {
+                int id = int(a_sw.x + 0.5) - 1;
+                vec4 pc = u_palm[id];
+                float H = pc.w, s = a_sw.y, wf = a_sw.z;
+                float G = garden_gust(pc.xz, U);
+                /* the trunk: bowed downwind as U^2, rocking at its own period (taller, slower) */
+                float f0 = 0.22 * sqrt(8.0 / H), t = u_time + 7.3 * float(id);
+                float lean = min(0.0028 * H * U * U * G, 0.08 * H);
+                float sw = 0.012 * H * min(U, 8.0) * (0.4 + 0.6 * G) / 4.0 + 0.10 * lean;
+                vec3 D = W * (lean + sw * sin(6.2832 * f0 * t)) + X * (0.4 * sw * sin(6.2832 * 1.13 * f0 * t + 1.3));
+                /* the crown turns with the trunk's top */
+                vec3 om = cross(vec3(0.0, 1.0, 0.0), D) * (2.0 / H) * s * s * s * s;
+                P += D * s * s + cross(om, a_pos - pc.xyz);
+                N += cross(om, N);
+                if (wf > 0.0) {
+                    /* the frond: streaming downwind, bobbing in a wave that runs out to its tip */
+                    float A = min(0.03 + 0.035 * U * G, 0.45) * wf * wf;
+                    float b = sin(6.2832 * ((0.6 + 0.5 * ph) * u_time + ph) - 2.5 * wf);
+                    float c = cos(6.2832 * ((0.5 + 0.4 * ph) * u_time + 0.3) - 2.0 * wf);
+                    P += vec3(0.0, A * b, 0.0) + W * (0.6 * A * (1.0 + 0.4 * c)) + X * (0.3 * A * c);
+                    N = normalize(N + vec3(0.0, 0.0, 0.5 * wf * b * min(U * G / 4.0, 1.0)));
+                    /* leaflets: a quick flutter at their tips, turning their faces to the sun and away */
+                    float h = hash31(a_pos * 7.0);
+                    float fl = sin(6.2832 * ((2.5 + 2.5 * h) * u_time + 13.0 * h));
+                    P.y += tip * min(0.012 + 0.010 * U * G, 0.08) * fl;
+                    N = normalize(N + tip * min(0.15 + 0.12 * U * G, 0.8) * fl * vec3(cos(6.2832 * h), 0.3, sin(6.2832 * h)));
+                }
+            } else {
+                /* a bush: leaning and rocking from the foot up, every leaf trembling */
+                float s = a_sw.y * a_sw.y, G = garden_gust(a_pos.xz, U);
+                float rock = 0.30 * sin(6.2832 * 0.7 * u_time + 0.8 * a_pos.x + 0.5 * a_pos.z + 3.0 * a_sw.x);
+                vec3 D = W * min(0.0035 * U * U * G, 0.10) * (1.0 + rock) + X * 0.004 * U * G * rock;
+                float h = hash31(a_pos * 13.1);
+                float tr = sin(6.2832 * ((3.0 + 3.0 * h) * u_time + 17.0 * h));
+                vec3 J = vec3(sin(6.2832 * h), 0.6 * cos(19.0 * h), cos(6.2832 * h)) * tr;
+                P += s * (D + J * min(0.0015 * U * G, 0.012));
+            }
+        }
+        v_pos = P; v_rest = a_pos; v_nrm = N; v_kind = a_kind;
+        gl_Position = u_vp * vec4(P, 1.0);
+    }
+);
 static const char *fs_solid = GLSL(
     in vec3 v_pos;
     in vec3 v_nrm;
@@ -893,7 +981,17 @@ static const char *fs_solid = GLSL(
                 }
                 vec3 alb = weathered(scene_albedo(v_kind, v_pos, N), v_pos, u_pix * length(u_cam - v_pos));
                 if (e < 0.012) alb *= 0.85;                 /* the waterline's grime on the lip */
-                c = alb * (hemi(N) + 0.72 * max(dot(N, u_sun), 0.0) * shadow_at(v_pos, N));
+                /* wet: the lip the water laps, and splashes drying in patches; darker, and glossy */
+                float w = clamp(exp(-max(e, 0.0) / 0.15) + smoothstep(0.58, 0.75, vnoise(v_pos.xz * 1.7)), 0.0, 1.0);
+                if (v_pos.y < 0.0) w = 1.0;
+                alb *= 1.0 - 0.45 * w;
+                float shd = shadow_at(v_pos, N);
+                vec3 V = normalize(u_cam - v_pos);
+                vec3 sunc = mix(vec3(1.0), vec3(1.0, 0.62, 0.42), u_dusk);
+                float F0 = mix(0.035, 0.02, w), rg = mix(0.65, 0.10, w);
+                float Fe = F0 + (1.0 - F0) * pow(1.0 - max(dot(N, V), 0.0), 5.0) * (1.0 - rg) * (1.0 - rg);
+                c = alb * (hemi(N) + 0.72 * max(dot(N, u_sun), 0.0) * shd)
+                  + sunc * 2.26 * ggx(N, V, u_sun, F0, rg) * shd + Fe * mix(0.25, 1.0, w) * 1.6 * hemi(reflect(-V, N));
             } else
             c = scene_albedo(v_kind, v_pos, N) * (0.35 + 0.65 * max(dot(N, u_sun), 0.0) * shadow_at(v_pos, N));
         } else {
@@ -953,7 +1051,7 @@ static const char *glsl_detail = GLSL(
             float v = fract(k) * 2.5;
             float lf = fnoise(p.xz + p.y * 0.7, 0.03, fp);
             vec3 c = mix(vec3(0.10, 0.25, 0.07), vec3(0.22, 0.38, 0.12), v) * (0.55 + 0.9 * lf);
-            N = normalize(N + 0.7 * (vec3(vnoise(p.xz * 25.0 + p.y), 0.5, vnoise(p.zx * 25.0 - p.y)) - 0.5) * (1.0 - smoothstep(0.02, 0.08, fp)));
+            N = normalize(N + 0.7 * (vec3(vnoise(p.xz * 25.0 + p.y * vec2(23.0, -19.0)), 0.5, vnoise(p.zx * 25.0 - p.y * vec2(17.0, -21.0))) - 0.5) * (1.0 - smoothstep(0.02, 0.08, fp)));
             return c * (0.55 + 0.45 * smoothstep(0.1, 1.1, p.y));
         }
         if (k > 21.5 && k < 22.5) return alb * (0.92 + 0.10 * fnoise(p.xz * vec2(1.0, 3.0) + p.y, 0.003, fp));   /* canvas */
@@ -963,9 +1061,57 @@ static const char *glsl_detail = GLSL(
     }
 );
 
+/* --- the video look's sheen: the sun's highlight off leaves, steel, glass and wet stone --- */
+static const char *glsl_gloss = GLSL(
+    uniform vec2 u_L;
+    uniform int u_shape;
+    uniform float u_wind;
+    /* a bush's leaves turning in the wind: the leaf-scale normals stirred, each patch
+     * of leaves at its own phase, faster in a stronger wind; gone with distance */
+    vec3 rustle(vec3 N, vec3 p, float fp) {
+        float U = max(u_wind, 0.8), w = 6.2832 * (1.2 + 0.35 * min(U, 8.0));
+        vec2 q = p.xz * 22.0 + p.y * vec2(19.0, -23.0);
+        vec3 j = vec3(sin(w * u_time + 6.2832 * vnoise(q)), 0.0, cos(1.3 * w * u_time + 6.2832 * vnoise(q + 5.1)));
+        return normalize(N + min(0.10 + 0.08 * U, 0.6) * j * (1.0 - smoothstep(0.02, 0.10, fp)));
+    }
+    /* stone by the water: a wet lip, and splashed patches drying further out */
+    float wetness(vec3 p) {
+        float d = u_shape == 0 ? max(max(-p.x, p.x - u_L.x), max(-p.z, p.z - u_L.y)) : length(p.xz - 0.5 * u_L) - 0.5 * u_L.x;
+        if (p.y < 0.05) return 0.0;
+        d = max(d, 0.0);
+        float sp = smoothstep(0.60, 0.78, vnoise(p.xz * 1.7)) * exp(-d / 1.2);
+        return clamp(exp(-d / 0.12) + sp, 0.0, 1.0);
+    }
+    /* by material: (Fresnel at normal incidence, roughness, how much of the sky it shows);
+     * wet stone darkens as well as shines.  A bush's sheen is its leaves': seen from
+     * further than they can be made out, the mound must not shine like one leaf */
+    vec4 gloss_of(float k, vec3 p, float fp, inout vec3 alb) {
+        if (k < 11.5) {
+            float w = wetness(p);
+            alb *= 1.0 - 0.35 * w;
+            return vec4(mix(0.035, 0.02, w), mix(0.65, 0.10, w), mix(0.25, 1.0, w), 1.0);
+        }
+        if (k > 19.5 && k < 20.5) {
+            float far = smoothstep(0.02, 0.10, fp);
+            return vec4(0.045, mix(0.40, 0.60, far), 0.30, 0.7 - 0.4 * far);
+        }
+        if (k < 12.5) return vec4(0.02, 0.70, 0.10, 0.15);  /* grass: a faint sheen against the light */
+        if (k < 14.5) return vec4(0.03, 0.85, 0.05, 1.0);   /* render */
+        if (k < 15.5) return vec4(0.0);                     /* gravel */
+        if (k < 17.5) return vec4(0.04, 0.60, 0.20, 1.0);   /* stone */
+        if (k < 18.5) return vec4(0.03, 0.80, 0.0, 0.5);    /* bark */
+        if (k < 19.5) return vec4(0.05, 0.30, 0.45, 1.0);   /* palm leaflets: waxy */
+        if (k < 21.5) return vec4(0.06, 0.22, 0.85, 1.0);   /* painted steel */
+        if (k < 23.5) return vec4(0.0);                     /* canvas, far hills */
+        if (k > 24.5) return vec4(0.05, 0.32, 0.40, 1.0);   /* a green frond's rib */
+        return vec4(0.03, 0.70, 0.05, 0.5);                 /* dry fronds */
+    }
+);
+
 /* --- the house and garden --- */
 static const char *fs_scene = GLSL(
     in vec3 v_pos;
+    in vec3 v_rest;
     in vec3 v_nrm;
     in float v_kind;
     uniform vec3 u_cam;
@@ -1010,23 +1156,34 @@ static const char *fs_scene = GLSL(
                 float lamp = (1.0 - u_day) * (0.45 + 0.55 * hash21(vec2(room, 7.0)));
                 vec3 glow = a * vec3(1.00, 0.74, 0.46) * 1.3 * lamp * shade * (1.0 - 0.06 * t);
                 c = mix(lit(max(day, vec3(0.0))) + glow, sky(reflect(-V, N)), F);
+                if (u_video > 0.5) c += lit(sunc * 2.26 * ggx(N, V, u_sun, 0.04, 0.09) * shadow_at(v_pos, N));
             }
         } else {
-            vec3 alb = scene_albedo(v_kind, v_pos, N);
+            vec3 alb = scene_albedo(v_kind, v_rest, N);
             float diff = max(dot(N, u_sun), 0.0);
             if (v_kind > 18.5 && v_kind < 20.5) diff = max(diff, 0.35 * max(-dot(N, u_sun), 0.0));   /* leaves let light through */
-            diff *= shadow_at(v_pos, N);
+            float shd = shadow_at(v_pos, N);
+            diff *= shd;
             if (u_video > 0.5) {
-                if (v_kind < 11.5 || (v_kind > 16.5 && v_kind < 17.5)) alb = weathered(alb, v_pos, u_pix * dist);
-                else alb = detail(alb, v_kind, v_pos, N, u_pix * dist);
+                if (v_kind < 11.5 || (v_kind > 16.5 && v_kind < 17.5)) alb = weathered(alb, v_rest, u_pix * dist);
+                else alb = detail(alb, v_kind, v_rest, N, u_pix * dist);
+                if (v_kind > 19.5 && v_kind < 20.5) N = rustle(N, v_rest, u_pix * dist);
                 if (v_kind > 18.5 && v_kind < 20.5 || v_kind > 23.5) {
                     /* leaves pass light through: a yellow-green glow when the sun is behind them */
-                    diff = max(dot(N, u_sun), 0.0) + 0.45 * max(-dot(N, u_sun), 0.0);
-                    diff *= shadow_at(v_pos, N);
+                    diff = (max(dot(N, u_sun), 0.0) + 0.45 * max(-dot(N, u_sun), 0.0)) * shd;
                 }
-                vec3 amb = hemi(N) * roof_occl(v_pos);
+                vec4 gl = gloss_of(v_kind, v_rest, u_pix * dist, alb);
+                float occ = roof_occl(v_pos);
+                vec3 amb = hemi(N) * occ;
                 if (abs(N.y) < 0.5) amb *= 1.0 - 0.35 * exp(-max(v_pos.y - 0.15, 0.0) / 0.25);   /* where walls meet the ground */
                 c = lit(alb * (amb + 0.72 * diff * sunc));
+                if (gl.y > 0.0) {
+                    /* the sun's highlight (0.72 pi: the diffuse term's irradiance), and the sky in the sheen */
+                    c += lit(sunc * 2.26 * gl.w * ggx(N, V, u_sun, gl.x, gl.y) * shd);
+                    float nv = max(dot(N, V), 0.0);
+                    float Fe = gl.x + (1.0 - gl.x) * pow(1.0 - nv, 5.0) * (1.0 - gl.y) * (1.0 - gl.y);
+                    c += lit(Fe * gl.z * hemi(reflect(-V, N)) * occ * 1.6);
+                }
             } else
             c = lit(alb * (0.30 + 0.10 * N.y + 0.72 * diff * sunc));
         }
@@ -1286,13 +1443,14 @@ struct view3d {
     float tox, toz;                  /* the target's offset from the centre, fractions of Lx, Ly */
 
     GLuint p_bg, p_surf, p_solid, p_sides, p_glass, p_ovl, p_caus, p_fill, p_mark, p_scene;
-    GLuint vao_scene, vbo_scene; int n_scene;
+    GLuint vao_scene, vbo_scene, vbo_sway; int n_scene;
+    float palm[8][4];               /* each palm's crown, and its height: for the wind */
     int cast_off, cast_n;           /* the part of it that casts shadows: not the ground, not the hills */
     int veg_a_off, veg_v_off, hills_off;   /* vegetation for the animation look, for the video look; the hills */
     int sh_video;                   /* the look the shadow map was drawn for */
     float occl[2][4];               /* the house's and the cabana's roof footprints */
     int scene_on, scene_dirty;      /* the house is drawn; its geometry needs rebuilding */
-    GLuint p_depth;
+    GLuint p_depth, p_depth_v;
     GLuint fbo_sh, tex_sh; int sh_size, sh_valid; float sh_sun[3]; float lvp[16], sbias;   /* the sun's shadow map */
     GLuint fbo_rf, tex_rf, rb_rf; int rf_w, rf_h;                  /* the reflection, half the window */
     /* the video look: the frame in linear light, multisampled and resolved into a mipmapped
@@ -1394,6 +1552,7 @@ static GLuint program_parts(const char *vs, const char *const *fs, int nfs, int 
     glBindAttribLocation(p, 1, "a_frac");
     glBindAttribLocation(p, 2, "a_kind");
     glBindAttribLocation(p, 2, "a_bottom");
+    glBindAttribLocation(p, 3, "a_sw");
     glBindAttribLocation(p, sides ? 3 : 1, "a_nrm");
     glLinkProgram(p);
     glDeleteShader(v); glDeleteShader(f);
@@ -1572,12 +1731,23 @@ static void build_solid(view3d *v)
  * above the water; the lawn a step below it.  The house is behind the basin (-z),
  * its glass wall facing the water under a deep cantilevered roof; a cabana on the
  * -x side; palms and shrubs round the edges; low hills far off for a horizon. */
-typedef struct { float *b; int n, cap; } gbuf;
+/* the scene's triangles; beside them, for each vertex, how it moves in the wind:
+ * (what: 0 nothing, 1..8 a palm, 10 up a shrub; how high up it, 0 .. 1; how far out
+ * along its frond, 0 .. 1; the frond's phase, plus 2 at a leaflet's tip) */
+typedef struct { float *b, *s; int n, cap; } gbuf;
 static void gb_need(gbuf *g, int more)
 {
     if (g->n + more <= g->cap) return;
+    const int old = g->cap;
     while (g->n + more > g->cap) g->cap = g->cap ? 2 * g->cap : 4096;
     g->b = realloc(g->b, sizeof(float) * 7 * (size_t)g->cap);
+    g->s = realloc(g->s, sizeof(float) * 4 * (size_t)g->cap);
+    memset(g->s + 4 * (size_t)old, 0, sizeof(float) * 4 * (size_t)(g->cap - old));
+}
+static void gb_sw(gbuf *g, int i, float a, float b, float c, float d)
+{
+    float *o = g->s + 4 * (size_t)i;
+    o[0] = a; o[1] = b; o[2] = c; o[3] = d;
 }
 static void gb_box(gbuf *g, float x0, float x1, float y0, float y1, float z0, float z1, float ktop, float k)
 { gb_need(g, 36); box_faces(g->b, &g->n, x0, x1, y0, y1, z0, z1, ktop, k); }
@@ -1708,8 +1878,9 @@ static float frand_s(unsigned *st) { *st = *st * 1664525u + 1013904223u; return 
 /* The video look's palm: a trunk of twenty rings, smooth, swelling at the foot and
  * thinning upwards; a crown of sixteen fronds, each a curved rib carrying two rows of
  * narrow drooping leaflets; under them a skirt of dry brown fronds hanging down. */
-static void palm_v(gbuf *g, float bx, float by, float bz, float H, float lx, float lz, float seed)
+static void palm_v(gbuf *g, float bx, float by, float bz, float H, float lx, float lz, float seed, int id, float *crown)
 {
+    const float pid = (float)id;
     unsigned st = (unsigned)(seed * 1000.0f) + 7u;
     const int SEG = 20, SIDES = 12;
     float ring[2][SIDES + 1][3], rn[2][SIDES + 1][3];
@@ -1727,14 +1898,18 @@ static void palm_v(gbuf *g, float bx, float by, float bz, float H, float lx, flo
         if (i > 0) {
             float (*A)[3] = ring[(i - 1) & 1], (*An)[3] = rn[(i - 1) & 1];
             for (int k = 0; k < SIDES; k++) {
+                const float s0 = (float)(i - 1) / SEG, s1 = s;
                 gb_tri_n(g, A[k], A[k + 1], R[k + 1], An[k], An[k + 1], N[k + 1], 18.0f);
+                gb_sw(g, g->n - 3, pid, s0, 0, 0); gb_sw(g, g->n - 2, pid, s0, 0, 0); gb_sw(g, g->n - 1, pid, s1, 0, 0);
                 gb_tri_n(g, A[k], R[k + 1], R[k], An[k], N[k + 1], N[k], 18.0f);
+                gb_sw(g, g->n - 3, pid, s0, 0, 0); gb_sw(g, g->n - 2, pid, s1, 0, 0); gb_sw(g, g->n - 1, pid, s1, 0, 0);
             }
         }
         top[0] = cx; top[1] = cy; top[2] = cz;
         axis[0] = 2.0f * lx * s / H; axis[2] = 2.0f * lz * s / H;
     }
     (void)axis;
+    crown[0] = top[0]; crown[1] = top[1]; crown[2] = top[2]; crown[3] = H;
     /* fronds: young ones up, old ones out and down; then the dry skirt */
     const int NF = 16, ND = 5;
     for (int f = 0; f < NF + ND; f++) {
@@ -1746,9 +1921,10 @@ static void palm_v(gbuf *g, float bx, float by, float bz, float H, float lx, flo
         float dh[3] = { cosf(az), 0.0f, sinf(az) };
         float ce = cosf(el), se = sinf(el);
         const int NL = dry ? 14 : 30;
+        const float fph = fmodf(0.618034f * (float)f + 0.37f * seed, 1.0f);   /* the frond's own phase */
         float prev[3] = { top[0], top[1] - 0.15f, top[2] };
         for (int i = 1; i <= NL; i++) {
-            float u = (float)i / NL;
+            float u = (float)i / NL, up0 = (float)(i - 1) / NL;
             float P[3] = { top[0] + dh[0] * len * u * ce, top[1] - 0.15f + len * u * se - droop * len * u * u, top[2] + dh[2] * len * u * ce };
             float t[3] = { P[0] - prev[0], P[1] - prev[1], P[2] - prev[2] };
             v3norm(t);
@@ -1760,6 +1936,12 @@ static void palm_v(gbuf *g, float bx, float by, float bz, float H, float lx, flo
                 float a0[3] = { prev[0] - sd[0] * w, prev[1], prev[2] - sd[2] * w }, a1[3] = { prev[0] + sd[0] * w, prev[1], prev[2] + sd[2] * w };
                 float b0[3] = { P[0] - sd[0] * w, P[1], P[2] - sd[2] * w }, b1[3] = { P[0] + sd[0] * w, P[1], P[2] + sd[2] * w };
                 gb_quadn(g, a0, a1, b1, b0, dry ? 24.0f : 24.6f);
+                for (int q = g->n - 6; q < g->n; q++) {
+                    const float *o = g->b + 7 * (size_t)q;
+                    const float d0 = (o[0] - prev[0]) * (o[0] - prev[0]) + (o[1] - prev[1]) * (o[1] - prev[1]) + (o[2] - prev[2]) * (o[2] - prev[2]);
+                    const float d1 = (o[0] - P[0]) * (o[0] - P[0]) + (o[1] - P[1]) * (o[1] - P[1]) + (o[2] - P[2]) * (o[2] - P[2]);
+                    gb_sw(g, q, pid, 1.0f, d0 < d1 ? up0 : u, fph);
+                }
             }
             /* a leaflet each side: a narrow blade forward and out, drooping at the tip */
             if (u > 0.08f) {
@@ -1778,6 +1960,7 @@ static void palm_v(gbuf *g, float bx, float by, float bz, float H, float lx, flo
                     v3norm(nt);
                     float kind = dry ? 24.0f + 0.15f * frand_s(&st) : 19.0f + 0.4f * frand_s(&st);
                     gb_tri_n(g, b0, b1, tip, n, n, nt, kind);
+                    gb_sw(g, g->n - 3, pid, 1.0f, u, fph); gb_sw(g, g->n - 2, pid, 1.0f, u, fph); gb_sw(g, g->n - 1, pid, 1.0f, u, fph + 2.0f);
                 }
             }
             memcpy(prev, P, sizeof P);
@@ -1789,12 +1972,17 @@ static void palm_v(gbuf *g, float bx, float by, float bz, float H, float lx, flo
 static void shrub_v(gbuf *g, float cx, float by, float cz, float r, float hy, float seed)
 {
     unsigned st = (unsigned)(seed * 977.0f) + 3u;
-    const int n = 9 + (int)(5.0f * frand_s(&st));
+    const int n = 9 + (int)(5.0f * frand_s(&st)), first = g->n;
     for (int i = 0; i < n; i++) {
         float a = 2.0f * (float)M_PI * frand_s(&st), d = 0.55f * r * sqrtf(frand_s(&st));
         float rr = r * (0.38f + 0.22f * frand_s(&st));
         float yy = by + hy * (0.05f + 0.45f * frand_s(&st));
         blob(g, cx + d * cosf(a), yy, cz + d * sinf(a), rr, rr * (0.9f + 0.5f * frand_s(&st)) + (by + hy - yy) * 0.35f, 20.0f + 0.4f * frand_s(&st));
+    }
+    /* how high up the bush each point is: the foot stays put */
+    for (int q = first; q < g->n; q++) {
+        const float h = (g->b[7 * (size_t)q + 1] - by) / (1.4f * hy);
+        gb_sw(g, q, 10.0f + seed, h < 0.0f ? 0.0f : (h > 1.0f ? 1.0f : h), 0, 0);
     }
 }
 
@@ -1928,11 +2116,12 @@ static void build_scene(view3d *v)
     blob(&g, pcx + X1 + 1.2f, yl, pcz + Z0 - 1.0f, 1.0f, 0.9f, 20.0f);
     /* the same, as the video look grows them */
     v->veg_v_off = g.n;
-    palm_v(&g, pcx + 10.6f,     yl, pcz + Z0 - 1.2f,  8.6f, -1.6f,  1.4f, 0.3f);
-    palm_v(&g, pcx + 11.6f,     yl, pcz + Z0 + 0.2f,  6.8f,  0.8f,  0.9f, 1.9f);
-    palm_v(&g, pcx - 3.0f,      yl, pcz + Z0 - 9.8f,  9.6f,  0.7f, -0.4f, 3.1f);
-    palm_v(&g, pcx + X0 - 1.6f, yl, pcz - 3.6f,       7.6f, -0.9f, -0.5f, 4.4f);
-    palm_v(&g, pcx + X1 + 6.5f, yl, pcz + Z1 + 3.0f,  8.2f,  0.6f,  0.8f, 5.6f);
+    memset(v->palm, 0, sizeof v->palm);
+    palm_v(&g, pcx + 10.6f,     yl, pcz + Z0 - 1.2f,  8.6f, -1.6f,  1.4f, 0.3f, 1, v->palm[0]);
+    palm_v(&g, pcx + 11.6f,     yl, pcz + Z0 + 0.2f,  6.8f,  0.8f,  0.9f, 1.9f, 2, v->palm[1]);
+    palm_v(&g, pcx - 3.0f,      yl, pcz + Z0 - 9.8f,  9.6f,  0.7f, -0.4f, 3.1f, 3, v->palm[2]);
+    palm_v(&g, pcx + X0 - 1.6f, yl, pcz - 3.6f,       7.6f, -0.9f, -0.5f, 4.4f, 4, v->palm[3]);
+    palm_v(&g, pcx + X1 + 6.5f, yl, pcz + Z1 + 3.0f,  8.2f,  0.6f,  0.8f, 5.6f, 5, v->palm[4]);
     shrub_v(&g, pcx + X1 + 1.3f, yl, pcz + 1.5f, 1.1f, 0.9f, 1.0f);
     shrub_v(&g, pcx + X1 + 1.1f, yl, pcz - 2.5f, 0.9f, 0.8f, 2.0f);
     shrub_v(&g, pcx + X0 - 1.2f, yl, pcz + 4.0f, 1.2f, 1.0f, 3.0f);
@@ -1961,7 +2150,9 @@ static void build_scene(view3d *v)
     v->sh_valid = 0;
     glBindBuffer(GL_ARRAY_BUFFER, v->vbo_scene);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(float) * 7 * (size_t)(g.n ? g.n : 1)), g.b, GL_STATIC_DRAW);
-    free(g.b);
+    glBindBuffer(GL_ARRAY_BUFFER, v->vbo_sway);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(float) * 4 * (size_t)(g.n ? g.n : 1)), g.s, GL_STATIC_DRAW);
+    free(g.b); free(g.s);
 }
 
 static void build_surface(view3d *v)
@@ -2223,20 +2414,21 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
     v->p_mark  = program(vs_mark, fs_mark, 0);
     v->p_res   = program(vs_resample, fs_resample, 0);
     {
-        const char *parts[2] = { glsl_detail, fs_scene };
-        v->p_scene = program_parts(vs_solid, parts, 2, 0);
+        const char *parts[3] = { glsl_detail, glsl_gloss, fs_scene };
+        v->p_scene = program_parts(vs_scene, parts, 3, 0);
     }
     v->p_depth = program(vs_solid, fs_depth, 0);
+    v->p_depth_v = program(vs_scene, fs_depth, 0);
     v->p_adapt = program(vs_fill, fs_adapt, 0);
     v->p_bright = program(vs_fill, fs_bright, 0);
     v->p_bloom = program(vs_fill, fs_bloom, 0);
     v->p_post = program(vs_fill, fs_post, 0);
-    if (!v->p_adapt || !v->p_bright || !v->p_bloom || !v->p_post || !v->p_depth || !v->p_scene || !v->p_res || !v->p_blur || !v->p_bg || !v->p_surf || !v->p_solid || !v->p_sides || !v->p_glass || !v->p_ovl || !v->p_caus || !v->p_fill || !v->p_mark) { free(v); return NULL; }
+    if (!v->p_adapt || !v->p_bright || !v->p_bloom || !v->p_post || !v->p_depth || !v->p_depth_v || !v->p_scene || !v->p_res || !v->p_blur || !v->p_bg || !v->p_surf || !v->p_solid || !v->p_sides || !v->p_glass || !v->p_ovl || !v->p_caus || !v->p_fill || !v->p_mark) { free(v); return NULL; }
 
     glGenVertexArrays(1, &v->vao_empty);
     glGenVertexArrays(1, &v->vao_surf); glGenBuffers(1, &v->vbo_surf); glGenBuffers(1, &v->ebo_surf);
     glGenVertexArrays(1, &v->vao_solid); glGenBuffers(1, &v->vbo_solid);
-    glGenVertexArrays(1, &v->vao_scene); glGenBuffers(1, &v->vbo_scene);
+    glGenVertexArrays(1, &v->vao_scene); glGenBuffers(1, &v->vbo_scene); glGenBuffers(1, &v->vbo_sway);
     glGenVertexArrays(1, &v->vao_sides); glGenBuffers(1, &v->vbo_sides); glGenBuffers(1, &v->ebo_sides);
     glGenVertexArrays(1, &v->vao_mark); glGenBuffers(1, &v->vbo_mark);
     glGenVertexArrays(1, &v->vao_obj); glGenBuffers(1, &v->vbo_obj);
@@ -2271,6 +2463,9 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void *)(3 * sizeof(float)));
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void *)(6 * sizeof(float)));
+    glBindBuffer(GL_ARRAY_BUFFER, v->vbo_sway);
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)0);
     glBindVertexArray(0);
     v->scene_dirty = 1;
 
@@ -3124,6 +3319,7 @@ static void set_common(view3d *v, GLuint p, const view3d_params *prm, const floa
         if ((l = U(p, "u_benchy")) >= 0) glUniform1f(l, on ? -0.55f : 1.0f);
     }
     if ((l = U(p, "u_occl")) >= 0) glUniform4fv(l, 2, &v->occl[0][0]);
+    if ((l = U(p, "u_palm")) >= 0) glUniform4fv(l, 8, &v->palm[0][0]);
     if ((l = U(p, "u_ngust")) >= 0) glUniform1i(l, prm->ngust < 8 ? prm->ngust : 8);
     if ((l = U(p, "u_gust")) >= 0) glUniform4fv(l, 8, &prm->gust[0][0]);
     if ((l = U(p, "u_gbase")) >= 0) glUniform1f(l, prm->gust_base);
@@ -3169,7 +3365,7 @@ static void shadow_pass(view3d *v, const view3d_params *p)
 {
     if (!v->fbo_sh) return;
     const float *s = p->sun;
-    if (v->sh_valid && v->sh_video == v->video_on && fabsf(s[0] - v->sh_sun[0]) + fabsf(s[1] - v->sh_sun[1]) + fabsf(s[2] - v->sh_sun[2]) < 1e-5f) return;
+    if (v->sh_valid && !v->video_on && v->sh_video == v->video_on && fabsf(s[0] - v->sh_sun[0]) + fabsf(s[1] - v->sh_sun[1]) + fabsf(s[2] - v->sh_sun[2]) < 1e-5f) return;
     const float ax = 0.5f * v->Lx, az = 0.5f * v->Ly, pcx = ax, pcz = az;
     /* the casters' box: house, cabana, palms and their crowns */
     const float bx0 = pcx - ax - 14.0f, bx1 = pcx + ax + 17.0f, by0 = -1.0f, by1 = 14.0f, bz0 = pcz - az - 18.0f, bz1 = pcz + az + 12.0f;
@@ -3204,8 +3400,13 @@ static void shadow_pass(view3d *v, const view3d_params *p)
     glClear(GL_DEPTH_BUFFER_BIT);
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(1.5f, 2.0f);
-    glUseProgram(v->p_depth);
-    glUniformMatrix4fv(U(v->p_depth, "u_vp"), 1, GL_FALSE, v->lvp);
+    if (v->video_on) {
+        /* the garden sways: the same wind as the colour pass sees */
+        set_common(v, v->p_depth_v, p, v->lvp);
+    } else {
+        glUseProgram(v->p_depth);
+        glUniformMatrix4fv(U(v->p_depth, "u_vp"), 1, GL_FALSE, v->lvp);
+    }
     glBindVertexArray(v->vao_scene);
     draw_scene(v, 1);
     glDisable(GL_POLYGON_OFFSET_FILL);

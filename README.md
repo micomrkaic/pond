@@ -827,6 +827,42 @@ range, and the shadow map is redrawn when the look changes):
 Every fine detail fades to its own average once it is smaller than the
 pixel, as the mosaic does.
 
+### Wind in the garden, and sheen
+
+In the video look the garden moves in the breeze that moves the water, and
+the gusts that make cat's paws on the pool sweep through it too. The
+animation look stays still.
+
+- **The air in the garden** is the breeze's speed U, times a gust factor
+  near 1: the gust patches over the pool, grown to garden scale, and fronts
+  of stronger air drifting downwind at the wind's speed, so a palm upwind
+  bows a moment before one downwind. With the breeze off there is still a
+  light air of 0.8 m/s.
+- **A palm** bows downwind as U², about 0.3 % of its height per (m/s)², up to
+  8 %, bent rather than tilted (the offset grows as the square of the height
+  up the trunk), and rocks about that lean at its own period, longer for a
+  taller palm (about 4.5 s at 8 m), with a smaller sway across the wind. The
+  crown turns with the trunk's top.
+- **Fronds** stream downwind and bob in a wave that runs out to the tip,
+  each at its own phase; **leaflets** flutter at 2.5 to 5 Hz, their tips
+  tipping their faces to the sun and away, so a crown twinkles.
+- **Bushes** lean and rock from the foot up; up close every leaf trembles
+  and turns.
+- The shadow map is redrawn every frame in the video look, so the shadows
+  move with what casts them. Textures stay pinned to each leaf, not to the
+  air it moves through.
+
+All of it is done in the vertex shader from a per-vertex record of what
+moves (which palm or bush, how high up it, how far out along a frond, the
+frond's phase); the mesh is never rebuilt.
+
+**Sheen.** Each material has a gloss (a GGX highlight from the sun, shadowed,
+and a reflection of the sky): waxy palm leaflets and laurel-like bush
+leaves shine, painted steel more sharply, the glass carries a highlight
+beside its reflection, render and bark barely, grass only a faint sheen
+against a low sun. Stone by the pool is **wet**: the lip the water laps, and
+splashed patches drying further out, darker and glossy.
+
 ### Steps, a bench, and where the camera looks
 
 With the setting, in the video look, on a rectangle of 6 m and up, the pool
