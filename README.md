@@ -54,7 +54,7 @@ In the browser the grid defaults to 256^2; append `?grid=512` to the URL for
 the finer mesh (single-threaded WASM, so budget accordingly; 512 is the cap,
 the heap is fixed at 128 MB). `make web
 WEB_DIR=docs` puts the build where GitHub Pages can serve it from `/docs`.
-Use `h` for the help there (Firefox keeps F1 for itself); on a touch
+Use `h` for the help there; on a touch
 screen, one finger is the finger, two fingers orbit and pinch-zoom, and a
 bar of buttons along the bottom stands in for the keys (presets, rain,
 breeze, wind, wavemaker, boat, floats, warp, container, HUD, help); it
@@ -62,15 +62,16 @@ appears only on devices without a fine pointer.
 
 ## Controls
 
-`F1` or `h` shows the full list in the window. In short:
+`h` shows the full list in the window. In short (no function keys: laptops
+and Mac keyboards give them to the system):
 
 | | |
 |---|---|
 | click / shift-click on the water | drop / big drop |
 | drag on the water | finger |
 | drag off the water, ctrl/alt + drag, right or middle drag | orbit the camera |
-| arrow keys, or keypad `4` `6` `8` `2` | orbit the camera; held, not tapped — 75 deg/s, `shift` 3x faster, `ctrl` finer |
-| `PgUp` `PgDn` | zoom, same held behaviour (a factor of 2 per second) |
+| arrow keys, or keypad `4` `6` `8` `2` | orbit the camera; held, not tapped — 75 deg/s, `shift` 3x faster, `ctrl` or `cmd` finer |
+| `alt` + up / down, or `PgUp` `PgDn` | zoom, same held behaviour (a factor of 2 per second) |
 | wheel, `o` / `Home` | zoom, reset camera |
 | `t` | container: opaque → floor only → glass walls → glass walls + bottom → none |
 | `` ` `` | setting: none → a house, terrace and garden round the basin (basins 4–40 m) |
@@ -79,7 +80,7 @@ appears only on devices without a fine pointer.
 | `y` | nonlinear (HOS) correction on/off (rectangle only) |
 | `m` `a`/`A` | sound on/off, volume down/up |
 | `j`/`J` `u`/`U` | drop level, rain-bed level |
-| `F5` `F6` `F7` (shift: up) | brown noise, breeze level, breeze harshness |
+| `7` `8` `9` (shift: up) | brown noise, breeze level, breeze harshness |
 | `1` `2` `3` `4` | presets: tray 30 cm · pond 3 m · pool 12 m · sea 80 m |
 | `[` `]` / `{` `}` | width / length (disk: diameter), 5 % per press, hold to sweep (live: the physics changes, the field is kept; aspect kept within 4:1) |
 | `,` `.` / `\` | depth / make it square again at the same area |
@@ -89,8 +90,8 @@ appears only on devices without a fine pointer.
 | `e` `z`/`Z` | a boat driving round the basin, leaving its Kelvin wake; its speed, as a Froude number |
 | `E` / `C` | one more float riding the surface (up to 12; `--floats N`); clear them all |
 | `;` `'`/`"` `/`/`?` | shake the basin vertically (Faraday waves at half the frequency); amplitude in g; frequency |
-| `F8` `F9` (shift: harder) | jolt it sideways along x, along y: the seiche |
-| `F2` `F3`, `F4` (shift: back) | the sun lower / higher — below −6° it is night and the moon lights the water; round |
+| `0` / `)` (alt: harder) | jolt it sideways along x, along y: the seiche |
+| `5` / `%`, `6` / `^` | the sun lower / higher — below −6° it is night and the moon lights the water; round / back |
 | `p` / `P` | wavemaker on/off / move it to the next wall (its position along the wall is kept) |
 | `k`/`K` | its frequency (the wavelength follows from the dispersion relation) |
 | `l`/`L` | its span: the fraction of the wall it occupies, down to a point source |
@@ -117,7 +118,7 @@ water than driving at it.
 | `x`/`X` | extra uniform damping |
 | `g`/`G` `f` | display gain, floor pattern |
 | `d` | hide / show the settings box (the help hint goes with it; with `D` off too, a clean frame for screenshots) |
-| `F11`, `alt`+`enter` | full screen; `esc` leaves it before it quits |
+| `alt`+`enter` | full screen; `esc` leaves it before it quits |
 | `c` `space` `s` `q` | clear, pause, screenshot (bmp), quit |
 
 In `--2d` mode the wheel is the time warp, `v` toggles a height-map view and
@@ -506,7 +507,7 @@ of modes sits nearest $\Omega/2$: squares and hexagons are a question of
 nonlinear selection that the HOS correction may or may not answer; the
 subharmonic response and the threshold it does.
 
-A jolt (`F8`/`F9`, or `jolt DUX,DUY` in a script) shoves the basin sideways
+A jolt (`0` / `)`, or `jolt DUX,DUY` in a script) shoves the basin sideways
 by that velocity: in its frame a pressure impulse $\rho\,\Delta\mathbf u\cdot\mathbf x$
 across the water, through the same pressure source as the hull, projecting on
 the odd modes as $1/n^2$. Applied in one instant it would excite every mode
@@ -729,7 +730,7 @@ scale follows the drawable height and shrinks until the help panel fits.
 
 ### Light
 
-The sun is a parameter (`sun-elev`, `sun-azim`; `F2`–`F4`), and the sky,
+The sun is a parameter (`sun-elev`, `sun-azim`; `5` and `6`), and the sky,
 the glints, the caustics and the light on the walls follow it. Low sun warms
 the horizon and lengthens the glints; below −6° it is night: a dark sky with
 stars, and the moon, 40° up and opposite the sun's azimuth, lights the water

@@ -3019,7 +3019,7 @@ static void draw_overlay(view3d *v)
             for (int k = 0; k < v->nhelp; k++)
                 canvas_text(c, bx + pad, by + pad + k * lh, scale, 230, 232, 236, 255, v->help[k]);
         } else if (v->show_hud) {
-            const char *hint = "h / F1: help";
+            const char *hint = "h: help";
             int scale = base, lh = 10 * scale, pad = 8 * scale;
             int hw = text_width(hint, scale);
             canvas_fill(c, v->W - hw - pad - 4 * scale, v->H - lh - pad - scale, hw + 8 * scale, lh + 2 * scale, 0, 0, 0, 100);

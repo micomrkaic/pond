@@ -42,8 +42,8 @@ static const char *const help_lines[] = {
     "drag on the water         finger",
     "drag off it, right drag   orbit  (ctrl+drag, two fingers too)",
     "wheel, pinch              zoom",
-    "arrows, keypad 4 6 8 2    orbit  (hold; shift faster, ctrl finer)",
-    "PgUp / PgDn               zoom   (hold)",
+    "arrows, keypad 4 6 8 2    orbit  (hold; shift faster, ctrl/cmd finer)",
+    "alt + up / down, PgUp/Dn  zoom   (hold)",
     "o / Home                  reset camera",
     "",
     "1 2 3 4                   tray 30 cm, pond 3 m, pool 12 m, sea 80 m",
@@ -62,8 +62,8 @@ static const char *const help_lines[] = {
     "e   z / Z                 a boat and its Kelvin wake;  its speed (Froude no.)",
     "E / C                     one more float riding the waves;  clear them",
     ";   ' / \"   / / ?          shake the basin (Faraday);  amplitude;  frequency",
-    "F8  F9  (shift: harder)   jolt it sideways along x, along y: the seiche",
-    "F2 / F3   F4 (shift: back) the sun lower / higher (below -6: night, moon);  round",
+    "0 / )   (alt: harder)     jolt it sideways along x, along y: the seiche",
+    "5 / %   6 / ^             the sun lower / higher (below -6: night, moon);  round, back",
     "b                         breeze (wind sea)",
     "p / P                     wavemaker on / off;  next wall",
     "k / K   l / L             its frequency;  its span",
@@ -72,12 +72,12 @@ static const char *const help_lines[] = {
     "",
     "m   a / A                 sound on / off;  volume",
     "j / J   u / U             drop plinks;  rain bed",
-    "F5 F6 F7 (shift: up)      brown noise;  breeze;  its harshness (gusts, rustle)",
+    "7 8 9 (shift: up)         brown noise;  breeze;  its harshness (gusts, rustle)",
     "",
     "d                         hide / show the settings box",
-    "F11, alt+enter            full screen",
+    "alt+enter                 full screen",
     "c   space   s             clear the water;  pause;  screenshot",
-    "h / F1   esc   q          help;  back out;  quit",
+    "h   esc   q               help;  back out;  quit",
     "",
     "w^2 = (gk + sk^3/rho) tanh(kh)      gamma = 2 nu k^2 + g0",
 };
@@ -224,15 +224,18 @@ static void camera_keys(app *a, double dt)
     if (!a->v3 || !(SDL_GetWindowFlags(a->win) & SDL_WINDOW_INPUT_FOCUS)) return;
     const Uint8 *ks = SDL_GetKeyboardState(NULL);
     SDL_Keymod m = SDL_GetModState();
-    float sp = (m & KMOD_SHIFT) ? 3.0f : ((m & (KMOD_CTRL | KMOD_ALT | KMOD_GUI)) ? 0.25f : 1.0f);
+    /* alt with up / down zooms (not every keyboard has PgUp / PgDn); ctrl or cmd is finer */
+    const int alt = (m & KMOD_ALT) != 0;
+    float sp = (m & KMOD_SHIFT) ? 3.0f : ((m & (KMOD_CTRL | KMOD_GUI)) ? 0.25f : 1.0f);
     float deg = sp * 75.0f * (float)dt;                /* degrees per second */
     float yaw = 0.0f, pitch = 0.0f;
+    const int up = ks[SDL_SCANCODE_UP] != 0, down = ks[SDL_SCANCODE_DOWN] != 0;
     if (ks[SDL_SCANCODE_LEFT]  || ks[SDL_SCANCODE_KP_4]) yaw   -= deg;
     if (ks[SDL_SCANCODE_RIGHT] || ks[SDL_SCANCODE_KP_6]) yaw   += deg;
-    if (ks[SDL_SCANCODE_UP]    || ks[SDL_SCANCODE_KP_8]) pitch += 0.6f * deg;
-    if (ks[SDL_SCANCODE_DOWN]  || ks[SDL_SCANCODE_KP_2]) pitch -= 0.6f * deg;
+    if ((up && !alt)   || ks[SDL_SCANCODE_KP_8]) pitch += 0.6f * deg;
+    if ((down && !alt) || ks[SDL_SCANCODE_KP_2]) pitch -= 0.6f * deg;
     if (yaw != 0.0f || pitch != 0.0f) view3d_orbit(a->v3, yaw, pitch);
-    int in = ks[SDL_SCANCODE_PAGEUP] != 0, out = ks[SDL_SCANCODE_PAGEDOWN] != 0;
+    int in = ks[SDL_SCANCODE_PAGEUP] != 0 || (alt && up), out = ks[SDL_SCANCODE_PAGEDOWN] != 0 || (alt && down);
     if (in != out) view3d_zoom(a->v3, powf(2.0f, (out ? 1.0f : -1.0f) * sp * (float)dt));
 }
 
@@ -246,8 +249,8 @@ static const keybind keybinds[] = {
     { SDLK_b, -1, "breeze", 0 },
     { SDLK_w,  0, "wind", -1 },           { SDLK_w, 1, "wind", +1 },
     { SDLK_e,  0, "boat", 0 },            { SDLK_e, 1, "floats", +1 },
-    { SDLK_F2, -1, "sun-elev", -1 },      { SDLK_F3, -1, "sun-elev", +1 },
-    { SDLK_F4,  0, "sun-azim", +1 },      { SDLK_F4, 1, "sun-azim", -1 },
+    { SDLK_5,  0, "sun-elev", -1 },       { SDLK_5, 1, "sun-elev", +1 },
+    { SDLK_6,  0, "sun-azim", +1 },       { SDLK_6, 1, "sun-azim", -1 },
     { SDLK_SEMICOLON, -1, "shake", 0 },
     { SDLK_QUOTE,  0, "shake-amp", -1 },  { SDLK_QUOTE, 1, "shake-amp", +1 },
     { SDLK_SLASH,  0, "shake-freq", -1 }, { SDLK_SLASH, 1, "shake-freq", +1 },
@@ -272,14 +275,14 @@ static const keybind keybinds[] = {
     { SDLK_d,  0, "hud", 0 },             { SDLK_d, 1, "paddle-mark", 0 },
     { SDLK_v, -1, "view", 0 },
     { SDLK_SPACE, -1, "paused", 0 },
-    { SDLK_F11, -1, "fullscreen", 0 },
+    { SDLK_F11, -1, "fullscreen", 0 },   /* where the system lets it through; alt+enter everywhere */
     { SDLK_m, -1, "mute", 0 },
     { SDLK_a,  0, "volume", -1 },         { SDLK_a, 1, "volume", +1 },
     { SDLK_j,  0, "sound.drops", -1 },    { SDLK_j, 1, "sound.drops", +1 },
     { SDLK_u,  0, "sound.bed", -1 },      { SDLK_u, 1, "sound.bed", +1 },
-    { SDLK_F5, 0, "sound.brown", -1 },    { SDLK_F5, 1, "sound.brown", +1 },
-    { SDLK_F6, 0, "sound.breeze", -1 },   { SDLK_F6, 1, "sound.breeze", +1 },
-    { SDLK_F7, 0, "sound.harsh", -1 },    { SDLK_F7, 1, "sound.harsh", +1 },
+    { SDLK_7,  0, "sound.brown", -1 },    { SDLK_7, 1, "sound.brown", +1 },
+    { SDLK_8,  0, "sound.breeze", -1 },   { SDLK_8, 1, "sound.breeze", +1 },
+    { SDLK_9,  0, "sound.harsh", -1 },    { SDLK_9, 1, "sound.harsh", +1 },
 };
 #define NKEYBINDS ((int)(sizeof keybinds / sizeof keybinds[0]))
 
@@ -320,10 +323,11 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
         if (!a->mode3d) print_help();
         break;
     case SDLK_c: if (shift) app_clear_floats(a); else wave_clear(w); break;
-    case SDLK_F8: case SDLK_F9: {
-        /* a jolt: the basin shoved sideways, by a tenth of the fundamental's speed scale */
-        const double du = 0.08 * sqrt(w->g * w->depth) * (shift ? 3.0 : 1.0);
-        if (k == SDLK_F8) app_jolt(a, du, 0.0); else app_jolt(a, 0.0, du);
+    case SDLK_0: {
+        /* a jolt: the basin shoved sideways, by a tenth of the fundamental's speed scale;
+         * along x, shift along y, alt three times harder */
+        const double du = 0.08 * sqrt(w->g * w->depth) * (alt ? 3.0 : 1.0);
+        if (!shift) app_jolt(a, du, 0.0); else app_jolt(a, 0.0, du);
         break;
     }
     case SDLK_o: case SDLK_HOME: app_reset_camera(a); break;
@@ -335,7 +339,8 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
         double L = sqrt(w->Lx * w->Ly);
         wave_set_pool(w, L, L, w->depth); app_pool_changed(a); break;
     }
-    /* the arrows and PgUp/PgDn are read as held keys in camera_keys() */
+    /* the arrows and PgUp/PgDn (alt + up/down) are read as held keys in camera_keys();
+     * F-keys are left alone: laptops and Mac keyboards give them to the system */
     default: return;
     }
     a->hud_dirty = 1;
