@@ -45,13 +45,14 @@ all: $(BIN)
 $(BIN): $(SRC) $(HDR)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -o $@ $(SRC) $(SDL_LIBS) $(LDLIBS)
 
-test: build/test_dct build/test_wave build/test_disk build/test_hos build/test_paddle build/test_script
+test: build/test_dct build/test_wave build/test_disk build/test_hos build/test_paddle build/test_script $(BIN)
 	./build/test_dct
 	./build/test_wave
 	./build/test_disk
 	./build/test_hos
 	./build/test_paddle
 	./build/test_script
+	sh tests/test_man.sh ./$(BIN) pond.1
 
 build/test_script: tests/test_script.c src/param.c src/script.c src/wave.c src/disk.c src/hos.c src/dct.c src/render.c src/view3d.c src/text.c src/audio.c src/dsp.c src/app.h src/param.h src/script.h
 	@mkdir -p build

@@ -23,7 +23,8 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     make test       # DCT against the O(N^2) definition; mode frequency against Airy
     make bench      # headless timings of the CPU path on a 512^2 grid
     make web        # needs emcc (emsdk, Homebrew, or apt's emscripten); output in build/web/
-    make install    # ~/.local/bin/pond;  PREFIX=/usr/local (with sudo) for everyone
+    make install    # ~/.local/bin/pond and its manual;  PREFIX=/usr/local (with sudo) for everyone
+    man ./pond.1    # the manual, before it is installed
     make uninstall
 
     ./pond                                 # 512^2 grid, 1280x800 window, "pond" preset
@@ -1099,7 +1100,8 @@ map with additive blending, which is the same forward map).
     src/dsp.[ch]      noise-suite synthesis library, unchanged
     src/render.[ch]   top-down CPU shading (--2d)
     src/main.c        SDL2 window, input, timing, bench, Emscripten loop
-    tests/            dct, wave, disk, hos, paddle and script tests (run with `make test`)
+    tests/            dct, wave, disk, hos, paddle, script and manual tests (run with `make test`)
+    pond.1            the manual: options, parameters, keys, scripts, files
     web/shell.html    Emscripten shell
 
 The 3-D path was exercised under Xvfb with Mesa's llvmpipe (OpenGL 4.5 core).
@@ -1107,10 +1109,8 @@ The web build compiles cleanly with Emscripten 3.1.6 (WebGL2, same GLSL with a
 `#version 300 es` header) but has not been run in a browser here.
 
 Emscripten notes: emsdk is the easy route. The Debian/Ubuntu `emscripten`
-package ships a frozen cache without the SDL2 port, so `-sUSE_SDL=2` fails
-until you copy `/usr/share/emscripten/.emscripten` somewhere writable, set
-`FROZEN_CACHE = False` and `CACHE` to a writable copy of the cache, and point
-`EM_CONFIG` at it. `-sMINIFY_HTML=0` is in the Makefile because that package's
+package ships a frozen cache without the SDL2 port; `make web` copies it to
+`~/.cache/emscripten` and unfreezes the copy (see Build). `-sMINIFY_HTML=0` is in the Makefile because that package's
 HTML minifier is broken with current Node.
 
 ## License

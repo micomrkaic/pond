@@ -1,0 +1,520 @@
+.\" pond(1) -- a numerically honest wave tank as screen candy
+.\" Copyright (C) 2026 Mico <https://github.com/micomrkaic>; GPL-3.0-or-later
+.\" tests/test_man.sh checks that every option and parameter pond knows is here.
+.TH POND 1 2026-10-28 "pond 0.38" "User Commands"
+.SH NAME
+pond \- dispersive water waves in a basin, drawn in 3\-D, with sound
+.SH SYNOPSIS
+.B pond
+.RI [ options ]
+.br
+.B pond \-\-script
+.I file
+.RI [ options ]
+.br
+.B pond \-\-list\-params
+.br
+.B pond \-\-write\-config
+.RI [ file ]
+.RI [ options ]
+.SH DESCRIPTION
+.B pond
+solves the linear water\-wave equations with gravity, surface tension, depth
+and viscous damping on a rectangular or round basin, from a 30 cm tray to an
+80 m sea, and draws the surface in 3\-D: refraction, caustics on the floor,
+reflections, a sky and a sun.
+Sources are drops, rain, a breeze in gusts, a wind sea, a wavemaker on a
+wall, a boat with its Kelvin wake, floats, vertical shaking (Faraday waves)
+and sideways jolts (the seiche); an optional nonlinear correction (HOS)
+sharpens the crests.
+The sound is synthesised from the same events.
+.PP
+Everything that can change while it runs is a named
+.IR parameter :
+keys nudge them, the command line and the configuration file set them, and
+scripts change them over time.
+.SH OPTIONS
+.SS Before the program starts
+.TP
+.BI \-\-grid " N"
+The mode grid, a power of two (default 512; 256 in the browser).
+.TP
+.BI \-\-window " WxH"
+Window size in pixels (default 1280x800); one number means 16:10.
+.TP
+.B \-\-2d
+Top\-down CPU renderer instead of the 3\-D view; needs no OpenGL.
+.TP
+.B \-\-nomsaa
+Do not ask for a multisampled framebuffer (for displays where window
+creation fails).
+.TP
+.B \-\-cpu\-caustics
+Compute the caustic light map on the CPU (default: on the GPU when possible).
+.TP
+.B \-\-no\-audio
+Open no sound device at all.
+.B \-\-mute
+keeps the device open but silent.
+.TP
+.BI \-\-hos\-nc " N"
+Modes per axis in the nonlinear correction (default 64).
+.TP
+.BI \-\-hos\-order " M"
+Order of the nonlinear correction (default 3).
+.TP
+.BI \-\-preset " N"
+Start with preset 1 to 4: tray 30 cm, pond 3 m, pool 12 m, sea 80 m.
+.TP
+.BR \-\-shape " rect|disk"
+The basin's shape.
+.TP
+.BI \-\-basin " WxL"
+The basin's width and length in metres; one number for a square, or a
+disk's diameter.
+.TP
+.BI \-\-depth " H"
+Water depth in metres.
+.SS Parameters
+Every parameter (see
+.BR PARAMETERS )
+is an option:
+\fB\-\-\fIname value\fR,
+or for a boolean
+\fB\-\-\fIname\fR
+to turn it on and
+\fB\-\-no\-\fIname\fR
+to turn it off.
+.TP
+.B \-\-list\-params
+Print every parameter with its current value, range and meaning, and exit.
+.TP
+.BI \-\-scene " S"
+Sources already on: any of
+.BR rain ,
+.BR paddle ,
+.BR breeze ,
+comma\-separated.
+.TP
+.BI \-\-cam " Y,P,D"
+Camera yaw and pitch in degrees, distance in basin lengths.
+.TP
+.BI \-\-sound " K=V,..."
+The five sound levels
+.RB ( drops ,
+.BR bed ,
+.BR brown ,
+.BR breeze ,
+.BR harsh ;
+1 is as designed).
+.TP
+.B \-\-hos
+The nonlinear correction on (the parameter
+.BR nonlinear ).
+.SS Per run
+.TP
+.BI \-\-script " file"
+Run a script (see
+.BR SCRIPTS ).
+.TP
+.BI \-\-frames " N"
+Quit after
+.I N
+displayed frames.
+.TP
+.BI \-\-snap3d " file"
+With
+.BR \-\-frames ,
+save the last 3\-D frame as a BMP.
+.TP
+.BI \-\-bench " N"
+Run
+.I N
+headless frames of the CPU path, print timings, and exit.
+.TP
+.BI \-\-snap " file"
+With
+.BR \-\-bench ,
+save the last frame as a BMP.
+.TP
+.BI \-\-config " file"
+Read
+.I file
+instead of the default configuration file.
+.TP
+.B \-\-no\-config
+Read no configuration file.
+.TP
+.BR \-\-write\-config " [\fIfile\fR]"
+Write the settings as they stand, after the other options, as a
+configuration file (by default the first location in
+.BR FILES ),
+and exit.
+.TP
+.B \-\-help
+Print the keys and options, and exit.
+.SH PARAMETERS
+Booleans take on/off, yes/no, true/false or 1/0; enumerations take their
+names or a number; reals are clamped to their range and accept
+.BR % .
+.B pond \-\-list\-params
+prints the current values.
+.SS The basin
+.TP
+.BR preset " tray|pond|pool|sea"
+Sets size, depth, floor and camera together.
+.TP
+.BR shape " rect|disk"
+Rectangle or disk.
+.TP
+.BR width ", " length
+Metres, 0.05 to 1000 (a disk's diameter is its width).
+.TP
+.B depth
+Water depth, metres, 0.002 to 5000.
+.TP
+.B nonlinear
+The HOS correction (rectangle only).
+.TP
+.B damping
+Extra uniform damping, 1/s.
+.TP
+.B warp
+Simulated seconds per real second, 1/64 to 64.
+.SS Sources
+.TP
+.BR rain ", " rain\-rate
+Rain on; drops per simulated second.
+.TP
+.B drop\-size
+A raindrop's crater width in metres (0: 2 cm, or a few grid cells on a
+coarse grid); a click is twice it.
+.TP
+.BR breeze ", " breeze\-gain ", " gusts
+A wind sea on; a multiplier on its forcing; whether it comes in drifting
+gusts (cat's paws).
+.TP
+.B wind
+Wind speed, m/s, 0 to 30: a fetch\-limited sea over the basin's length
+(0: the breeze's own settings).
+.TP
+.BR boat ", " boat\-speed
+A boat driving round the basin; its speed as a Froude number (0.4 is a
+dinghy under way).
+.TP
+.B floats
+How many floats ride the surface, 0 to 12.
+.TP
+.BR shake ", " shake\-amp ", " shake\-freq
+Vertical shaking, its acceleration in g and its frequency in Hz; Faraday
+waves answer at half the frequency.
+.TP
+.B finger\-gain
+A multiplier on the drag\-a\-finger forcing.
+.TP
+.BR paddle ", " paddle\-freq ", " paddle\-stroke
+The wavemaker, its frequency in Hz (held inside the band the basin can
+answer), and a multiplier on its speed.
+.TP
+.BR paddle\-wall " x=0|x=Lx|y=0|y=Ly"
+Which wall it stands on (the disk: the rim).
+.TP
+.BR paddle\-pos ", " paddle\-span
+Where along the wall, and how much of it, both 0 to 1.
+.TP
+.B paddle\-mark
+Outline the wavemaker on the water.
+.SS The picture
+.TP
+.BR glass " opaque|floor|glass|glass+bottom|none"
+The container.
+.TP
+.BR floor " tiles|checker|sand"
+The floor pattern.
+.TP
+.BR look " animation|video"
+A clean render, or the water as a camera films it: exposure, film tone,
+bloom, lens, grain, a hand\-held drift, clouds, ripples, glitter, and the
+garden moving in the wind.
+.TP
+.BR setting " none|house"
+Nothing round the basin, or a house, terrace and garden (basins 4 to 40 m).
+.TP
+.B gain
+Display gain on the wave height.
+.TP
+.BR sun\-elev ", " sun\-azim
+The sun's elevation and azimuth, degrees; below \-6 it is night and the
+moon lights the water.
+.TP
+.BR yaw ", " pitch ", " dist
+Camera yaw and pitch in degrees, distance in basin lengths.
+.TP
+.BR cam\-x ", " cam\-z
+What the camera looks at, from the basin's centre, \-0.5 to 0.5 of its
+width and length.
+.TP
+.BR hud ", " help ", " fullscreen ", " paused ", " view
+The settings box; the help panel; full screen; time stopped; in
+.BR \-\-2d ,
+a height map instead of the rendered view.
+.SS Sound
+.TP
+.BR volume ", " mute
+Master volume 0 to 1; silent with the device kept open.
+.TP
+.BR sound.drops ", " sound.bed ", " sound.brown ", " sound.breeze ", " sound.harsh
+Drop plinks, the rain bed, brown noise, the breeze, and the gusts and rustle
+in it; 0 to 4, 1 as designed.
+.SH KEYS
+Lower case nudges a parameter down and upper case (shift) up, unless a pair
+is listed.
+.B h
+shows this list in the window.
+No function keys are needed.
+.SS Camera
+.PD 0
+.TP 14
+arrows
+Orbit (held; shift faster, ctrl or cmd finer); also keypad 4 6 8 2.
+.TP
+alt+up/down
+Zoom (held); also PgUp, PgDn, the wheel, a pinch.
+.TP
+.BR o ", Home"
+Reset the camera.
+.SS Basin
+.TP 14
+.B 1 2 3 4
+Presets: tray, pond, pool, sea.
+.TP
+.B n
+Rectangle or disk.
+.TP
+.BR "[ ]" " / " "{ }"
+Width, length (5% a press).
+.TP
+.BR ", ." " / " \e
+Depth; make it square again, keeping the area.
+.TP
+.B y
+Nonlinear correction.
+.TP
+.BR "\- =" ", " x / X
+Time warp; damping.
+.TP
+.BR g / G ", " f
+Display gain; floor pattern.
+.TP
+.B t
+Container: opaque, floor, glass, glass+bottom, none.
+.TP
+.B \(ga
+Setting: none or the house.
+.TP
+.B Tab
+Look: animation or video.
+.SS Sources
+.TP 14
+.BR r ", " i / I
+Rain; rain rate.
+.TP
+.B b
+Breeze.
+.TP
+.BR w / W
+Wind.
+.TP
+.BR e ", " z / Z
+Boat; its speed.
+.TP
+.BR E " / " C
+One more float; clear them.
+.TP
+.BR ; ", " \(aq/\(dq ", " //?
+Shake (Faraday); its amplitude; its frequency.
+.TP
+.BR 0 " / " )
+Jolt along x, along y (alt: three times harder).
+.TP
+.BR 5 " / " % ", " 6 " / " ^
+The sun lower / higher; round, and back.
+.TP
+.BR p " / " P
+Wavemaker on or off; next wall.
+.TP
+.BR k / K ", " l / L
+Its frequency; its span.
+.TP
+.BR "< >"
+Slide it along the wall.
+.TP
+.B D
+Its outline on the water.
+.SS Sound
+.TP 14
+.BR m ", " a / A
+Sound on or off; volume.
+.TP
+.BR j / J ", " u / U
+Drop plinks; rain bed.
+.TP
+.B 7 8 9
+Brown noise, breeze, harshness (shift: up).
+.SS Other
+.TP 14
+.B d
+Hide or show the settings box.
+.TP
+alt+enter
+Full screen.
+.TP
+.BR c ", " C
+Clear the water; clear the floats.
+.TP
+space
+Pause.
+.TP
+.B s
+Screenshot (pond\-NNN.bmp in the current directory).
+.TP
+.BR h ", " esc ", " q
+Help; back out one layer (script, full screen, program); quit.
+.PD
+.SS Mouse and touch
+Click on the water for a drop, shift\-click for a big one; drag on it to
+push a finger through it.
+Drag off the water, or with the right button, or ctrl+drag, to orbit; the
+wheel zooms.
+On a touch screen two fingers orbit and pinch to zoom.
+.SH SCRIPTS
+A script is a configuration file with a time axis: one event per line, a
+time and then parameter settings.
+.PP
+.nf
+.RS
+at 0     clear  preset pool  rain on  rain\-rate 1.5
+at 0     camera 35,42,1.5
+at 0     say "a pool in the rain"
+at 2     yaw += 90 over 30
++8       paddle on  paddle\-freq 2.4 over 8
+at 60    loop
+.RE
+.fi
+.PP
+.BI at " T"
+is seconds from the start,
+.BI + T
+seconds after the line before, and a line with no time shares the previous
+line's.
+Times are wall\-clock, so a script may change
+.B warp
+itself.
+Every parameter name is a verb; a value may be absolute or relative
+.RB ( += ,
+.BR \-= ),
+and a number may take
+.BI over " T"
+to get there smoothly.
+The other verbs:
+.TP
+.BR drop " \fIX,Y\fR [\fISIZE\fR] | " "drop random"
+A drop at fractions of the basin.
+.TP
+.BI jolt " DUX,DUY"
+Shove the basin sideways, m/s.
+.TP
+.BI boat " X,Y\fR[\fP,HEADING\fR]"
+Put the boat there (fractions of the basin, degrees from +x) and start it.
+.TP
+.BR float " \fIX,Y\fR | " "float random"
+One more float.
+.TP
+.BI camera " Y,P,D " \fR[ "over T" \fR]
+Move the camera.
+.TP
+.BI say " \(dqtext\(dq"
+A caption under the settings box (also
+.BR caption ).
+.TP
+.B clear
+Calm the water.
+.TP
+.BR loop ", " end
+Start again; stop (also
+.BR stop ).
+.PP
+.B #
+starts a comment.
+A key on a parameter the script is moving takes that parameter over; the
+script carries on with the rest.
+.B esc
+stops the script.
+.SH FILES
+The configuration file is the first of these that exists:
+.IP
+.nf
+$POND_CONFIG
+$XDG_CONFIG_HOME/pond/pond.conf
+~/.config/pond/pond.conf
+~/.pondrc
+\&./pond.conf
+.fi
+.PP
+One
+.I key
+=
+.I value
+per line (also
+.IB key : " value"
+or
+.IR "key value" );
+the keys are the parameters and the start\-up options above;
+.B #
+and
+.B ;
+start comments;
+.B \-
+and
+.B _
+are the same in a key.
+Unknown keys are reported with their line number and skipped.
+Settings are read as built\-in defaults, then the file, then the command line.
+.PP
+.I demos/*.pond
+in the source tree: twelve scripts, from a three\-minute tour to a
+ten\-minute showcase of everything.
+.SH ENVIRONMENT
+.TP
+.B POND_CONFIG
+The configuration file to read before the usual places.
+.TP
+.B XDG_CONFIG_HOME
+Where
+.I pond/pond.conf
+is looked for (default
+.IR ~/.config ).
+.TP
+.B POND_WAV
+Record what is heard to this WAV file.
+.SH EXAMPLES
+.nf
+pond \-\-preset 3 \-\-scene breeze \-\-setting house \-\-look video
+pond \-\-shape disk \-\-basin 10 \-\-paddle \-\-paddle\-freq 1.2
+pond \-\-preset 4 \-\-wind 12 \-\-boat
+pond \-\-preset 2 \-\-shake \-\-shake\-freq 3
+pond \-\-script demos/showcase.pond \-\-fullscreen \-\-no\-hud
+pond \-\-volume 0.3 \-\-glass floor \-\-write\-config
+pond \-\-frames 120 \-\-snap3d shot.bmp
+.fi
+.SH SEE ALSO
+README.md in the source tree, for the physics and the rendering, at
+.UR https://github.com/micomrkaic/pond
+github.com/micomrkaic/pond
+.UE .
+.SH AUTHOR
+Mico
+.UR https://github.com/micomrkaic
+github.com/micomrkaic
+.UE .
+Licensed under the GNU General Public License, version 3 or later.
