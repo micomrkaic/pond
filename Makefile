@@ -90,3 +90,31 @@ web: $(SRC) $(HDR) web/shell.html
 
 clean:
 	rm -rf $(BIN) build pond-*.bmp
+
+# Install/uninstall targets for a C project, portable to GNU make 3.81 (macOS)
+# and BSD/GNU install(1). Paste into the project's Makefile and set PROG.
+#
+#   make install                         -> ~/.local/bin/PROG
+#   make install PREFIX=/usr/local       -> system-wide (with sudo)
+#   app-install                          -> ~/.local/stow/PROG, stowed into ~/.local
+#
+# Command-line PREFIX overrides the ?= default. DESTDIR is for packagers.
+
+PROG    ?= pond
+PREFIX  ?= $(HOME)/.local
+BINDIR  ?= $(PREFIX)/bin
+MANDIR  ?= $(PREFIX)/share/man/man1
+INSTALL ?= install
+
+.PHONY: install uninstall
+
+install: $(PROG)
+	$(INSTALL) -d $(DESTDIR)$(BINDIR)
+	$(INSTALL) -m 755 $(PROG) $(DESTDIR)$(BINDIR)/
+	@if [ -f $(PROG).1 ]; then \
+		$(INSTALL) -d $(DESTDIR)$(MANDIR) && \
+		$(INSTALL) -m 644 $(PROG).1 $(DESTDIR)$(MANDIR)/; \
+	fi
+
+uninstall:
+	rm -f $(DESTDIR)$(BINDIR)/$(PROG) $(DESTDIR)$(MANDIR)/$(PROG).1
