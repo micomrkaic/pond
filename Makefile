@@ -84,8 +84,18 @@ bench: $(BIN)
 # browser build: needs emsdk on PATH; serve the output directory with any static
 # server (python3 -m http.server).  For GitHub Pages: make web WEB_DIR=docs,
 # commit docs/, and point Pages at /docs.
+# A distribution's Emscripten (Debian's, under /usr/share) keeps a frozen cache where a
+# user cannot write, and SDL2 has to be fetched and built into it on first use.  Then
+# the cache is copied once to ~/.cache/emscripten and used from there, unfrozen
+# (unless EM_CACHE is set already).
 web: $(SRC) $(HDR) web/shell.html
 	@mkdir -p $(WEB_DIR)
+	@c=$$(em-config CACHE 2>/dev/null); f=$$(em-config FROZEN_CACHE 2>/dev/null); \
+	if [ -z "$$EM_CACHE" ] && [ -n "$$c" ] && { [ ! -w "$$c" ] || [ "$$f" = True ]; }; then \
+	  EM_CACHE="$$HOME/.cache/emscripten"; EM_FROZEN_CACHE=; export EM_CACHE EM_FROZEN_CACHE; \
+	  if [ ! -d "$$EM_CACHE" ]; then mkdir -p "$$EM_CACHE" && cp -R "$$c"/. "$$EM_CACHE"/ && rm -f "$$EM_CACHE"/cache.lock; fi; \
+	  echo "Emscripten's cache $$c is read-only (a distribution's): using $$EM_CACHE"; fi; \
+	echo "$(EMCC) $(EMFLAGS) --shell-file web/shell.html -o $(WEB_DIR)/index.html $(SRC)"; \
 	$(EMCC) $(EMFLAGS) --shell-file web/shell.html -o $(WEB_DIR)/index.html $(SRC)
 
 clean:

@@ -22,7 +22,9 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     make            # native: needs SDL2 dev package (apt: libsdl2-dev, brew: sdl2)
     make test       # DCT against the O(N^2) definition; mode frequency against Airy
     make bench      # headless timings of the CPU path on a 512^2 grid
-    make web        # needs emsdk on PATH; output in build/web/, serve it statically
+    make web        # needs emcc (emsdk, Homebrew, or apt's emscripten); output in build/web/
+    make install    # ~/.local/bin/pond;  PREFIX=/usr/local (with sudo) for everyone
+    make uninstall
 
     ./pond                                 # 512^2 grid, 1280x800 window, "pond" preset
     ./pond --basin 25x12 --depth 1.8       # any rectangle, in metres
@@ -54,6 +56,9 @@ In the browser the grid defaults to 256^2; append `?grid=512` to the URL for
 the finer mesh (single-threaded WASM, so budget accordingly; 512 is the cap,
 the heap is fixed at 128 MB). `make web
 WEB_DIR=docs` puts the build where GitHub Pages can serve it from `/docs`.
+With Debian's or Ubuntu's emscripten package, whose cache under
+`/usr/share/emscripten` is read-only, `make web` copies that cache once to
+`~/.cache/emscripten` and builds SDL2 into the copy.
 Use `h` for the help there; on a touch
 screen, one finger is the finger, two fingers orbit and pinch-zoom, and a
 bar of buttons along the bottom stands in for the keys (presets, rain,

@@ -338,7 +338,7 @@ int main(void)
         wave *a = wave_create(n, n, L, L, 2.0), *b = wave_create(n, n, L, L, 2.0);
         wave_set_damping(a, 0.4); wave_set_damping(b, 0.4);
         wave_gusts g = { 1, 0.25f, { 6.0f }, { 6.0f }, { 2.0f }, { 3.0f } };
-        double ea = 0, eb = 0, ein = 0, eout = 0; int nin = 0, nout = 0, samples = 0;
+        double ea = 0, eb = 0, ein = 0, eout = 0; int nin = 0, nout = 0;
         for (int it = 0; it < 60 * 40; it++) {
             wave_breeze(a, k0, amp, dt); wave_step(a, dt, 4);
             wave_breeze_gusty(b, k0, amp, dt, &g); wave_step(b, dt, 4);
@@ -356,7 +356,6 @@ int main(void)
                             else if (r > 4.5) { eout += sx * sx; nout++; }
                         }
                     }
-                samples++;
             }
         }
         const double ratio = sqrt((ein / nin) / (eout / nout)), en = sqrt(eb / ea);
