@@ -30,7 +30,9 @@
  * Every parameter name is a verb (see --list-params); a value may be
  * absolute, or relative with += and -=; a real may take "over T" to tween
  * there, eased, over T seconds.  The other verbs: drop X,Y [SIZE] or drop
- * random, clear, camera Y,P,D [over T], say "text", loop, end.  # starts a
+ * random, clear, camera Y,P,D [over T], finger X,Y X,Y ... [over T] (a finger
+ * drawn through the water along those points), jolt, boat, float, say
+ * "text", loop, end.  # starts a
  * comment; ; separates actions like whitespace does.  Times are wall-clock
  * seconds from the start, so a script can change the time warp itself.
  *

@@ -24,7 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef enum { A_SET, A_DROP, A_CLEAR, A_CAMERA, A_SAY, A_LOOP, A_END, A_BOAT, A_FLOAT, A_JOLT } action_kind;
+typedef enum { A_SET, A_DROP, A_CLEAR, A_CAMERA, A_SAY, A_LOOP, A_END, A_BOAT, A_FLOAT, A_JOLT, A_FINGER } action_kind;
 
 typedef struct {
     action_kind kind;
@@ -35,6 +35,7 @@ typedef struct {
     double x, y, size;      /* A_DROP (fractions of the basin; size relative); A_CAMERA: yaw, pitch */
     double z;               /* A_CAMERA: dist, or < 0 to keep */
     int    random;          /* A_DROP: anywhere */
+    int    first_pt, n_pt;  /* A_FINGER: its path, in the script's point array */
 } action;
 
 typedef struct {
@@ -54,12 +55,28 @@ struct script {
     char    name[128];
     action *acts; int nacts, cap_acts;
     event  *evs;  int nevs, cap_evs;
+    double *pts;  int npts, cap_pts;    /* finger paths: x, y pairs, fractions of the basin */
     /* running */
     int     running;
     double  t;
     int     next;           /* the next event to fire */
     tween   tw[MAX_TWEENS]; int ntw;
+    /* a finger on the water: along its path from t0 to t1 */
+    int     f_on, f_first, f_n;
+    double  f_t0, f_t1;
 };
+
+static int push_point(script *s, double x, double y)
+{
+    if (s->npts + 2 > s->cap_pts) {
+        int nc = s->cap_pts ? 2 * s->cap_pts : 128;
+        double *np = realloc(s->pts, (size_t)nc * sizeof *np);
+        if (!np) return -1;
+        s->pts = np; s->cap_pts = nc;
+    }
+    s->pts[s->npts++] = x; s->pts[s->npts++] = y;
+    return 0;
+}
 
 /* ------------------------------------------------------------------ parsing */
 
@@ -195,6 +212,17 @@ script *script_parse(const char *text, const char *name, char *err, size_t errn)
                 if (i < n && sscanf(tok[i], "%lf,%lf", &a.x, &a.y) == 2) { a.random = 0; i++; }
                 else if (i < n && !strcmp(tok[i], "random")) i++;
             }
+            else if (!strcmp(w, "finger")) {
+                /* finger X,Y X,Y ... [over T]: a finger drawn through the water along
+                 * those points (fractions of the basin), taking T seconds */
+                a.kind = A_FINGER; a.first_pt = s->npts / 2;
+                double x, y;
+                while (i < n && sscanf(tok[i], "%lf,%lf", &x, &y) == 2) {
+                    if (push_point(s, x, y) != 0) { script_free(s); return NULL; }
+                    a.n_pt++; i++;
+                }
+                if (a.n_pt == 0) { fail(err, errn, s->name, lineno, "finger needs points x,y", NULL); script_free(s); return NULL; }
+            }
             else if (!strcmp(w, "camera")) {
                 a.kind = A_CAMERA; a.z = -1;
                 if (i >= n || sscanf(tok[i], "%lf,%lf,%lf", &a.x, &a.y, &a.z) < 2) {
@@ -249,7 +277,7 @@ script *script_load(const char *path, char *err, size_t errn)
 void script_free(script *s)
 {
     if (!s) return;
-    free(s->acts); free(s->evs); free(s);
+    free(s->acts); free(s->evs); free(s->pts); free(s);
 }
 
 /* ------------------------------------------------------------------ running */
@@ -315,6 +343,10 @@ static void run_action(script *s, app *a, const action *ac)
         a->hud_dirty = 1;
         break;
     case A_JOLT: app_jolt(a, ac->x, ac->y); break;
+    case A_FINGER:
+        s->f_on = 1; s->f_first = ac->first_pt; s->f_n = ac->n_pt;
+        s->f_t0 = s->t; s->f_t1 = s->t + ac->over;
+        break;
     case A_FLOAT:
         if (a->nfloat < NFLOAT_MAX) {
             if (ac->random) app_add_float(a);
@@ -333,11 +365,11 @@ static void run_action(script *s, app *a, const action *ac)
     case A_LOOP:
         s->t -= s->evs[s->next].t;      /* keep the phase within the frame */
         s->next = 0;
-        s->ntw = 0;
+        s->ntw = 0; s->f_on = 0;
         break;
     case A_END:
         s->running = 0;
-        s->ntw = 0;
+        s->ntw = 0; s->f_on = 0;
         a->caption[0] = 0;
         a->hud_dirty = 1;
         break;
@@ -346,12 +378,12 @@ static void run_action(script *s, app *a, const action *ac)
 
 void script_start(script *s, app *a)
 {
-    s->running = 1; s->t = 0; s->next = 0; s->ntw = 0;
+    s->running = 1; s->t = 0; s->next = 0; s->ntw = 0; s->f_on = 0;
     a->caption[0] = 0;
     a->hud_dirty = 1;
 }
 
-void script_stop(script *s) { s->running = 0; s->ntw = 0; }
+void script_stop(script *s) { s->running = 0; s->ntw = 0; s->f_on = 0; }
 int  script_running(const script *s) { return s && s->running; }
 const char *script_name(const script *s) { return s ? s->name : ""; }
 double script_time(const script *s) { return s ? s->t : 0; }
@@ -378,7 +410,21 @@ void script_update(script *s, app *a, double dt)
         }
         if (!looped && s->running) s->next++;
     }
-    if (s->running && s->next >= s->nevs && s->ntw == 0) s->running = 0;   /* ran off the end */
+    /* the finger: along its path at a steady pace, pushing the water as the mouse does */
+    if (s->f_on) {
+        const double *P = s->pts + 2 * s->f_first;
+        const int n = s->f_n;
+        double u = s->f_t1 > s->f_t0 ? (s->t - s->f_t0) / (s->f_t1 - s->f_t0) : 1.0;
+        if (u >= 1.0) { u = 1.0; s->f_on = 0; }
+        const double q = u * (n - 1);
+        int k = (int)q; if (k > n - 2) k = n - 2; if (k < 0) k = 0;
+        const double fr = n > 1 ? q - k : 0.0;
+        const double x = n > 1 ? P[2 * k] + (P[2 * k + 2] - P[2 * k]) * fr : P[0];
+        const double y = n > 1 ? P[2 * k + 1] + (P[2 * k + 3] - P[2 * k + 1]) * fr : P[1];
+        const double dts = a->paused ? 0.0 : dt * a->warp;
+        app_finger(a, x * a->w->Lx, y * a->w->Ly, dts > 0 ? dts : dt);
+    }
+    if (s->running && s->next >= s->nevs && s->ntw == 0 && !s->f_on) s->running = 0;   /* ran off the end */
     /* the tweens: smoothstep from v0 to v1 */
     for (int i = 0; i < s->ntw; i++) {
         tween *t = &s->tw[i];

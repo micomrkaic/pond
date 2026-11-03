@@ -21,6 +21,7 @@
 #include "param.h"
 #include "config.h"
 #include "script.h"
+#include "record.h"
 
 #include <SDL.h>
 #include <math.h>
@@ -77,6 +78,7 @@ static const char *const help_lines[] = {
     "d                         hide / show the settings box",
     "alt+enter                 full screen",
     "c   space   s             clear the water;  pause;  screenshot",
+    "enter                     record a show: what you do, as a script (again: stop)",
     "h   esc   q               help;  back out;  quit",
     "",
     "w^2 = (gk + sk^3/rho) tanh(kh)      gamma = 2 nu k^2 + g0",
@@ -105,6 +107,7 @@ static void print_help(void)
          "\n"
          "Per run:\n"
          "  --script F      run a script: timed parameter settings, see demos/ and README\n"
+         "  --record [F]    record what you do as a script, into F (default pond-rec-NNN.pond); enter stops it\n"
          "  --frames N      quit after N displayed frames;  --snap3d F  save the last 3-D frame to F (bmp)\n"
          "  --bench N       run N headless frames of the CPU path, print timings, exit;  --snap F  save the last\n"
          "  --config F      read F instead of the default config file;  --no-config  ignore it\n"
@@ -160,7 +163,9 @@ static void update_hud(app *a)
                  100.0 * a->paddle_pos, 100.0 * a->paddle_span);
     }
     char line5[200] = "";
-    if (a->sc && script_running(a->sc))
+    if (a->rec)
+        snprintf(line5, sizeof line5, "\nRECORDING %s  %.0f s  (enter stops)", rec_path(a->rec), rec_time(a->rec));
+    else if (a->sc && script_running(a->sc))
         snprintf(line5, sizeof line5, "\nscript %s  %.0f s%s%s", script_name(a->sc), script_time(a->sc),
                  a->caption[0] ? "  -  " : "", a->caption);
     else if (a->caption[0]) snprintf(line5, sizeof line5, "\n%s", a->caption);
@@ -197,6 +202,7 @@ static void drop_at(app *a, int mx, int my, double rel_size)
     if (!to_basin(a, mx, my, &x, &y)) return;
     double s = rel_size * app_drop_size(a);     /* a click is a small stone: twice a raindrop; shift, four times */
     app_splash(a, x, y, s, -0.15 * s);
+    rec_drop(a->rec, a, x, y, s);
 }
 
 static void save_bmp_rgba(const char *name, uint8_t *rgba, int w, int h)
@@ -289,6 +295,28 @@ static const keybind keybinds[] = {
 static app *app_global;        /* the running program, for the web page's touch bar */
 static void handle_key(app *a, SDL_Keycode k, int shift);
 
+/* start recording a show into path (NULL: the next pond-rec-NNN.pond), or stop the one running */
+static void record_toggle(app *a, const char *path)
+{
+    if (a->rec) {
+        char name[128];
+        snprintf(name, sizeof name, "%.127s", rec_path(a->rec));
+        rec_stop(a->rec, a, 1);
+        a->rec = NULL;
+        printf("recorded %s\n", name);
+        snprintf(a->caption, sizeof a->caption, "recorded %s", name);
+    } else {
+#ifdef __EMSCRIPTEN__
+        a->rec = rec_start(a, "-");          /* the browser: into the console */
+#else
+        a->rec = rec_start(a, path);
+#endif
+        if (!a->rec) fprintf(stderr, "cannot record to %s\n", path ? path : "pond-rec-NNN.pond");
+        else a->caption[0] = 0;
+    }
+    a->hud_dirty = 1;
+}
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 /* a key from the page's buttons: the SDL keycode (ASCII for letters and digits) and
@@ -305,39 +333,54 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
     const int alt = (SDL_GetModState() & KMOD_ALT) != 0;
     for (int i = 0; i < NKEYBINDS; i++)
         if (keybinds[i].key == k && (keybinds[i].shift < 0 || keybinds[i].shift == shift)) {
+            const double before = param_get(a, keybinds[i].name);
             param_nudge(a, keybinds[i].name, keybinds[i].dir);
+            rec_param(a->rec, a, keybinds[i].name, before);
             return;
         }
     switch (k) {
     case SDLK_q: a->running = 0; break;
-    case SDLK_ESCAPE:                       /* one layer at a time: script, full screen, program */
-        if (a->sc && script_running(a->sc)) { script_stop(a->sc); a->caption[0] = 0; }
+    case SDLK_ESCAPE:                       /* one layer at a time: recording, script, full screen, program */
+        if (a->rec) record_toggle(a, NULL);
+        else if (a->sc && script_running(a->sc)) { script_stop(a->sc); a->caption[0] = 0; }
         else if (a->fullscreen) param_set(a, "fullscreen", 0);
         else a->running = 0;
         break;
     case SDLK_RETURN: case SDLK_KP_ENTER:
         if (alt) param_nudge(a, "fullscreen", 0);
+        else record_toggle(a, NULL);
         break;
     case SDLK_h: case SDLK_F1:
         param_nudge(a, "help", 0);
         if (!a->mode3d) print_help();
         break;
-    case SDLK_c: if (shift) app_clear_floats(a); else wave_clear(w); break;
+    case SDLK_c:
+        if (shift) { app_clear_floats(a); rec_param(a->rec, a, "floats", 0); }
+        else { wave_clear(w); rec_clear(a->rec); }
+        break;
     case SDLK_0: {
         /* a jolt: the basin shoved sideways, by a tenth of the fundamental's speed scale;
          * along x, shift along y, alt three times harder */
         const double du = 0.08 * sqrt(w->g * w->depth) * (alt ? 3.0 : 1.0);
         if (!shift) app_jolt(a, du, 0.0); else app_jolt(a, 0.0, du);
+        rec_jolt(a->rec, shift ? 0.0 : du, shift ? du : 0.0);
         break;
     }
     case SDLK_o: case SDLK_HOME: app_reset_camera(a); break;
     case SDLK_s:
         if (a->mode3d) a->shot_pending = 1; else save_screenshot_2d(a);
         break;
-    case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: param_set(a, "preset", k - SDLK_1); break;
+    case SDLK_1: case SDLK_2: case SDLK_3: case SDLK_4: {
+        const double before = param_get(a, "preset");
+        param_set(a, "preset", k - SDLK_1);
+        rec_param(a->rec, a, "preset", before);
+        break;
+    }
     case SDLK_BACKSLASH: {   /* make it square again, keeping the area */
-        double L = sqrt(w->Lx * w->Ly);
-        wave_set_pool(w, L, L, w->depth); app_pool_changed(a); break;
+        double L = sqrt(w->Lx * w->Ly), bx = w->Lx, by = w->Ly;
+        wave_set_pool(w, L, L, w->depth); app_pool_changed(a);
+        rec_param(a->rec, a, "width", bx); rec_param(a->rec, a, "length", by);
+        break;
     }
     /* the arrows and PgUp/PgDn (alt + up/down) are read as held keys in camera_keys();
      * F-keys are left alone: laptops and Mac keyboards give them to the system */
@@ -364,6 +407,7 @@ static void handle_events(app *a)
                 /* on the water: drop, or a finger if the button stays down */
                 double sz = (shift ? 4.0 : 2.0) * app_drop_size(a);
                 app_splash(a, x, y, sz, -0.15 * sz);
+                rec_drop(a->rec, a, x, y, sz);
                 a->dragging = !shift;
             } else if (a->mode3d) {
                 /* off the water, with a modifier, or any other button: orbit */
@@ -612,14 +656,8 @@ static void apply_sources(app *a, double dts)
     if (a->dragging) {
         double x, y;
         if (to_basin(a, a->mx, a->my, &x, &y)) {
-            double s = 0.015 * L;
-            wave_add_drop(w, x, y, s, -a->finger_gain * 4.0 * s * dts);
-            if (a->au && w->t - a->finger_t > 0.12) {       /* a trail of small plinks */
-                double pan = 0, att = 1;
-                if (a->v3) view3d_listen(a->v3, x, y, &pan, &att);
-                audio_splash(a->au, 0.4 * s * 0.3 / L, pan, 0.5 * att);
-                a->finger_t = w->t;
-            }
+            app_finger(a, x, y, dts);
+            rec_finger(a->rec, a, x, y);
         }
     }
     if (a->rain) {
@@ -743,6 +781,7 @@ static void frame(void *ud)
     camera_keys(a, dt);
     if (a->sc) script_update(a->sc, a, dt);
     advance(a, dt);
+    rec_tick(a->rec, a, dt);
     wave_realize(a->w);
     if (a->hud_dirty) update_hud(a);
 
@@ -911,7 +950,7 @@ POND_MAIN(int argc, char **argv)
 
     /* argv-only: these are per-run, not preferences */
     int bench_frames = 0, a_frames = 0, list_params = 0;
-    const char *snap = NULL, *snap3d = NULL, *script_path = NULL;
+    const char *snap = NULL, *snap3d = NULL, *script_path = NULL, *record_path = NULL;
 
 #ifdef __EMSCRIPTEN__
     cfg.grid = emscripten_run_script_int("(function(){var v=new URLSearchParams(location.search).get('grid');return v?(v|0):0;})()");
@@ -932,6 +971,7 @@ POND_MAIN(int argc, char **argv)
         else if (!strcmp(o, "--snap3d") && i + 1 < argc) snap3d = argv[++i];
         else if (!strcmp(o, "--frames") && i + 1 < argc) a_frames = atoi(argv[++i]);
         else if (!strcmp(o, "--script") && i + 1 < argc) script_path = argv[++i];
+        else if (!strcmp(o, "--record")) record_path = (i + 1 < argc && argv[i + 1][0] != '-') ? argv[++i] : "";
         /* flags from before there was a table */
         else if (!strcmp(o, "--2d")) config_set(&cfg, "mode", "2d");
         else if (!strcmp(o, "--nomsaa")) config_set(&cfg, "msaa", "off");
@@ -1066,11 +1106,13 @@ POND_MAIN(int argc, char **argv)
 
     /* something to look at right away */
     app_splash(&a, 0.5 * a.w->Lx, 0.5 * a.w->Ly, 0.03 * a.w->Lx, -0.15 * 0.03 * a.w->Lx);
+    if (record_path) record_toggle(&a, record_path[0] ? record_path : NULL);
 
 #ifdef __EMSCRIPTEN__
     emscripten_set_main_loop_arg(frame, &a, 0, 1);
 #else
     while (a.running) frame(&a);
+    if (a.rec) record_toggle(&a, NULL);
     if (a.sc) script_free(a.sc);
     if (a.au) audio_close(a.au);
     if (a.hs) hos_destroy(a.hs);

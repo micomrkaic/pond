@@ -1,7 +1,7 @@
 .\" pond(1) -- a numerically honest wave tank as screen candy
 .\" Copyright (C) 2026 Mico <https://github.com/micomrkaic>; GPL-3.0-or-later
 .\" tests/test_man.sh checks that every option and parameter pond knows is here.
-.TH POND 1 2026-10-28 "pond 0.38" "User Commands"
+.TH POND 1 2026-11-03 "pond 0.39" "User Commands"
 .SH NAME
 pond \- dispersive water waves in a basin, drawn in 3\-D, with sound
 .SH SYNOPSIS
@@ -116,6 +116,14 @@ The nonlinear correction on (the parameter
 .BI \-\-script " file"
 Run a script (see
 .BR SCRIPTS ).
+.TP
+.BR \-\-record " [\fIfile\fR]"
+Record what is done, from the start, as a script (see
+.BR RECORDING ),
+into
+.I file
+or the next
+.IR pond\-rec\-NNN.pond .
 .TP
 .BI \-\-frames " N"
 Quit after
@@ -366,6 +374,10 @@ Brown noise, breeze, harshness (shift: up).
 .B d
 Hide or show the settings box.
 .TP
+enter
+Record a show: what is done from now on, as a script; again to stop (see
+.BR RECORDING ).
+.TP
 alt+enter
 Full screen.
 .TP
@@ -379,7 +391,7 @@ Pause.
 Screenshot (pond\-NNN.bmp in the current directory).
 .TP
 .BR h ", " esc ", " q
-Help; back out one layer (script, full screen, program); quit.
+Help; back out one layer (recording, script, full screen, program); quit.
 .PD
 .SS Mouse and touch
 Click on the water for a drop, shift\-click for a big one; drag on it to
@@ -437,6 +449,10 @@ Move the camera.
 A caption under the settings box (also
 .BR caption ).
 .TP
+.BI finger " X,Y X,Y ... " \fR[ "over T" \fR]
+A finger drawn through the water along those points (fractions of the
+basin), taking T seconds, as a mouse drag does.
+.TP
 .B clear
 Calm the water.
 .TP
@@ -450,6 +466,34 @@ A key on a parameter the script is moving takes that parameter over; the
 script carries on with the rest.
 .B esc
 stops the script.
+.SH RECORDING
+.B enter
+starts writing a script of what is done, and
+.B enter
+again (or
+.BR esc ,
+or quitting) finishes it;
+.B \-\-record
+starts one as the program does.
+The file is an ordinary script that plays with
+.BR \-\-script :
+it opens with every parameter as it stood and a
+.BR clear ,
+so it replays the same from any start; a key press is a setting; a key held
+down is one
+.B over
+line; a click is a
+.BR drop ,
+a drag a
+.BR finger ,
+and the camera's moves are keyframes wherever it paused or turned; jolts,
+presets, floats and
+.B clear
+are written as themselves.
+It ends with
+.BR loop .
+Rain and the breeze are random, so a replay is the same show, not the same
+frames.
 .SH FILES
 The configuration file is the first of these that exists:
 .IP
@@ -460,6 +504,9 @@ $XDG_CONFIG_HOME/pond/pond.conf
 ~/.pondrc
 \&./pond.conf
 .fi
+.PP
+.I pond\-rec\-NNN.pond
+in the current directory: recordings, the first free number.
 .PP
 One
 .I key

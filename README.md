@@ -38,6 +38,7 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     ./pond --preset 2 --shake --shake-freq 3   # the pond shaken at 3 Hz: Faraday waves at 1.5
     ./pond --script demos/tour.pond        # three minutes of everything, on a loop; Escape stops it
     ./pond --script demos/showcase.pond    # every feature once, ten minutes
+    ./pond --record show.pond              # write down what you do as a script (enter stops it)
     ./pond --cpu-caustics                  # if the GPU pass is unavailable or suspect
     ./pond --mute                          # starts silent; --no-audio opens no device at all
                                            # POND_WAV=take.wav records what you hear
@@ -124,6 +125,7 @@ water than driving at it.
 | `x`/`X` | extra uniform damping |
 | `g`/`G` `f` | display gain, floor pattern |
 | `d` | hide / show the settings box (the help hint goes with it; with `D` off too, a clean frame for screenshots) |
+| `enter` | record a show: what you do from now on, as a script in `pond-rec-NNN.pond`; `enter` again stops it (see Recording a show) |
 | `alt`+`enter` | full screen; `esc` leaves it before it quits |
 | `c` `space` `s` `q` | clear, pause, screenshot (bmp), quit |
 
@@ -222,15 +224,17 @@ verb; a value may be absolute or relative (`+=`, `-=`), and a number may take
 basin, degrees from +x — and start it; `boat on`/`off` and `boat-speed` are
 the parameters), `float X,Y` or `float random` (one more float; `floats N`
 sets the count, `floats 0` clears them), `clear`, `camera Y,P,D [over T]`,
-`say "text"` (shown under the HUD), `loop`, `end`. Times are wall-clock, so
+`say "text"` (shown under the HUD), `finger X,Y X,Y ... over T` (a finger
+drawn through the water along those points, fractions of the basin, taking
+T seconds, as a mouse drag does), `loop`, `end`. Times are wall-clock, so
 a script can change the time warp itself. `#` starts a comment.
 
     ./pond --script demos/tour.pond
 
 Two rules. The person wins: a key on a parameter the script is tweening
 cancels that tween, and everything else the script does carries on.
-And `Escape` backs out one layer at a time — the script, then full screen,
-then the program. Scripts do not clear the water between events unless told
+And `Escape` backs out one layer at a time — a recording, the script, then
+full screen, then the program. Scripts do not clear the water between events unless told
 to; the old waves decaying under the new ones is the good part. (Do clear
 before shrinking a basin, though: 80 m of sea in a 3 m pond is a tsunami.)
 
@@ -248,6 +252,45 @@ Faraday waves at three frequencies, the threshold, and the tray), `day`
 (night, dawn, noon, dusk and night again over four minutes, round the
 house, its shadow swinging across the pool: a screen saver). `tests/test_script.c` runs every one of them
 headless, twice round.
+
+### Recording a show
+
+You do not have to write a script. `enter` starts writing one down, and
+`enter` again (or `esc`, or quitting) finishes it; `--record [FILE]` starts
+one as the program does. What you do in between goes into an ordinary
+script, `pond-rec-NNN.pond` unless named, that plays with `--script`, loops,
+and can be edited like any other:
+
+    # a show recorded with pond: play it with  pond --script pond-rec-001.pond
+    at 0       preset 3  shape rect  width 12  length 12  depth 2  ...
+    at 0       rain off  rain-rate 2  breeze off  ...
+    at 0       clear
+    at 0.60    rain on
+    at 1.10    sun-elev 21 over 0.7
+    at 2.30    drop 0.5975,0.6393 0.009766
+    at 2.50    finger 0.5043,0.7046 0.6682,0.6634 0.826,0.5879 over 0.3
+    at 3.20    yaw -= 37.5 over 0.5
+    at 4.10    yaw -= 30 over 0.2  pitch 24 over 0.2
+    at 4.70    jolt 0.3544,0
+    at 5.80    loop
+
+It opens with every parameter as it stood, and a `clear`, so it replays the
+same from whatever state pond starts in. Then: a key press is a setting; a
+key held down, sweeping the sun or the depth or the width, is one `over T`
+line (a value that wraps round, like the sun's azimuth, goes `+=` the short
+way); a click is a `drop` at that spot, in fractions of the basin, so it
+still lands there after a resize; a drag is a `finger` path, sampled ten
+times a second; and the camera, however it was moved — mouse, wheel, keys,
+`o` — becomes `yaw`/`pitch`/`dist` keyframes wherever it paused or turned
+back, smoothed between them. Jolts, presets, floats and `clear` are written
+as themselves. The help panel and full screen are not recorded.
+
+Rain, the breeze and the gusts are random, so a replay is the same show, not
+the same frames; the drops you clicked and the finger you drew are exact.
+The recording ends with `loop`, which is what a screen saver wants; change
+it to `end` for a one-off. `tests/test_script.c` records a session through
+the same calls the keyboard and mouse make, replays the file on a fresh
+program, and checks it lands where the session did.
 
 ## What it computes
 
@@ -1089,6 +1132,7 @@ map with additive blending, which is the same forward map).
     src/param.[ch]    the named parameters: setters, ranges, nudges; --list-params
     src/config.[ch]   creation settings, the config file, --write-config
     src/script.[ch]   scripts: the parser, the clock, the tweens
+    src/record.[ch]   a session written down as a script: sweeps, drops, fingers, camera keyframes
     demos/            scripts to run with --script
     src/dct.[ch]      radix-2 FFT, DCT-II/III, 2-D row–column
     src/wave.[ch]     dispersion tables, rotor propagation, sources

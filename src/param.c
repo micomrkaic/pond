@@ -82,6 +82,22 @@ double app_drop_size(const app *a)
  * modes as fine parallel ridges.  A real shove takes time, and the time averages
  * out every mode with a shorter period: spread over 0.4 of the fundamental's
  * period, 78% of the slope is in the fundamental and nothing is above n = 8. */
+/* a finger drawn through the water at x, y metres, for dts seconds of simulated
+ * time: a gentle push down, and a trail of small plinks */
+void app_finger(app *a, double x, double y, double dts)
+{
+    wave *w = a->w;
+    const double L = sqrt(w->Lx * w->Ly);
+    const double s = 0.015 * L;
+    wave_add_drop(w, x, y, s, -a->finger_gain * 4.0 * s * dts);
+    if (a->au && w->t - a->finger_t > 0.12) {
+        double pan = 0, att = 1;
+        if (a->v3) view3d_listen(a->v3, x, y, &pan, &att);
+        audio_splash(a->au, 0.4 * s * 0.3 / L, pan, 0.5 * att);
+        a->finger_t = w->t;
+    }
+}
+
 void app_jolt(app *a, double dux, double duy)
 {
     a->jolt_dux = dux; a->jolt_duy = duy;

@@ -22,6 +22,7 @@
 #include "../src/app.h"
 #include "../src/param.h"
 #include "../src/script.h"
+#include "../src/record.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -223,6 +224,83 @@ int main(void)
             check(loops == 2, "");
             free_app(a);
         }
+    }
+
+    /* --- a session recorded is a script that replays it --- */
+    {
+        const char *path = "build/rec-test.pond";
+        app *a = make_app(64);
+        param_set(a, "sun-elev", 66); param_set(a, "sun-azim", 320);
+        a->rec = rec_start(a, path);
+        check(a->rec != NULL, "a recording starts");
+        const double dt = 0.05;
+        double t = 0;
+        #define TICK_TO(T) while (t < (T) - 1e-9) { rec_tick(a->rec, a, dt); t += dt; }
+        TICK_TO(1.0);
+        { double b = param_get(a, "rain"); param_set(a, "rain", 1); rec_param(a->rec, a, "rain", b); }
+        /* a key held: the sun swept down, 21 presses of 3 degrees over a second */
+        for (int i = 0; i < 21; i++) { TICK_TO(2.0 + 0.05 * i); double b = param_get(a, "sun-elev"); param_nudge(a, "sun-elev", -1); rec_param(a->rec, a, "sun-elev", b); }
+        /* and round, 21 presses of 10 degrees: 320 to 170, through 360 */
+        for (int i = 0; i < 21; i++) { TICK_TO(3.2 + 0.05 * i); double b = param_get(a, "sun-azim"); param_nudge(a, "sun-azim", +1); rec_param(a->rec, a, "sun-azim", b); }
+        /* the mouse orbits: yaw on through 360 while the pitch comes down, then back a little */
+        for (int i = 1; i <= 20; i++) { TICK_TO(4.5 + 0.05 * i); param_set(a, "yaw", fmod(35.0 + 300.0 * i / 20.0, 360.0)); param_set(a, "pitch", 42.0 - 22.0 * i / 20.0); }
+        TICK_TO(6.5);
+        for (int i = 1; i <= 10; i++) { TICK_TO(6.5 + 0.05 * i); param_set(a, "yaw", fmod(335.0 - 40.0 * i / 10.0 + 360.0, 360.0)); }
+        TICK_TO(8.0);
+        rec_drop(a->rec, a, 0.3 * a->w->Lx, 0.6 * a->w->Ly, 0.05 * a->w->Lx);
+        /* a finger drawn corner to corner over a second */
+        for (int i = 0; i <= 20; i++) { TICK_TO(8.5 + 0.05 * i); double u = i / 20.0; rec_finger(a->rec, a, (0.2 + 0.6 * u) * a->w->Lx, (0.2 + 0.6 * u) * a->w->Ly); }
+        TICK_TO(10.0);
+        rec_jolt(a->rec, 0.05, 0.0);
+        app_add_float(a); rec_param(a->rec, a, "floats", 0);
+        TICK_TO(11.0);
+        #undef TICK_TO
+        const double yaw_end = param_get(a, "yaw"), pitch_end = param_get(a, "pitch");
+        rec_stop(a->rec, a, 1); a->rec = NULL;
+        free_app(a);
+
+        /* the file: one line per sweep, not one per press */
+        FILE *f = fopen(path, "rb");
+        check(f != NULL, "the recording is a file");
+        int n_sun = 0, n_az = 0, n_finger = 0, n_lines = 0;
+        char line[512];
+        while (f && fgets(line, sizeof line, f)) {
+            n_lines++;
+            if (strstr(line, "sun-elev")) n_sun++;
+            if (strstr(line, "sun-azim")) n_az++;
+            if (strstr(line, "finger ")) n_finger++;
+        }
+        if (f) fclose(f);
+        printf("   %d lines; sun-elev on %d (the snapshot and one sweep), sun-azim on %d, finger on %d", n_lines, n_sun, n_az, n_finger);
+        check(n_sun == 2 && n_az == 2 && n_finger == 1, "");
+
+        /* replayed on a fresh app, it lands where the session did */
+        char err[256];
+        script *s = script_load(path, err, sizeof err);
+        if (!s) printf("%s\n", err);
+        check(s != NULL, "the recording parses as a script");
+        if (s) {
+            app *b = make_app(64);
+            b->sc = s;
+            script_start(s, b);
+            run(b, 2.5, 0.05);
+            const double mid = param_get(b, "sun-elev");
+            printf("   at 2.5 s the sun is at %.1f (sweeping from 66 to 3)", mid);
+            check(mid < 60.0 && mid > 10.0, "");
+            run(b, 8.3, 0.05);
+            printf("   at 10.8 s: rain %s, sun %.1f deg at %.0f, camera yaw %.1f pitch %.1f (session: %.1f %.1f), %d float, water %.2g",
+                   param_get(b, "rain") > 0.5 ? "on" : "off", param_get(b, "sun-elev"), param_get(b, "sun-azim"),
+                   param_get(b, "yaw"), param_get(b, "pitch"), yaw_end, pitch_end, b->nfloat, wave_norm(b->w));
+            check(param_get(b, "rain") > 0.5 && fabs(param_get(b, "sun-elev") - 3.0) < 0.5 && fabs(param_get(b, "sun-azim") - 170.0) < 1.0
+                  && fabs(fmod(param_get(b, "yaw") - yaw_end + 540.0, 360.0) - 180.0) < 1.0 && fabs(param_get(b, "pitch") - pitch_end) < 0.5
+                  && b->nfloat == 1 && wave_norm(b->w) > 0.0, "");
+            /* and it loops */
+            double last = script_time(s); int loops = 0;
+            for (double u = 0; u < 15.0 && loops < 1; u += 0.05) { script_update(s, b, 0.05); if (script_time(s) < last) loops++; last = script_time(s); }
+            check(loops == 1, "the recording loops");
+            free_app(b);
+        }
+        if (getenv("KEEP")) printf("kept %s\n", path); else remove(path);
     }
 
     /* --- the ear's drop: the rain's spread rings at 1.2 to 3.6 kHz on every basin --- */

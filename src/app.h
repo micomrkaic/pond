@@ -119,6 +119,7 @@ typedef struct app {
     int frames_left;           /* --frames N: quit after N frames (0 = never) */
 
     struct script *sc;         /* a running script, or NULL */
+    struct recorder *rec;      /* a recording in progress, or NULL */
     int in_script;             /* set while the script itself is applying parameters */
     char caption[160];         /* what the script says, shown under the HUD */
 } app;
@@ -144,6 +145,7 @@ void  app_add_float(app *a);            /* one more, somewhere not too near a wa
 void  app_clear_floats(app *a);
 void  app_bubble(app *a, double x, double y, double s);
 double app_drop_size(const app *a);         /* a raindrop's crater width, metres, on this basin */
+void  app_finger(app *a, double x, double y, double dts);   /* a finger through the water at x, y metres, this frame */
 void  app_jolt(app *a, double dux, double duy);   /* shove the basin by that velocity, over 0.4 of the seiche period */
 void  app_jolt_step(app *a, double dts);          /* the slice of it that falls in this frame */
 
