@@ -1,0 +1,37 @@
+# a show recorded with pond: play it with  pond --script pond-rec-001.pond
+# (the opening lines are the state it was recorded from; what follows is what was done)
+at 0       preset 2  shape rect  width 3  length 3  depth 0.6  nonlinear off  damping 0.03  warp 1  
+at 0       rain off  rain-rate 2  breeze off  drop-size 0  wind 0  gusts on  breeze-gain 1  boat off  boat-speed 0.4  floats 0  shake off  shake-amp 0.5  shake-freq 4  finger-gain 1  
+at 0       paddle off  paddle-freq 2.04257  paddle-wall x=0  paddle-pos 0.5  paddle-span 1  paddle-mark on  paddle-stroke 1  
+at 0       glass opaque  floor sand  look animation  setting none  gain 1  hud on  view off  sun-elev 66  sun-azim 320  
+at 0       yaw 35  pitch 42  cam-x 0  cam-z 0  dist 1.5  
+at 0       volume 0.7  mute off  sound.drops 1  sound.bed 1  sound.brown 0  sound.breeze 1  sound.harsh 0.15  
+at 0       clear
+at 1.97    yaw -= 39.0003 over 1.52003  pitch 25.3429 over 1.52003  
+at 3.48    yaw += 26.9954 over 0.919936  pitch 13.1936 over 0.919936  
+at 7.81    preset 3
+at 7.81    yaw += 12.0049  pitch 42  
+at 8.99    setting house
+at 9.48    yaw -= 79.4977 over 1.78008  pitch 19.9462 over 1.78008  
+at 11.68   look video
+at 12.76   pitch 36.5851 over 0.569709  
+at 13.32   pitch 20.832 over 0.350069  
+at 14.60   dist 1.16066 over 0.370014
+at 15.37   boat on
+at 17.13   boat-speed 0.5
+at 18.19   boat off
+at 18.38   boat on
+at 18.56   boat off
+at 18.75   boat on
+at 20.70   floats 1
+at 20.90   floats 2
+at 21.10   floats 3
+at 21.30   floats 4
+at 21.50   floats 5
+at 21.67   floats 6
+at 23.91   dist 0.600804 over 0.949983
+at 25.23   yaw -= 54.0059 over 0.720079  
+at 26.49   yaw += 47.2466 over 0.629955  
+at 27.71   look animation
+at 28.04   dist 1.37076 over 1.19
+at 30.47   loop

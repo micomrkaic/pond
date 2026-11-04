@@ -263,7 +263,11 @@ static const char *glsl_common2 = GLSL(
     float shadow_under(vec3 q) {
         vec3 Lr = refract(-u_sun, vec3(0.0, 1.0, 0.0), 1.0 / 1.333);
         if (Lr.y > -0.05) return shadow_at(q, vec3(0.0, 1.0, 0.0));
-        return shadow_at(q - Lr * (q.y / Lr.y), vec3(0.0, 1.0, 0.0));
+        vec3 S = q - Lr * (q.y / Lr.y);
+        /* the video look's boat and floats sit in the surface: test the same sunbeam a
+         * little further down it, below their keels, so they block it too */
+        if (u_video > 0.5) S -= u_sun * 0.25;
+        return shadow_at(S, vec3(0.0, 1.0, 0.0));
     }
 
     /* the house and garden: albedo by kind, at a point with a normal.  Kinds from
@@ -546,6 +550,18 @@ static const char *glsl_steps = GLSL(
     }
 );
 
+/* the video look's boat keeps the water out: inside its waterline there is none */
+static const char *glsl_hull = GLSL(
+    uniform vec4 u_hull;      /* x, z, heading, length; length 0 for no boat */
+    bool in_hull(vec3 p) {
+        if (u_hull.w <= 0.0) return false;
+        vec2 d = p.xz - u_hull.xy;
+        float x = dot(d, vec2(cos(u_hull.z), sin(u_hull.z))) / u_hull.w, z = dot(d, vec2(-sin(u_hull.z), cos(u_hull.z))) / u_hull.w;
+        float u = 2.0 * x;
+        float b = u > 0.0 ? 0.20 * pow(max(1.0 - u * u, 0.0), 0.75) + 0.002 : 0.20 - 0.055 * u * u;
+        return abs(x) < 0.5 && abs(z) < 0.93 * b;
+    }
+);
 static const char *fs_surf = GLSL(
     bool in_basin(vec2 q) {
         if (u_shape == 1) return length(q - 0.5 * u_L) <= 0.5 * u_L.x;
@@ -632,6 +648,7 @@ static const char *fs_surf = GLSL(
     }
 
     void main() {
+        if (in_hull(v_pos)) discard;
         vec3 N = ripples(normalize(v_nrm), v_pos);
         vec3 V = normalize(u_cam - v_pos);
         vec3 c;
@@ -648,9 +665,21 @@ static const char *fs_surf = GLSL(
                  * lands in the mirrored view: flat water finds the image straight below
                  * the house, and every tilt of the surface shifts it as far as it should */
                 vec3 Rr = vec3(R.x, max(R.y, 0.01), R.z);
-                vec4 cq = u_vpref * vec4(v_pos + Rr * u_rd, 1.0);
+                float rd = u_rd;
+                if (glint) {
+                    /* the video look keeps, in the mirror's alpha, how far each reflected
+                     * thing is from the water: a boat alongside is displaced by the
+                     * ripples as little as it should be, the far house as much */
+                    vec4 c0 = u_vpref * vec4(v_pos + Rr * 0.5, 1.0);
+                    float a0 = texture(u_refl_tex, clamp(c0.xy / max(c0.w, 1e-4) * 0.5 + 0.5, vec2(0.001), vec2(0.999))).a;
+                    if (a0 < 0.75) rd = clamp(a0 * 128.0, 0.15, u_rd);
+                }
+                vec4 cq = u_vpref * vec4(v_pos + Rr * rd, 1.0);
                 vec2 uv = clamp(cq.xy / max(cq.w, 1e-4) * 0.5 + 0.5, vec2(0.001), vec2(0.999));
-                rc = pow(texture(u_refl_tex, uv).rgb, vec3(2.2));
+                vec4 tq = texture(u_refl_tex, uv);
+                rc = pow(tq.rgb, vec3(2.2));
+                /* only the boat and the floats in the mirror: the sky stays the water's own */
+                if (u_refl > 1.5) rc = mix(sky_s(R, 0.0), rc, clamp((1.0 - tq.a) * 2.0, 0.0, 1.0));
                 if (!glint) rc += sun_term(R) * shadow_at(v_pos, vec3(0.0, 1.0, 0.0));
             } else rc = sky_s(R, glint ? 0.0 : 1.0);
             c = mix(inside(v_pos, T), rc, F);
@@ -681,6 +710,7 @@ static const char *vs_caus = GLSL(
     uniform float u_depth;
     uniform vec3 u_incident;      /* unit sunlight direction, downwards */
     uniform ivec2 u_ioff;         /* disk: the resampled texture starts u_ioff cells before the square */
+    uniform vec4 u_hull;          /* the video look's boat: x, z, heading, length; length 0 for none */
     out vec2 v_src;
     int mir(int i, int n) { return i < 0 ? -1 - i : (i >= n ? 2 * n - 1 - i : i); }
     float Hr(int i, int j) { return texelFetch(u_height, ivec2(mir(i + u_ioff.x, u_n.x), mir(j + u_ioff.y, u_n.y)), 0).r * u_gain; }
@@ -691,6 +721,16 @@ static const char *vs_caus = GLSL(
         float hz = (Hr(i, j + 1) - Hr(i, j - 1)) / (2.0 * u_d.y);
         vec3 P = vec3((float(i) + 0.5) * u_d.x, h, (float(j) + 0.5) * u_d.y);
         vec3 N = normalize(vec3(-hx, 1.0, -hz));
+        if (u_hull.w > 0.0) {
+            /* the boat is opaque, and the water round a floating hull lies flat: the
+             * dent the solver presses under it is no lens (its shadow is the shadow map's) */
+            vec2 d = P.xz - u_hull.xy;
+            float x = dot(d, vec2(cos(u_hull.z), sin(u_hull.z))) / u_hull.w, z = dot(d, vec2(-sin(u_hull.z), cos(u_hull.z))) / u_hull.w;
+            float u = clamp(2.0 * x, -1.0, 1.0);
+            float b = u > 0.0 ? 0.20 * pow(max(1.0 - u * u, 0.0), 0.75) + 0.002 : 0.20 - 0.055 * u * u;
+            float out_d = max(abs(x) - 0.5, abs(z) - b);
+            N = normalize(mix(N, vec3(0.0, 1.0, 0.0), 1.0 - smoothstep(0.25, 0.9, out_d)));
+        }
         vec3 T = refract(u_incident, N, 1.0 / 1.333);
         vec2 q = vec2(-1.0e4);
         if (dot(T, T) > 1.0e-6 && T.y < -1.0e-4) q = P.xz + T.xz * (-(u_depth + P.y) / T.y);
@@ -1108,6 +1148,186 @@ static const char *glsl_gloss = GLSL(
     }
 );
 
+/* --- the video look's boat and floats: real meshes, carried as rigid bodies on the
+ * water, lit like everything else, mirrored by the water, casting shadows --- */
+/* the water's height at a point, as drawn (the display gain included): shared by
+ * the vertex shader that floats a body and the fragment shader that wets it */
+static const char *glsl_objh = GLSL(
+    uniform sampler2D u_height;
+    uniform ivec2 u_n;
+    uniform vec2 u_L;
+    uniform float u_gain;
+    uniform int u_shape;
+    float hcell(int i, int j) {
+        i = clamp(i, 0, u_n.x - 1); j = clamp(j, 0, u_n.y - 1);
+        return texelFetch(u_height, ivec2(i, j), 0).r * u_gain;
+    }
+    float water_h(vec2 q) {
+        if (u_shape == 1) {
+            float R = 0.5 * u_L.x;
+            vec2 c = q - vec2(R, R);
+            float r = length(c), th = atan(c.y, c.x);
+            if (th < 0.0) th += 6.28318530718;
+            int nt = u_n.x, nr = u_n.y;
+            float dr = R / float(nr), dth = 6.28318530718 / float(nt);
+            int i = int(clamp(r / dr - 0.5, 0.0, float(nr - 1)));
+            int j = int(th / dth) % nt;
+            return hcell(j, i);
+        }
+        /* bilinear on the rectangle: a hull glides over the cells instead of stepping */
+        vec2 g = clamp(q / u_L, 0.0, 1.0) * vec2(u_n - 1);
+        ivec2 i0 = ivec2(floor(g));
+        vec2 f = g - vec2(i0);
+        return mix(mix(hcell(i0.x, i0.y), hcell(i0.x + 1, i0.y), f.x), mix(hcell(i0.x, i0.y + 1), hcell(i0.x + 1, i0.y + 1), f.x), f.y);
+    }
+);
+static const char *vs_obj = GLSL(
+    in vec3 a_pos;            /* the body's own frame: x forward, y up, z to starboard, in its units */
+    in vec3 a_nrm;
+    in float a_kind;
+    uniform mat4 u_vp;
+    uniform vec4 u_obj;       /* where: x, z of its centre; heading, radians; metres per unit */
+    uniform vec2 u_span;      /* how far fore-and-aft and athwart it feels the water, in its units */
+    out vec3 v_pos;
+    out vec3 v_nrm;
+    out vec3 v_local;
+    out float v_kind;
+    void main() {
+        /* a rigid body: heave from the mean of five soundings, pitch and roll from
+         * their differences, so it rides the swell and ignores the ripples under it */
+        float c = cos(u_obj.z), s = sin(u_obj.z), S = u_obj.w;
+        vec2 ex = vec2(c, s), ez = vec2(-s, c);
+        vec2 C = u_obj.xy;
+        float la = u_span.x * S, lw = u_span.y * S;
+        float h0 = water_h(C), hf = water_h(C + ex * la), hb = water_h(C - ex * la);
+        float hs = water_h(C + ez * lw), hp = water_h(C - ez * lw);
+        float heave = (2.0 * h0 + hf + hb + hs + hp) / 6.0;
+        vec3 F = normalize(vec3(ex.x, (hf - hb) / (2.0 * la), ex.y));
+        vec3 Z0 = vec3(ez.x, (hs - hp) / (2.0 * lw), ez.y);
+        vec3 Up = normalize(cross(Z0, F));
+        vec3 Z = cross(F, Up);
+        vec3 P = vec3(C.x, heave, C.y) + S * (F * a_pos.x + Up * a_pos.y + Z * a_pos.z);
+        v_pos = P;
+        v_nrm = F * a_nrm.x + Up * a_nrm.y + Z * a_nrm.z;
+        v_local = a_pos;
+        v_kind = a_kind;
+        gl_Position = u_vp * vec4(P, 1.0);
+    }
+);
+/* what each part is made of: albedo, and (Fresnel at normal incidence, roughness) */
+static const char *glsl_objmat = GLSL(
+    uniform float u_osc;      /* metres per unit of the body's own frame */
+    /* wood: planks along u, grain stretched along them, a dark seam between */
+    vec3 wood(vec2 q, float fp) {
+        float id = floor(q.y / 0.09);
+        float g = fbm(vec2(q.x * 2.5 + 13.0 * id, q.y * 38.0 + 3.0 * fbm(q * 4.0)));
+        vec3 c = mix(vec3(0.30, 0.17, 0.08), vec3(0.55, 0.36, 0.19), smoothstep(0.30, 0.70, g));
+        c *= 0.85 + 0.30 * hash31(vec3(id, 3.7, 1.1));
+        float e = (0.5 - abs(fract(q.y / 0.09) - 0.5)) * 0.09;      /* metres from the nearest seam */
+        float seam = 1.0 - smoothstep(0.0015, 0.0025 + fp, e);
+        return c * (1.0 - 0.7 * seam * (1.0 - smoothstep(0.004, 0.012, fp)));
+    }
+    vec3 obj_albedo(float k, vec3 L, vec3 q, float wet, float fp, out vec2 gl) {
+        vec3 c;
+        if (k < 30.5) {
+            /* gelcoat: white topsides, a navy boot stripe above the waterline, red antifouling below;
+             * a green-brown tidemark where the water has been */
+            float y = L.y * u_osc;                                   /* metres above the design waterline */
+            c = vec3(0.90, 0.89, 0.86) * (0.94 + 0.06 * fbm(q.xz * 3.0 + q.y * 5.0));
+            c = mix(c, vec3(0.50, 0.46, 0.32), 0.35 * exp(-max(y, 0.0) / 0.03) * fbm(q.xz * 9.0));
+            if (y > 0.012 && y < 0.034) c = vec3(0.05, 0.11, 0.28);
+            if (y < 0.004) c = vec3(0.32, 0.08, 0.06) * (0.85 + 0.2 * fbm(q.xz * 6.0));
+            gl = vec2(0.05, 0.16);
+        } else if (k < 31.5) {
+            /* the inside: off-white, a non-slip speckle */
+            c = vec3(0.80, 0.80, 0.77) * (0.88 + 0.12 * mix(vnoise(q.xz * 180.0), 0.5, smoothstep(0.002, 0.008, fp)));
+            gl = vec2(0.04, 0.55);
+        } else if (k < 32.5) { c = wood(q.xz, fp); gl = vec2(0.04, 0.30); }                       /* floorboards */
+        else if (k < 33.5) { c = vec3(0.10, 0.10, 0.11); gl = vec2(0.04, 0.45); }               /* rubbing strip */
+        else if (k < 34.5) {                                                                     /* the outboard's cowl */
+            c = vec3(0.07, 0.07, 0.08);
+            if (L.y > 0.140 && L.y < 0.150 && L.x < -0.53) c = vec3(0.75, 0.74, 0.70);
+            gl = vec2(0.05, 0.22);
+        }
+        else if (k < 35.5) {
+            /* a buoy: orange, a white band, scuffed, with a tidemark */
+            float y = L.y;
+            c = vec3(0.93, 0.30, 0.04);
+            if (y > 0.17 && y < 0.27) c = vec3(0.88, 0.87, 0.84);
+            c *= 0.84 + 0.16 * fbm(q.xz * 40.0 + q.y * 30.0);
+            c = mix(c, vec3(0.45, 0.40, 0.28), 0.4 * exp(-max(y + 0.05, 0.0) / 0.06));
+            gl = vec2(0.045, 0.32);
+        } else if (k < 36.5) { c = vec3(0.55, 0.55, 0.56); gl = vec2(0.55, 0.30); }           /* galvanised lug */
+        else { c = wood(q.zx, fp); gl = vec2(0.04, 0.30); }                                     /* a thwart, grain across */
+        /* wet just above the water: darker, and glossier */
+        c *= 1.0 - 0.25 * wet * (1.0 - gl.x);
+        gl.y = mix(gl.y, 0.07, wet);
+        return c;
+    }
+);
+static const char *fs_obj = GLSL(
+    in vec3 v_pos;
+    in vec3 v_nrm;
+    in vec3 v_local;
+    in float v_kind;
+    uniform vec3 u_cam;
+    uniform float u_clip;     /* 1 in the reflection pass */
+    uniform float u_depth;
+    out vec4 o;
+    /* light on a floating thing: the sky above, and from below not the ground but the
+     * water -- bright cyan over a shallow tiled floor, dark over the deep */
+    vec3 obj_hemi(vec3 n) {
+        vec3 skyl = mix(vec3(0.60, 0.76, 1.00), vec3(0.85, 0.62, 0.58), 0.6 * u_dusk);
+        vec3 up = mix(vec3(0.30, 0.66, 0.78), vec3(0.06, 0.18, 0.24), smoothstep(2.5, 8.0, u_depth)) * (0.10 + 0.60 * max(u_sun.y, 0.0));
+        return mix(up, skyl, 0.5 + 0.5 * n.y) * 0.42;
+    }
+    void main() {
+        float wl = water_h(v_pos.xz);
+        if (u_clip > 0.5 && v_pos.y < wl) discard;
+        vec3 N = normalize(v_nrm);
+        vec3 V = u_cam - v_pos;
+        float dist = length(V); V /= dist;
+        if (dot(N, V) < 0.0) N = -N;
+        float dw = v_pos.y - wl;
+        /* only what the water touches gets wet: the outside, not the boat's inside */
+        bool outside = v_kind < 30.5 || (v_kind > 33.5 && v_kind < 35.5);
+        float wet = outside ? exp(-max(dw, 0.0) / (0.02 + 0.01 * u_osc)) : 0.0;
+        vec2 gl;
+        vec3 alb = obj_albedo(v_kind, v_local, v_local * u_osc, wet, u_pix * dist, gl);
+        vec3 sunc = mix(vec3(1.0), vec3(1.0, 0.62, 0.42), u_dusk);
+        float shd = shadow_at(v_pos, N);
+        float diff = max(dot(N, u_sun), 0.0) * shd;
+        /* inside the boat the sky is half hidden by the topsides */
+        bool inside = (v_kind > 30.5 && v_kind < 32.5) || v_kind > 36.5;
+        float occ = inside ? mix(0.6, 1.0, smoothstep(-0.06, 0.10, v_local.y)) : 1.0;
+        vec3 c = lit(alb * (obj_hemi(N) * occ + 0.72 * diff * sunc));
+        /* and the white inside of an open boat is lit by itself: sun off the floor and the far side */
+        if (inside) c += lit(alb * sunc * 0.28 * max(u_sun.y, 0.0) * (0.6 + 0.4 * shd));
+        c += lit(sunc * 2.26 * ggx(N, V, u_sun, gl.x, gl.y) * shd);
+        /* the sheen: the sky above, the dark water below */
+        vec3 R = reflect(-V, N);
+        float nv = max(dot(N, V), 0.0);
+        float Fe = gl.x + (1.0 - gl.x) * pow(1.0 - nv, 5.0) * (1.0 - gl.y) * (1.0 - gl.y);
+        vec3 env = R.y > 0.0 ? hemi(R) * 1.6 : obj_hemi(R) * 0.8;
+        c += lit(Fe * env * occ);
+        /* sunlight off the water dancing on the topsides, just above it */
+        if ((v_kind < 30.5 || (v_kind > 34.5 && v_kind < 35.5)) && abs(N.y) < 0.7) {
+            float t = u_time;
+            float n1 = vnoise(v_pos.xz * 9.0 + vec2(0.7 * t, -0.5 * t)), n2 = vnoise(v_pos.xz * 13.0 + vec2(-0.6 * t, 0.4 * t) + 3.0);
+            float sh = pow(n1 * n2 * 2.2, 3.0) * exp(-max(dw, 0.0) / (0.06 * u_osc + 0.02)) * max(u_sun.y, 0.0);
+            c += lit(alb * sunc * 0.6 * sh);
+        }
+        /* in the mirror: how far the reflected ray ran, for the water's lookup */
+        float a = 1.0;
+        if (u_clip > 0.5) {
+            /* the eye is mirrored here: the ray from it crosses the water at tt of the way */
+            float tt = clamp(-u_cam.y / max(v_pos.y - u_cam.y, 1e-4), 0.0, 1.0);
+            a = 0.5 * clamp((1.0 - tt) * dist / 64.0, 0.0, 1.0);
+        }
+        o = vec4(gam(c), a);
+    }
+);
+
 /* --- the house and garden --- */
 static const char *fs_scene = GLSL(
     in vec3 v_pos;
@@ -1190,7 +1410,13 @@ static const char *fs_scene = GLSL(
         /* haze: towards the horizon's own colour */
         float f = 1.0 - exp(-max(dist - 60.0, 0.0) / u_fog);     /* clear air near the house */
         vec3 hz = sky(normalize(vec3(-V.x, 0.015, -V.z)));
-        o = vec4(gam(mix(c, hz, f)), 1.0);
+        float a = 1.0;
+        if (u_clip > 0.5 && u_video > 0.5) {
+            /* in the mirror: how far the reflected ray ran, for the water's lookup */
+            float tt = clamp(-u_cam.y / max(v_pos.y - u_cam.y, 1e-4), 0.0, 1.0);
+            a = 0.5 * clamp((1.0 - tt) * dist / 64.0, 0.0, 1.0);
+        }
+        o = vec4(gam(mix(c, hz, f)), a);
     }
 );
 
@@ -1451,6 +1677,10 @@ struct view3d {
     float occl[2][4];               /* the house's and the cabana's roof footprints */
     int scene_on, scene_dirty;      /* the house is drawn; its geometry needs rebuilding */
     GLuint p_depth, p_depth_v;
+    GLuint p_obj, p_obj_depth;      /* the video look's boat and floats, and their shadows */
+    GLuint vao_objm, vbo_objm; int boat_off, boat_n, buoy_off, buoy_n;
+    int refl_mode;                  /* the water's mirror: 0 the sky, 1 the setting, 2 the boat and floats only */
+    int sh_on;                      /* a shadow map this frame */
     GLuint fbo_sh, tex_sh; int sh_size, sh_valid; float sh_sun[3]; float lvp[16], sbias;   /* the sun's shadow map */
     GLuint fbo_rf, tex_rf, rb_rf; int rf_w, rf_h;                  /* the reflection, half the window */
     /* the video look: the frame in linear light, multisampled and resolved into a mipmapped
@@ -2377,6 +2607,8 @@ void view3d_gl_attributes(int msaa)
     }
 }
 
+static void build_obj_meshes(view3d *v);
+
 view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
 {
     view3d *v = calloc(1, sizeof *v);
@@ -2401,8 +2633,8 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
 
     v->p_bg    = program(vs_bg, fs_bg, 0);
     {
-        const char *parts[4] = { fs_surf_head, glsl_water, glsl_steps, fs_surf };
-        v->p_surf = program_parts(vs_surf, parts, 4, 0);
+        const char *parts[5] = { fs_surf_head, glsl_water, glsl_steps, glsl_hull, fs_surf };
+        v->p_surf = program_parts(vs_surf, parts, 5, 0);
     }
     v->p_solid = program(vs_solid, fs_solid, 0);
     v->p_sides = program(vs_sides, fs_sides, 1);
@@ -2419,11 +2651,19 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
     }
     v->p_depth = program(vs_solid, fs_depth, 0);
     v->p_depth_v = program(vs_scene, fs_depth, 0);
+    {
+        /* the body's vertex shader needs the water's height: the two strings, joined */
+        static char vso[8192];
+        snprintf(vso, sizeof vso, "%s%s", glsl_objh, vs_obj);
+        const char *parts[3] = { glsl_objh, glsl_objmat, fs_obj };
+        v->p_obj = program_parts(vso, parts, 3, 0);
+        v->p_obj_depth = program(vso, fs_depth, 0);
+    }
     v->p_adapt = program(vs_fill, fs_adapt, 0);
     v->p_bright = program(vs_fill, fs_bright, 0);
     v->p_bloom = program(vs_fill, fs_bloom, 0);
     v->p_post = program(vs_fill, fs_post, 0);
-    if (!v->p_adapt || !v->p_bright || !v->p_bloom || !v->p_post || !v->p_depth || !v->p_depth_v || !v->p_scene || !v->p_res || !v->p_blur || !v->p_bg || !v->p_surf || !v->p_solid || !v->p_sides || !v->p_glass || !v->p_ovl || !v->p_caus || !v->p_fill || !v->p_mark) { free(v); return NULL; }
+    if (!v->p_adapt || !v->p_bright || !v->p_bloom || !v->p_post || !v->p_depth || !v->p_depth_v || !v->p_obj || !v->p_obj_depth || !v->p_scene || !v->p_res || !v->p_blur || !v->p_bg || !v->p_surf || !v->p_solid || !v->p_sides || !v->p_glass || !v->p_ovl || !v->p_caus || !v->p_fill || !v->p_mark) { free(v); return NULL; }
 
     glGenVertexArrays(1, &v->vao_empty);
     glGenVertexArrays(1, &v->vao_surf); glGenBuffers(1, &v->vbo_surf); glGenBuffers(1, &v->ebo_surf);
@@ -2562,6 +2802,7 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
     glGenTextures(1, &v->tex_rf);
     glGenFramebuffers(1, &v->fbo_rf);
     glGenRenderbuffers(1, &v->rb_rf);
+    build_obj_meshes(v);
 
     glGenTextures(1, &v->tex_ovl);
     glBindTexture(GL_TEXTURE_2D, v->tex_ovl);
@@ -3277,6 +3518,267 @@ static void draw_objects(view3d *v, const view3d_params *p, const float *vp)
     }
 }
 
+/* ------------------------------------------- the video look's boat and buoy
+ * Built once, in their own frames (x forward, y up from the waterline, z to
+ * starboard), in units of the hull's length and the buoy's size; the vertex
+ * shader carries them on the water as rigid bodies.  Kinds 30 gelcoat, 31 the
+ * inside, 32 floorboards, 33 rubbing strip, 34 the outboard, 35 a buoy, 36 its
+ * lug, 37 a thwart. */
+
+/* the hull's lines: half beam, keel depth and sheer at u = -1 (transom) .. 1 (stem) */
+static float hl_beam(float u)  { return u > 0.0f ? 0.20f * powf(fmaxf(1.0f - u * u, 0.0f), 0.75f) + 0.002f : 0.20f - 0.055f * u * u; }
+static float hl_keel(float u)  { return u > 0.0f ? 0.06f * (1.0f - powf(u, 2.5f)) : 0.06f - 0.018f * u * u; }
+static float hl_sheer(float u) { return 0.11f + (u > 0.0f ? 0.05f * u * u : 0.012f * u * u); }
+/* a point on the starboard topsides: x along, s from the keel (0) to the sheer (1) */
+static void hull_pt(float x, float s, float *P)
+{
+    const float u = 2.0f * x, b = hl_beam(u), d = hl_keel(u), f = hl_sheer(u);
+    P[0] = x;
+    P[1] = -d + (d + f) * powf(s, 1.4f);
+    P[2] = b * sqrtf(fmaxf(1.0f - powf(1.0f - s, 3.0f), 0.0f));
+}
+static void hull_nrm(float x, float s, float *N)
+{
+    float a[3], b[3], c[3], e[3];
+    const float hx = 0.004f, hs = 0.01f;
+    hull_pt(x + hx, s, a); hull_pt(x - hx, s, b);
+    hull_pt(x, fminf(s + hs, 1.0f), c); hull_pt(x, fmaxf(s - hs, 0.0f), e);
+    const float tx[3] = { a[0] - b[0], a[1] - b[1], a[2] - b[2] }, ts[3] = { c[0] - e[0], c[1] - e[1], c[2] - e[2] };
+    v3cross(tx, ts, N);                     /* outwards on the starboard side */
+    if (N[2] < 0.0f && s > 0.05f) { N[0] = -N[0]; N[1] = -N[1]; N[2] = -N[2]; }
+    v3norm(N);
+}
+static void mirror_z(float *p) { p[2] = -p[2]; }
+
+/* the inside half-beam at height y and station x: where the topsides, made thicker, reach y */
+static float hull_inner_w(float x, float y, float t)
+{
+    float lo = 0.0f, hi = 1.0f, P[3];
+    for (int it = 0; it < 30; it++) {
+        const float m = 0.5f * (lo + hi);
+        hull_pt(x, m, P);
+        if (P[1] < y) lo = m; else hi = m;
+    }
+    hull_pt(x, 0.5f * (lo + hi), P);
+    return fmaxf(P[2] - t, 0.0f);
+}
+
+static void build_boat_mesh(gbuf *g)
+{
+    const int NX = 36, NS = 12;
+    const float x0 = -0.5f, x1 = 0.497f, t = 0.008f;
+    float P[NX + 1][NS + 1][3], Nn[NX + 1][NS + 1][3];
+    for (int i = 0; i <= NX; i++)
+        for (int j = 0; j <= NS; j++) {
+            const float x = x0 + (x1 - x0) * i / NX, s = (float)j / NS;
+            hull_pt(x, s, P[i][j]); hull_nrm(x, s, Nn[i][j]);
+        }
+    /* outside and inside, both sides */
+    for (int side = 0; side < 2; side++)
+        for (int i = 0; i < NX; i++)
+            for (int j = 0; j < NS; j++) {
+                float a[3], b[3], c[3], d[3], na[3], nb[3], nc[3], nd[3];
+                memcpy(a, P[i][j], 12); memcpy(b, P[i + 1][j], 12); memcpy(c, P[i + 1][j + 1], 12); memcpy(d, P[i][j + 1], 12);
+                memcpy(na, Nn[i][j], 12); memcpy(nb, Nn[i + 1][j], 12); memcpy(nc, Nn[i + 1][j + 1], 12); memcpy(nd, Nn[i][j + 1], 12);
+                if (side) { mirror_z(a); mirror_z(b); mirror_z(c); mirror_z(d); mirror_z(na); mirror_z(nb); mirror_z(nc); mirror_z(nd); }
+                gb_tri_n(g, a, b, c, na, nb, nc, 30.0f);
+                gb_tri_n(g, a, c, d, na, nc, nd, 30.0f);
+                /* the inside: the same surface pushed in by the thickness, facing in */
+                {
+                    float ia[3], ib[3], ic[3], id[3], ma[3], mb[3], mc[3], md[3];
+                    for (int k = 0; k < 3; k++) {
+                        ia[k] = a[k] - t * na[k]; ib[k] = b[k] - t * nb[k]; ic[k] = c[k] - t * nc[k]; id[k] = d[k] - t * nd[k];
+                        ma[k] = -na[k]; mb[k] = -nb[k]; mc[k] = -nc[k]; md[k] = -nd[k];
+                    }
+                    gb_tri_n(g, ia, ic, ib, ma, mc, mb, 31.0f);
+                    gb_tri_n(g, ia, id, ic, ma, md, mc, 31.0f);
+                }
+            }
+    /* the gunwale's top, between outside and in, and a rubbing strip just under it */
+    for (int side = 0; side < 2; side++)
+        for (int i = 0; i < NX; i++) {
+            float a[3], b[3], ai[3], bi[3], na[3], nb[3];
+            memcpy(a, P[i][NS], 12); memcpy(b, P[i + 1][NS], 12);
+            memcpy(na, Nn[i][NS], 12); memcpy(nb, Nn[i + 1][NS], 12);
+            for (int k = 0; k < 3; k++) { ai[k] = a[k] - t * na[k]; bi[k] = b[k] - t * nb[k]; }
+            const float up[3] = { 0, 1, 0 };
+            if (side) { mirror_z(a); mirror_z(b); mirror_z(ai); mirror_z(bi); mirror_z(na); mirror_z(nb); }
+            gb_tri_n(g, a, b, bi, up, up, up, 33.0f);
+            gb_tri_n(g, a, bi, ai, up, up, up, 33.0f);
+            /* the strip: a half-round 1 cm proud of the topsides, in four facets */
+            const float r = 0.009f;
+            for (int q = 0; q < 4; q++) {
+                const float t0 = (float)M_PI * (q / 4.0f - 0.5f), t1 = (float)M_PI * ((q + 1) / 4.0f - 0.5f);
+                float p00[3], p01[3], p10[3], p11[3], n00[3], n01[3], n10[3], n11[3];
+                for (int k = 0; k < 3; k++) {
+                    const float upk = k == 1 ? 1.0f : 0.0f;
+                    p00[k] = a[k] + r * (cosf(t0) * na[k] + sinf(t0) * upk) - 0.012f * upk;
+                    p01[k] = a[k] + r * (cosf(t1) * na[k] + sinf(t1) * upk) - 0.012f * upk;
+                    p10[k] = b[k] + r * (cosf(t0) * nb[k] + sinf(t0) * upk) - 0.012f * upk;
+                    p11[k] = b[k] + r * (cosf(t1) * nb[k] + sinf(t1) * upk) - 0.012f * upk;
+                }
+                for (int k = 0; k < 3; k++) {
+                    const float upk = k == 1 ? 1.0f : 0.0f;
+                    n00[k] = cosf(t0) * na[k] + sinf(t0) * upk; n01[k] = cosf(t1) * na[k] + sinf(t1) * upk;
+                    n10[k] = cosf(t0) * nb[k] + sinf(t0) * upk; n11[k] = cosf(t1) * nb[k] + sinf(t1) * upk;
+                }
+                gb_tri_n(g, p00, p10, p11, n00, n10, n11, 33.0f);
+                gb_tri_n(g, p00, p11, p01, n00, n11, n01, 33.0f);
+            }
+        }
+    /* the transom: outside and inside, fanned from the middle of its section */
+    {
+        float C[3]; hull_pt(x0, 0.0f, C); C[1] = 0.5f * (C[1] + P[0][NS][1]); C[2] = 0.0f;
+        const float no[3] = { -1, 0, 0 }, ni[3] = { 1, 0, 0 };
+        for (int side = 0; side < 2; side++)
+            for (int j = 0; j < NS; j++) {
+                float a[3], b[3];
+                memcpy(a, P[0][j], 12); memcpy(b, P[0][j + 1], 12);
+                if (side) { mirror_z(a); mirror_z(b); }
+                gb_tri_n(g, C, b, a, no, no, no, 30.0f);
+                float ci[3] = { C[0] + t, C[1], C[2] }, ai[3] = { a[0] + t, a[1], a[2] * 0.95f }, bi[3] = { b[0] + t, b[1], b[2] * 0.95f };
+                gb_tri_n(g, ci, ai, bi, ni, ni, ni, 31.0f);
+            }
+    }
+    /* floorboards over the bilge */
+    {
+        const float yf = -0.030f, up[3] = { 0, 1, 0 };
+        const int nb = 16;
+        for (int i = 0; i < nb; i++) {
+            const float xa = -0.49f + 0.80f * i / nb, xb = -0.49f + 0.80f * (i + 1) / nb;
+            const float wa = hull_inner_w(xa, yf, t) - 0.004f, wb = hull_inner_w(xb, yf, t) - 0.004f;
+            const float a[3] = { xa, yf, -wa }, b[3] = { xb, yf, -wb }, c[3] = { xb, yf, wb }, d[3] = { xa, yf, wa };
+            gb_tri_n(g, a, c, b, up, up, up, 32.0f);
+            gb_tri_n(g, a, d, c, up, up, up, 32.0f);
+        }
+    }
+    /* two thwarts: one amidships, one aft; seats are boxes from side to side */
+    {
+        const float xs[2][2] = { { -0.07f, 0.01f }, { -0.48f, -0.37f } };
+        for (int k = 0; k < 2; k++) {
+            const float ytop = 0.068f, w = fminf(hull_inner_w(xs[k][0], ytop, t), hull_inner_w(xs[k][1], ytop, t));
+            gb_box(g, xs[k][0], xs[k][1], ytop - 0.014f, ytop, -w, w, 37.0f, 37.0f);
+        }
+    }
+    /* a foredeck, crowned, closing the bow */
+    {
+        const int nd = 10, nz = 6;
+        const float xa = 0.31f;
+        for (int i = 0; i < nd; i++)
+            for (int k = 0; k < nz; k++) {
+                float Q[2][2][3], Nq[2][2][3];
+                for (int di = 0; di < 2; di++)
+                    for (int dk = 0; dk < 2; dk++) {
+                        const float x = xa + (x1 - xa) * (i + di) / nd;
+                        float S[3]; hull_pt(x, 1.0f, S);
+                        const float zz = -S[2] + 2.0f * S[2] * (k + dk) / nz, cr = S[2] > 1e-4f ? zz / S[2] : 0.0f;
+                        Q[di][dk][0] = x; Q[di][dk][1] = S[1] + 0.008f * (1.0f - cr * cr); Q[di][dk][2] = zz;
+                        Nq[di][dk][0] = 0.0f; Nq[di][dk][1] = 1.0f; Nq[di][dk][2] = S[2] > 1e-4f ? 0.016f * cr / S[2] * 0.1f : 0.0f;
+                        v3norm(Nq[di][dk]);
+                    }
+                gb_tri_n(g, Q[0][0], Q[1][1], Q[1][0], Nq[0][0], Nq[1][1], Nq[1][0], 30.0f);
+                gb_tri_n(g, Q[0][0], Q[0][1], Q[1][1], Nq[0][0], Nq[0][1], Nq[1][1], 30.0f);
+            }
+    }
+    /* an outboard on the transom: a rounded cowl, the clamp bracket, a slim leg with
+     * its cavitation plate, and a tiller reaching forward */
+    {
+        const int NA = 16, NB = 8;
+        const float cx = -0.575f, cy = 0.155f, ra = 0.058f, rb = 0.042f, rc = 0.036f;
+        for (int j = 0; j < NB; j++)
+            for (int i = 0; i < NA; i++) {
+                float P[2][2][3], Nq[2][2][3];
+                for (int dj = 0; dj < 2; dj++)
+                    for (int di = 0; di < 2; di++) {
+                        const float th = (float)M_PI * (j + dj) / NB - 0.5f * (float)M_PI, ph = 2.0f * (float)M_PI * (i + di) / NA;
+                        P[dj][di][0] = cx + ra * cosf(th) * cosf(ph); P[dj][di][1] = cy + rb * sinf(th); P[dj][di][2] = rc * cosf(th) * sinf(ph);
+                        Nq[dj][di][0] = cosf(th) * cosf(ph) / ra; Nq[dj][di][1] = sinf(th) / rb; Nq[dj][di][2] = cosf(th) * sinf(ph) / rc;
+                        v3norm(Nq[dj][di]);
+                    }
+                gb_tri_n(g, P[0][0], P[1][1], P[0][1], Nq[0][0], Nq[1][1], Nq[0][1], 34.0f);
+                gb_tri_n(g, P[0][0], P[1][0], P[1][1], Nq[0][0], Nq[1][0], Nq[1][1], 34.0f);
+            }
+        gb_box(g, -0.535f, -0.500f, 0.085f, 0.125f, -0.022f, 0.022f, 33.0f, 33.0f);   /* clamp bracket on the transom */
+        gb_box(g, -0.592f, -0.562f, 0.090f, 0.125f, -0.020f, 0.020f, 34.0f, 34.0f);   /* lower cowl */
+        gb_box(g, -0.585f, -0.567f, -0.085f, 0.095f, -0.009f, 0.009f, 34.0f, 34.0f);   /* leg */
+        gb_box(g, -0.605f, -0.548f, -0.058f, -0.053f, -0.026f, 0.026f, 34.0f, 34.0f);  /* cavitation plate */
+        gb_box(g, -0.535f, -0.380f, 0.132f, 0.146f, -0.008f, 0.008f, 33.0f, 33.0f);   /* tiller */
+    }
+}
+
+/* a buoy: a squat orange body a quarter under water, a white band, a lug on top */
+static void build_buoy_mesh(gbuf *g)
+{
+    const int NA = 24, NB = 12;
+    const float a = 0.5f, b = 0.32f, yc = 0.12f;
+    for (int j = 0; j < NB; j++)
+        for (int i = 0; i < NA; i++) {
+            float P[2][2][3], Nq[2][2][3];
+            for (int dj = 0; dj < 2; dj++)
+                for (int di = 0; di < 2; di++) {
+                    const float th = (float)M_PI * (j + dj) / NB - 0.5f * (float)M_PI, ph = 2.0f * (float)M_PI * (i + di) / NA;
+                    P[dj][di][0] = a * cosf(th) * cosf(ph); P[dj][di][1] = yc + b * sinf(th); P[dj][di][2] = a * cosf(th) * sinf(ph);
+                    Nq[dj][di][0] = cosf(th) * cosf(ph) / a; Nq[dj][di][1] = sinf(th) / b; Nq[dj][di][2] = cosf(th) * sinf(ph) / a;
+                    v3norm(Nq[dj][di]);
+                }
+            gb_tri_n(g, P[0][0], P[1][1], P[0][1], Nq[0][0], Nq[1][1], Nq[0][1], 35.0f);
+            gb_tri_n(g, P[0][0], P[1][0], P[1][1], Nq[0][0], Nq[1][0], Nq[1][1], 35.0f);
+        }
+    /* the lug: a short post and a crossbar */
+    gb_box(g, -0.05f, 0.05f, yc + b - 0.02f, yc + b + 0.10f, -0.05f, 0.05f, 36.0f, 36.0f);
+    gb_box(g, -0.16f, 0.16f, yc + b + 0.08f, yc + b + 0.13f, -0.025f, 0.025f, 36.0f, 36.0f);
+}
+
+static void build_obj_meshes(view3d *v)
+{
+    gbuf g = { 0 };
+    v->boat_off = 0;
+    build_boat_mesh(&g);
+    v->boat_n = g.n;
+    v->buoy_off = g.n;
+    build_buoy_mesh(&g);
+    v->buoy_n = g.n - v->buoy_off;
+    glGenVertexArrays(1, &v->vao_objm); glGenBuffers(1, &v->vbo_objm);
+    glBindVertexArray(v->vao_objm);
+    glBindBuffer(GL_ARRAY_BUFFER, v->vbo_objm);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(sizeof(float) * 7 * (size_t)g.n), g.b, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void *)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void *)(3 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void *)(6 * sizeof(float)));
+    glBindVertexArray(0);
+    free(g.b); free(g.s);
+}
+
+/* the video look's boat and floats, in one of three passes: the picture (0), the
+ * water's mirror (1, the eye already mirrored by the caller), the sun's depth (2) */
+static void draw_objects_v(view3d *v, const view3d_params *p, const float *vp, int pass)
+{
+    if (!p->boat && p->nfloat <= 0) return;
+    const GLuint pr = pass == 2 ? v->p_obj_depth : v->p_obj;
+    set_common(v, pr, p, vp);
+    if (pass == 1) {
+        glUniform1f(U(pr, "u_clip"), 1.0f);
+        glUniform1f(U(pr, "u_nosun"), 1.0f);
+        glUniform1f(U(pr, "u_linear"), 0.0f);
+    }
+    glBindVertexArray(v->vao_objm);
+    if (p->boat) {
+        glUniform4f(U(pr, "u_obj"), p->boat_x, p->boat_z, p->boat_hdg, p->boat_len);
+        glUniform2f(U(pr, "u_span"), 0.35f, 0.13f);
+        glUniform1f(U(pr, "u_osc"), p->boat_len);
+        glDrawArrays(GL_TRIANGLES, v->boat_off, v->boat_n);
+    }
+    for (int i = 0; i < p->nfloat && i < 12; i++) {
+        glUniform4f(U(pr, "u_obj"), p->float_x[i], p->float_z[i], 1.7f * (float)i, p->float_size);
+        glUniform2f(U(pr, "u_span"), 0.45f, 0.45f);
+        glUniform1f(U(pr, "u_osc"), p->float_size);
+        glDrawArrays(GL_TRIANGLES, v->buoy_off, v->buoy_n);
+    }
+}
+
 static void set_common(view3d *v, GLuint p, const view3d_params *prm, const float *vp)
 {
     glUseProgram(p);
@@ -3293,13 +3795,13 @@ static void set_common(view3d *v, GLuint p, const view3d_params *prm, const floa
     if ((l = U(p, "u_fog")) >= 0) glUniform1f(l, 260.0f);
     if ((l = U(p, "u_shadow")) >= 0) glUniform1i(l, 2);
     if ((l = U(p, "u_refl_tex")) >= 0) glUniform1i(l, 3);
-    if ((l = U(p, "u_shadow_on")) >= 0) glUniform1f(l, (v->scene_on && v->sh_valid) ? 1.0f : 0.0f);
+    if ((l = U(p, "u_shadow_on")) >= 0) glUniform1f(l, (v->sh_on && v->sh_valid) ? 1.0f : 0.0f);
     if ((l = U(p, "u_lvp")) >= 0) glUniformMatrix4fv(l, 1, GL_FALSE, v->lvp);
     if ((l = U(p, "u_sbias")) >= 0) glUniform1f(l, v->sbias);
     if ((l = U(p, "u_nosun")) >= 0) glUniform1f(l, 0.0f);
     if ((l = U(p, "u_mirror")) >= 0) glUniform1f(l, 0.0f);
     if ((l = U(p, "u_clip")) >= 0) glUniform1f(l, 0.0f);
-    if ((l = U(p, "u_refl")) >= 0) glUniform1f(l, (v->scene_on && v->rf_w > 0) ? 1.0f : 0.0f);
+    if ((l = U(p, "u_refl")) >= 0) glUniform1f(l, v->rf_w > 0 ? (float)v->refl_mode : 0.0f);
     if ((l = U(p, "u_rd")) >= 0) glUniform1f(l, 12.0f);
     if ((l = U(p, "u_video")) >= 0) glUniform1f(l, v->video_on ? 1.0f : 0.0f);
     if ((l = U(p, "u_wind")) >= 0) glUniform1f(l, prm->wind_u);
@@ -3320,6 +3822,10 @@ static void set_common(view3d *v, GLuint p, const view3d_params *prm, const floa
     }
     if ((l = U(p, "u_occl")) >= 0) glUniform4fv(l, 2, &v->occl[0][0]);
     if ((l = U(p, "u_palm")) >= 0) glUniform4fv(l, 8, &v->palm[0][0]);
+    if ((l = U(p, "u_hull")) >= 0) {
+        if (v->video_on && prm->boat) glUniform4f(l, prm->boat_x, prm->boat_z, prm->boat_hdg, prm->boat_len);
+        else glUniform4f(l, 0.0f, 0.0f, 0.0f, 0.0f);
+    }
     if ((l = U(p, "u_ngust")) >= 0) glUniform1i(l, prm->ngust < 8 ? prm->ngust : 8);
     if ((l = U(p, "u_gust")) >= 0) glUniform4fv(l, 8, &prm->gust[0][0]);
     if ((l = U(p, "u_gbase")) >= 0) glUniform1f(l, prm->gust_base);
@@ -3367,8 +3873,12 @@ static void shadow_pass(view3d *v, const view3d_params *p)
     const float *s = p->sun;
     if (v->sh_valid && !v->video_on && v->sh_video == v->video_on && fabsf(s[0] - v->sh_sun[0]) + fabsf(s[1] - v->sh_sun[1]) + fabsf(s[2] - v->sh_sun[2]) < 1e-5f) return;
     const float ax = 0.5f * v->Lx, az = 0.5f * v->Ly, pcx = ax, pcz = az;
-    /* the casters' box: house, cabana, palms and their crowns */
-    const float bx0 = pcx - ax - 14.0f, bx1 = pcx + ax + 17.0f, by0 = -1.0f, by1 = 14.0f, bz0 = pcz - az - 18.0f, bz1 = pcz + az + 12.0f;
+    /* the casters' box: house, cabana, palms and their crowns; without the setting,
+     * the basin and what floats on it */
+    const float Lm = v->Lx > v->Ly ? v->Lx : v->Ly;
+    const float bx0 = v->scene_on ? pcx - ax - 14.0f : -0.05f * Lm, bx1 = v->scene_on ? pcx + ax + 17.0f : v->Lx + 0.05f * Lm;
+    const float by0 = -1.0f, by1 = v->scene_on ? 14.0f : 0.06f * Lm + 0.2f;
+    const float bz0 = v->scene_on ? pcz - az - 18.0f : -0.05f * Lm, bz1 = v->scene_on ? pcz + az + 12.0f : v->Ly + 0.05f * Lm;
     float fwd[3] = { -s[0], -s[1], -s[2] }, right[3], up[3];
     v3norm(fwd);
     float wup[3] = { 0, 1, 0 };
@@ -3400,15 +3910,18 @@ static void shadow_pass(view3d *v, const view3d_params *p)
     glClear(GL_DEPTH_BUFFER_BIT);
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(1.5f, 2.0f);
-    if (v->video_on) {
-        /* the garden sways: the same wind as the colour pass sees */
-        set_common(v, v->p_depth_v, p, v->lvp);
-    } else {
-        glUseProgram(v->p_depth);
-        glUniformMatrix4fv(U(v->p_depth, "u_vp"), 1, GL_FALSE, v->lvp);
+    if (v->scene_on) {
+        if (v->video_on) {
+            /* the garden sways: the same wind as the colour pass sees */
+            set_common(v, v->p_depth_v, p, v->lvp);
+        } else {
+            glUseProgram(v->p_depth);
+            glUniformMatrix4fv(U(v->p_depth, "u_vp"), 1, GL_FALSE, v->lvp);
+        }
+        glBindVertexArray(v->vao_scene);
+        draw_scene(v, 1);
     }
-    glBindVertexArray(v->vao_scene);
-    draw_scene(v, 1);
+    if (v->video_on) draw_objects_v(v, p, v->lvp, 2);
     glDisable(GL_POLYGON_OFFSET_FILL);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     memcpy(v->sh_sun, s, sizeof v->sh_sun);
@@ -3469,13 +3982,21 @@ static void reflection_pass(view3d *v, const view3d_params *p, const float *vp, 
     glDepthFunc(GL_LESS);
     const float cy = v->cam[1];
     v->cam[1] = -cy;
-    set_common(v, v->p_scene, p, vpref);
+    if (v->scene_on) {
+        set_common(v, v->p_scene, p, vpref);
+        glUniform1f(U(v->p_scene, "u_clip"), 1.0f);
+        glUniform1f(U(v->p_scene, "u_nosun"), 1.0f);
+        glUniform1f(U(v->p_scene, "u_linear"), 0.0f);
+        glBindVertexArray(v->vao_scene);
+        draw_scene(v, 0);
+    }
+    /* the boat and the floats, mirrored; the water's own height texture is current */
+    if (v->video_on) {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, v->tex_h);
+        draw_objects_v(v, p, vpref, 1);
+    }
     v->cam[1] = cy;
-    glUniform1f(U(v->p_scene, "u_clip"), 1.0f);
-    glUniform1f(U(v->p_scene, "u_nosun"), 1.0f);
-    glUniform1f(U(v->p_scene, "u_linear"), 0.0f);
-    glBindVertexArray(v->vao_scene);
-    draw_scene(v, 0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -3671,7 +4192,15 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
     /* the setting's light: the sun's shadow map, then the water's mirror image */
     float vpref[16];
     memcpy(vpref, vp, sizeof vpref);
-    if (v->scene_on) {
+    /* the video look's boat and floats need the shadow map and the mirror too */
+    const int bodies = v->video_on && (p->boat || p->nfloat > 0);
+    v->sh_on = v->scene_on || bodies;
+    v->refl_mode = v->scene_on ? 1 : (bodies ? 2 : 0);
+    if (v->sh_on) {
+        /* the bodies ride this frame's water: its heights before the shadow and the mirror */
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, v->tex_h);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, v->nx, v->ny, GL_RED, GL_FLOAT, w->eta);
         shadow_pass(v, p);
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, v->tex_sh);
@@ -3749,7 +4278,10 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
     glDrawElements(GL_TRIANGLES, v->n_surf_idx, GL_UNSIGNED_INT, (void *)0);
 
     draw_paddle_mark(v, p, vp);
-    draw_objects(v, p, vp);
+    if (v->video_on) {
+        draw_objects_v(v, p, vp, 0);
+        if (p->nbub > 0) { view3d_params q = *p; q.boat = 0; q.nfloat = 0; draw_objects(v, &q, vp); }
+    } else draw_objects(v, p, vp);
 
     /* transparent: the water body's faces, then the glass (if any) */
     if (m >= 1) {

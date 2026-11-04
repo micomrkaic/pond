@@ -913,6 +913,37 @@ beside its reflection, render and bark barely, grass only a faint sheen
 against a low sun. Stone by the pool is **wet**: the lip the water laps, and
 splashed patches drying further out, darker and glossy.
 
+### The boat and the floats, filmed
+
+The animation look keeps its markers: a white hull and orange cones, each
+vertex set on the water by itself. The video look replaces them with things
+that float:
+
+- **A dinghy**, built from its lines: a round-bilged hull with flare and a
+  rising sheer, a transom, a foredeck, floorboards, two thwarts, a rubbing
+  strip under the gunwale, and an outboard with its tiller. White gelcoat
+  above a navy boot stripe, red antifouling below, a tidemark at the water;
+  varnished planks with their grain and seams; a non-slip floor inside.
+- **Buoys**: squat orange bodies, a quarter under, with a white band, scuffs
+  and a galvanised lug.
+- **They float as rigid bodies.** The vertex shader sounds the water at five
+  points under each (the middle, fore and aft, either side) and takes heave
+  from their mean and pitch and roll from their differences, so a hull rides
+  the swell without bending over every ripple.
+- **They are lit like the rest of the picture**: the sun with its shadow
+  (the boat shades its own inside), the sky above and the water below
+  lighting them, a GGX highlight, the white inside of the boat lit by
+  itself, and sunlight off the water dancing on the topsides. Just above the
+  water they are wet: darker and glossier.
+- **The water mirrors them and the floor shows their shadows**, with or
+  without the setting. The mirror keeps, for each thing in it, how far it is
+  from the water, so ripples displace a boat alongside as little as they
+  should and the house far off as much.
+- **The water stays out of the boat**: inside the hull's waterline there is
+  none. The solver presses a dent under the hull to make its wake. Real water
+  round a floating boat lies flat, and the hull is opaque, so the caustics
+  ignore the dent there and the hull's shadow takes its place.
+
 ### Steps, a bench, and where the camera looks
 
 With the setting, in the video look, on a rectangle of 6 m and up, the pool
