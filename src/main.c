@@ -22,6 +22,7 @@
 #include "config.h"
 #include "script.h"
 #include "record.h"
+#include "attract.h"
 
 #include <SDL.h>
 #include <math.h>
@@ -108,6 +109,8 @@ static void print_help(void)
          "Per run:\n"
          "  --script F      run a script: timed parameter settings, see demos/ and README\n"
          "  --record [F]    record what you do as a script, into F (default pond-rec-NNN.pond); enter stops it\n"
+         "  --attract [P..] a screen saver: full screen, no HUD, the shows in P (files or directories;\n"
+         "                  default your pond-rec-*.pond here, else the demos) one after another; any key quits\n"
          "  --frames N      quit after N displayed frames;  --snap3d F  save the last 3-D frame to F (bmp)\n"
          "  --bench N       run N headless frames of the CPU path, print timings, exit;  --snap F  save the last\n"
          "  --config F      read F instead of the default config file;  --no-config  ignore it\n"
@@ -389,10 +392,44 @@ static void handle_key(app *a, SDL_Keycode k, int shift)
     a->hud_dirty = 1;
 }
 
+/* the attract mode ends at a touch: any key, a click, the wheel, a finger, or the
+ * mouse moved more than a nudge -- after the first second, when the switch to full
+ * screen can still send events of its own.  On the desktop it quits, as a screen
+ * saver does; in the browser it hands the pond back. */
+static int attract_leaves(app *a, const SDL_Event *e)
+{
+    if (a->at_clock < 1.0) return 0;
+    switch (e->type) {
+    case SDL_KEYDOWN: case SDL_MOUSEBUTTONDOWN: case SDL_MOUSEWHEEL: case SDL_FINGERDOWN: return 1;
+    case SDL_MOUSEMOTION:
+        a->at_moved += abs(e->motion.xrel) + abs(e->motion.yrel);
+        return a->at_moved > 24;
+    default: return 0;
+    }
+}
+
+static void attract_leave(app *a)
+{
+#ifdef __EMSCRIPTEN__
+    attract_free(a->at, a);
+    a->at = NULL;
+    if (a->v3) view3d_set_fade(a->v3, 0.0f);
+    param_set(a, "hud", 1);
+    SDL_ShowCursor(SDL_ENABLE);
+    a->caption[0] = 0;
+#else
+    a->running = 0;
+#endif
+}
+
 static void handle_events(app *a)
 {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
+        if (a->at && e.type != SDL_QUIT) {
+            if (attract_leaves(a, &e)) attract_leave(a);
+            continue;
+        }
         switch (e.type) {
         case SDL_QUIT: a->running = 0; break;
         case SDL_KEYDOWN:
@@ -779,7 +816,15 @@ static void frame(void *ud)
     }
 
     camera_keys(a, dt);
-    if (a->sc) script_update(a->sc, a, dt);
+    if (a->at) {
+        a->at_clock += dt;
+        attract_update(a->at, a, dt);
+        /* a show may turn the HUD, the help or the wavemaker's outline on: not here */
+        if (a->show_hud) param_set(a, "hud", 0);
+        if (a->show_help) param_set(a, "help", 0);
+        if (a->paddle_mark) param_set(a, "paddle-mark", 0);
+        if (a->v3) view3d_set_fade(a->v3, attract_fade(a->at));
+    } else if (a->sc) script_update(a->sc, a, dt);
     advance(a, dt);
     rec_tick(a->rec, a, dt);
     wave_realize(a->w);
@@ -951,6 +996,8 @@ POND_MAIN(int argc, char **argv)
     /* argv-only: these are per-run, not preferences */
     int bench_frames = 0, a_frames = 0, list_params = 0;
     const char *snap = NULL, *snap3d = NULL, *script_path = NULL, *record_path = NULL;
+    int attract_on = 0, n_attract = 0;
+    const char *attract_paths[64];
 
 #ifdef __EMSCRIPTEN__
     cfg.grid = emscripten_run_script_int("(function(){var v=new URLSearchParams(location.search).get('grid');return v?(v|0):0;})()");
@@ -972,6 +1019,10 @@ POND_MAIN(int argc, char **argv)
         else if (!strcmp(o, "--frames") && i + 1 < argc) a_frames = atoi(argv[++i]);
         else if (!strcmp(o, "--script") && i + 1 < argc) script_path = argv[++i];
         else if (!strcmp(o, "--record")) record_path = (i + 1 < argc && argv[i + 1][0] != '-') ? argv[++i] : "";
+        else if (!strcmp(o, "--attract")) {
+            attract_on = 1;
+            while (i + 1 < argc && strncmp(argv[i + 1], "--", 2) && n_attract < 64) attract_paths[n_attract++] = argv[++i];
+        }
         /* flags from before there was a table */
         else if (!strcmp(o, "--2d")) config_set(&cfg, "mode", "2d");
         else if (!strcmp(o, "--nomsaa")) config_set(&cfg, "msaa", "off");
@@ -1094,6 +1145,21 @@ POND_MAIN(int argc, char **argv)
     for (int k = 0; k < SND_NUM; k++) { char nm[32]; snprintf(nm, sizeof nm, "sound.%s", snd_knob_names[k]); param_set(&a, nm, a.knob[k]); }
     config_apply(&cfg, &a);
 
+    if (attract_on) {
+        char err[256], *base = SDL_GetBasePath();
+        a.at = attract_new(attract_paths, n_attract, base, err, sizeof err);
+        SDL_free(base);
+        if (!a.at) { fprintf(stderr, "%s\n", err); return 1; }
+        printf("attract: %d show%s\n", attract_count(a.at), attract_count(a.at) == 1 ? "" : "s");
+        script_path = NULL; record_path = NULL;
+#ifndef __EMSCRIPTEN__
+        param_set(&a, "fullscreen", 1);      /* the browser grants that only to a click */
+#endif
+        param_set(&a, "hud", 0);
+        param_set(&a, "help", 0);
+        SDL_ShowCursor(SDL_DISABLE);
+        attract_begin(a.at, &a);
+    }
     if (script_path) {
         char err[256];
         a.sc = script_load(script_path, err, sizeof err);
@@ -1112,6 +1178,7 @@ POND_MAIN(int argc, char **argv)
     emscripten_set_main_loop_arg(frame, &a, 0, 1);
 #else
     while (a.running) frame(&a);
+    if (a.at) { attract_free(a.at, &a); a.at = NULL; }
     if (a.rec) record_toggle(&a, NULL);
     if (a.sc) script_free(a.sc);
     if (a.au) audio_close(a.au);

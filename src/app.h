@@ -120,6 +120,9 @@ typedef struct app {
 
     struct script *sc;         /* a running script, or NULL */
     struct recorder *rec;      /* a recording in progress, or NULL */
+    struct attract *at;        /* the attract mode, or NULL */
+    double at_clock;           /* seconds since it began: input is ignored for the first */
+    int    at_moved;           /* pixels the mouse has moved since then */
     int in_script;             /* set while the script itself is applying parameters */
     char caption[160];         /* what the script says, shown under the HUD */
 } app;

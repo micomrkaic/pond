@@ -1647,8 +1647,9 @@ static const char *vs_ovl = GLSL(
 static const char *fs_ovl = GLSL(
     in vec2 v_uv;
     uniform sampler2D u_tex;
+    uniform float u_fade;     /* > 0: not the overlay, a black veil of that opacity */
     out vec4 o;
-    void main() { o = texture(u_tex, v_uv); }
+    void main() { o = u_fade > 0.0 ? vec4(0.0, 0.0, 0.0, u_fade) : texture(u_tex, v_uv); }
 );
 
 #define MARK_MAX 2048       /* vertices for the wavemaker outline: 6 per piece */
@@ -1683,6 +1684,8 @@ struct view3d {
     int sh_on;                      /* a shadow map this frame */
     GLuint fbo_sh, tex_sh; int sh_size, sh_valid; float sh_sun[3]; float lvp[16], sbias;   /* the sun's shadow map */
     GLuint fbo_rf, tex_rf, rb_rf; int rf_w, rf_h;                  /* the reflection, half the window */
+    GLuint tex_null;                /* 1 x 1 black: what an idle texture unit holds */
+    float fade;                     /* 0 .. 1: the picture faded to black (the attract mode's cuts) */
     /* the video look: the frame in linear light, multisampled and resolved into a mipmapped
      * float texture, then metered, bloomed, tone-mapped, given a lens and grain */
     int video_on, video_ok;          /* this frame; -1 untried, 0 no float target here, 1 fine */
@@ -2609,6 +2612,20 @@ void view3d_gl_attributes(int msaa)
 
 static void build_obj_meshes(view3d *v);
 
+/* each unit the shaders sample, holding a complete texture before anything draws:
+ * 0 the heights, 1 the light map, 2 the shadow map, 3 the reflection */
+static void bind_units(view3d *v)
+{
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, v->tex_rf ? v->tex_rf : v->tex_null);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, v->fbo_sh ? v->tex_sh : v->tex_null);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, v->gpu_caustics ? v->tex_lm2 : v->tex_lm);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, v->tex_h);
+}
+
 view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
 {
     view3d *v = calloc(1, sizeof *v);
@@ -2799,7 +2816,24 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     /* the reflection: colour texture and depth, sized on first use */
+    /* every texture a shader declares must be complete when it draws, used or not:
+     * Apple's GL on Metal checks, and reads black (and says so) if one is not.  The
+     * reflection gets its parameters and a texel now, its real size on first use */
     glGenTextures(1, &v->tex_rf);
+    glBindTexture(GL_TEXTURE_2D, v->tex_rf);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    {
+        static const unsigned char black[4] = { 0, 0, 0, 255 };
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, black);
+        glGenTextures(1, &v->tex_null);
+        glBindTexture(GL_TEXTURE_2D, v->tex_null);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, black);
+    }
     glGenFramebuffers(1, &v->fbo_rf);
     glGenRenderbuffers(1, &v->rb_rf);
     build_obj_meshes(v);
@@ -2823,6 +2857,7 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
     v->yaw = 35.0f; v->pitch = 42.0f;
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) fprintf(stderr, "GL error during init: 0x%x\n", err);
+    bind_units(v);
     return v;
 }
 
@@ -3088,6 +3123,9 @@ static void gpu_caustics(view3d *v, const view3d_params *p, int edge)
 {
     float I[3] = { -p->sun[0], -p->sun[1], -p->sun[2] };
     v3norm(I);
+    /* the light maps are drawn into here: off their unit while that happens */
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, v->tex_null);
     glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_lm);
     glViewport(0, 0, v->lm_w, v->lm_h);
     glDisable(GL_DEPTH_TEST);
@@ -3902,6 +3940,9 @@ static void shadow_pass(view3d *v, const view3d_params *p)
     mat_ortho(proj, lo[0], hi[0], lo[1], hi[1], n, f);
     mat_mul(v->lvp, proj, view);
     v->sbias = 0.04f / (f - n) * 2.0f;          /* 4 cm, in [0,1] depth */
+    glActiveTexture(GL_TEXTURE2);                    /* not sampled while it is drawn into */
+    glBindTexture(GL_TEXTURE_2D, v->tex_null);
+    glActiveTexture(GL_TEXTURE0);
     glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_sh);
     glViewport(0, 0, v->sh_size, v->sh_size);
     glEnable(GL_DEPTH_TEST);
@@ -3954,10 +3995,14 @@ static void reflection_pass(view3d *v, const view3d_params *p, const float *vp, 
             return;
         }
         v->rf_w = rw; v->rf_h = rh;
+        glBindTexture(GL_TEXTURE_2D, v->tex_h);   /* unit 0 back to the heights: never the target drawn into */
     }
     /* y -> -y, then the camera's own view and projection */
     static const float S[16] = { 1,0,0,0, 0,-1,0,0, 0,0,1,0, 0,0,0,1 };
     mat_mul(vpref, vp, S);
+    glActiveTexture(GL_TEXTURE3);                    /* not sampled while it is drawn into */
+    glBindTexture(GL_TEXTURE_2D, v->tex_null);
+    glActiveTexture(GL_TEXTURE0);
     glBindFramebuffer(GL_FRAMEBUFFER, v->fbo_rf);
     glViewport(0, 0, rw, rh);
     glClearColor(0, 0, 0, 1);
@@ -4160,6 +4205,8 @@ static void video_post(view3d *v, float dt)
     glDepthMask(GL_TRUE);
 }
 
+void view3d_set_fade(view3d *v, float a) { v->fade = a; }
+
 void view3d_render(view3d *v, const wave *w, const view3d_params *p)
 {
     {
@@ -4168,6 +4215,7 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
         v->last_time = v->time > 0.0f ? v->time : now;
         v->time = now;
     }
+    bind_units(v);
     if (p->look == 1) {
         SDL_GL_GetDrawableSize(v->win, &v->W, &v->H);
         if (v->H < 1) v->H = 1;
@@ -4312,6 +4360,16 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
 
     if (v->video_on) video_post(v, v->time - v->last_time);
     draw_overlay(v);
+    if (v->fade > 0.002f) {
+        glUseProgram(v->p_ovl);
+        glUniform1f(U(v->p_ovl, "u_fade"), v->fade > 1.0f ? 1.0f : v->fade);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBindVertexArray(v->vao_empty);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glDisable(GL_BLEND);
+        glUniform1f(U(v->p_ovl, "u_fade"), 0.0f);
+    }
     glBindVertexArray(0);
     if (v->want_capture) {
         /* read the back buffer before it is swapped away */

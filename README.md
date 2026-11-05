@@ -39,6 +39,7 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     ./pond --script demos/tour.pond        # three minutes of everything, on a loop; Escape stops it
     ./pond --script demos/showcase.pond    # every feature once, ten minutes
     ./pond --record show.pond              # write down what you do as a script (enter stops it)
+    ./pond --attract                       # a screen saver: your recordings (or the demos), one after another
     ./pond --cpu-caustics                  # if the GPU pass is unavailable or suspect
     ./pond --mute                          # starts silent; --no-audio opens no device at all
                                            # POND_WAV=take.wav records what you hear
@@ -291,6 +292,30 @@ The recording ends with `loop`, which is what a screen saver wants; change
 it to `end` for a one-off. `tests/test_script.c` records a session through
 the same calls the keyboard and mouse make, replays the file on a fresh
 program, and checks it lands where the session did.
+
+### The attract mode
+
+    ./pond --attract                       # pond-rec-*.pond here, or else the demos
+    ./pond --attract ~/shows               # every .pond in a directory
+    ./pond --attract a.pond b.pond demos   # files and directories, mixed
+
+A screen saver made of shows: full screen, no HUD, no help, no wavemaker
+outline, no cursor, and the shows one after another in a shuffled order
+that is shuffled again each time round (never the same show twice running).
+Each plays once through, to its `loop` or its `end`, or for twelve minutes
+at most, and the next fades in from black over a second and a half. Before
+each, every parameter is put back as it stood when the attract mode began,
+so no show inherits the last one's boat, rain or sunset. Any key, a click,
+the wheel or the mouse moved more than a nudge quits (the first second is
+ignored, while the window goes full screen).
+
+With no paths it plays your recordings, `pond-rec-*.pond` in the current
+directory, or if there are none the demos: next to the program
+(`demos/`, as in the source tree) or where `make install` puts them
+(`share/pond/demos` beside `bin/`). In the browser, `?attract` plays the
+demos and any key hands the pond back. `tests/test_script.c` plays a
+directory of three short shows headless and checks the order, the clean
+starts, the cap and the fade.
 
 ## What it computes
 
@@ -1153,9 +1178,9 @@ map with additive blending, which is the same forward map).
 - **Variable depth** — shoaling, refraction, a beach — is outside the
   constant-depth mode basis altogether: a finite-difference solver on the
   grid, not an addition to this one.
-- **An attract mode**: full screen, no HUD, a script or a random walk
-  through the settings, any key to leave; then the OS screen-saver hooks.
-  The web build already behaves as one.
+- **The OS screen-saver hooks** for the attract mode: a macOS `.saver`
+  bundle, an XScreenSaver entry. `pond --attract` is the program they would
+  start.
 
 ## Layout
 

@@ -10,3 +10,5 @@ pond-*.png
 *~
 \#*\#
 .DS_Store
+# shows recorded with enter or --record
+pond-rec-*.pond

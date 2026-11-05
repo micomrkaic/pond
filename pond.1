@@ -1,7 +1,7 @@
 .\" pond(1) -- a numerically honest wave tank as screen candy
 .\" Copyright (C) 2026 Mico <https://github.com/micomrkaic>; GPL-3.0-or-later
 .\" tests/test_man.sh checks that every option and parameter pond knows is here.
-.TH POND 1 2026-11-03 "pond 0.39" "User Commands"
+.TH POND 1 2026-11-04 "pond 0.42" "User Commands"
 .SH NAME
 pond \- dispersive water waves in a basin, drawn in 3\-D, with sound
 .SH SYNOPSIS
@@ -116,6 +116,12 @@ The nonlinear correction on (the parameter
 .BI \-\-script " file"
 Run a script (see
 .BR SCRIPTS ).
+.TP
+.BR \-\-attract " [\fIpath\fR ...]"
+A screen saver: full screen, no HUD, the shows in the files and directories
+given (by default your recordings here, or else the demos) one after
+another; any key quits (see
+.BR "ATTRACT MODE" ).
 .TP
 .BR \-\-record " [\fIfile\fR]"
 Record what is done, from the start, as a script (see
@@ -494,6 +500,23 @@ It ends with
 .BR loop .
 Rain and the breeze are random, so a replay is the same show, not the same
 frames.
+.SH ATTRACT MODE
+.B \-\-attract
+plays scripts one after another, full screen, with the HUD, the help, the
+wavemaker's outline and the cursor hidden.
+Each path is a script or a directory of them; with none, the recordings
+.I pond\-rec\-*.pond
+in the current directory, or if there are none the demos.
+The order is shuffled, and shuffled again each time round, never the same
+show twice running.
+Each show plays once through, to its
+.B loop
+or
+.BR end ,
+or for twelve minutes at most; the next fades in from black.
+Before each, every parameter is put back as it stood when the attract mode
+began.
+Any key, a click, the wheel, or the mouse moved more than a nudge, quits.
 .SH FILES
 The configuration file is the first of these that exists:
 .IP
@@ -529,8 +552,14 @@ Unknown keys are reported with their line number and skipped.
 Settings are read as built\-in defaults, then the file, then the command line.
 .PP
 .I demos/*.pond
-in the source tree: twelve scripts, from a three\-minute tour to a
-ten\-minute showcase of everything.
+in the source tree, and
+.I share/pond/demos
+beside the installed
+.IR bin/ :
+twelve scripts, from a three\-minute tour to a ten\-minute showcase of
+everything.
+.B \-\-attract
+looks for them in both.
 .SH ENVIRONMENT
 .TP
 .B POND_CONFIG

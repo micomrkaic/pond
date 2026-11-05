@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /* pond — a numerically honest wave tank as screen candy
  * Copyright (C) 2026 Mico <https://github.com/micomrkaic>
  *
@@ -23,6 +24,9 @@
 #include "../src/param.h"
 #include "../src/script.h"
 #include "../src/record.h"
+#include "../src/attract.h"
+#include <sys/stat.h>
+#include <unistd.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -301,6 +305,86 @@ int main(void)
             free_app(b);
         }
         if (getenv("KEEP")) printf("kept %s\n", path); else remove(path);
+    }
+
+    /* --- the attract mode: a playlist, played round, each show from a clean start --- */
+    {
+        char err[256];
+        /* with no paths: the recordings in the current directory, or else the demos.
+         * Asked from an empty directory of its own, so recordings lying in the source
+         * tree do not count; then with one recording in it */
+        {
+            char root[1024], base[1100];
+            if (getcwd(root, sizeof root)) {
+                snprintf(base, sizeof base, "%s/", root);
+                mkdir("build", 0755); mkdir("build/attract-empty", 0755);
+                remove("build/attract-empty/pond-rec-001.pond");
+                if (chdir("build/attract-empty") == 0) {
+                    attract *d = attract_new(NULL, 0, base, err, sizeof err);
+                    printf("   no paths, no recordings: %d shows%s%s", attract_count(d), d ? "" : " -- ", d ? "" : err);
+                    check(attract_count(d) == 12, " (the demos)");
+                    attract_free(d, NULL);
+                    FILE *f = fopen("pond-rec-001.pond", "wb");
+                    if (f) { fputs("at 0 rain on\nat 5 loop\n", f); fclose(f); }
+                    d = attract_new(NULL, 0, base, err, sizeof err);
+                    printf("   no paths, one recording: %d show", attract_count(d));
+                    check(attract_count(d) == 1, " (the recording)");
+                    attract_free(d, NULL);
+                    remove("pond-rec-001.pond");
+                    if (chdir(root) != 0) { printf("cannot return to %s\n", root); fails++; }
+                }
+                rmdir("build/attract-empty");
+            }
+        }
+
+        mkdir("build", 0755); mkdir("build/attract-test", 0755);
+        const char *names[3] = { "build/attract-test/a.pond", "build/attract-test/b.pond", "build/attract-test/c.pond" };
+        const char *texts[3] = { "at 0 rain on  boat on  sun-elev 20\nat 3 loop\n",       /* loops at 3 s */
+                                 "at 0 floats 2\nat 2 end\n",                             /* ends at 2 s */
+                                 "at 0 say \"long\"\nat 5000 loop\n" };                  /* would run 83 min */
+        for (int i = 0; i < 3; i++) { FILE *f = fopen(names[i], "wb"); if (f) { fputs(texts[i], f); fclose(f); } }
+        const char *dir[1] = { "build/attract-test" };
+        attract *at = attract_new(dir, 1, NULL, err, sizeof err);
+        check(at && attract_count(at) == 3, "a directory of three shows");
+        if (at) {
+            app *a = make_app(32);
+            const double sun0 = param_get(a, "sun-elev");
+            attract_begin(at, a);
+            check(attract_fade(at) > 0.99f, "each show fades in from black");
+            int clean = 1, seen[3] = { 0, 0, 0 }, firsts_ok = 1;
+            double t = 0, longest = 0, since = 0;
+            const char *cur = attract_current(at);
+            int played = 0;
+            for (t = 0; t < 6000 && attract_shows_played(at) < 7; t += 0.05) {
+                attract_update(at, a, 0.05);
+                since += 0.05;
+                if (attract_current(at) != cur || attract_shows_played(at) != played) {
+                    /* a new show began: nothing of the last one carried over */
+                    if (since > longest) longest = since;
+                    since = 0;
+                    const char *now = attract_current(at);
+                    if (strstr(now, "c.pond") || strstr(now, "b.pond"))
+                        clean &= param_get(a, "rain") < 0.5 && param_get(a, "boat") < 0.5 && fabs(param_get(a, "sun-elev") - sun0) < 1e-9;
+                    if (strstr(now, "a.pond") || strstr(now, "c.pond")) clean &= a->nfloat == 0;
+                    /* a new round is a new order, but never the same show twice running */
+                    if (now == cur) firsts_ok = 0;
+                    if (getenv("ATTRACT_ORDER")) printf("   [%d] %s\n", attract_shows_played(at), now);
+                    cur = now; played = attract_shows_played(at);
+                }
+                for (int i = 0; i < 3; i++) if (strstr(attract_current(at), names[i] + 19)) seen[i] = 1;
+            }
+            printf("   7 shows in %.0f s; the longest ran %.0f s (cap %.0f)", t, longest, ATTRACT_MAX);
+            check(attract_shows_played(at) == 7 && longest <= ATTRACT_MAX + 0.1 && longest > ATTRACT_MAX - 1.0, "");
+            check(seen[0] && seen[1] && seen[2], "every show comes round");
+            check(clean, "each starts from the settings the attract mode began with");
+            check(firsts_ok, "no show twice running, across the reshuffles too");
+            check(attract_fade(at) < 0.01f || since < ATTRACT_FADE, "the fade is over after a second and a half");
+            attract_free(at, a);
+            check(a->sc == NULL, "and leaving stops the show");
+            free_app(a);
+        }
+        for (int i = 0; i < 3; i++) remove(names[i]);
+        rmdir("build/attract-test");
     }
 
     /* --- the ear's drop: the rain's spread rings at 1.2 to 3.6 kHz on every basin --- */
