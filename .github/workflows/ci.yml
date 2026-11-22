@@ -1,0 +1,30 @@
+# pond CI: build the program and run the numerical and manual-page tests
+# on Linux and macOS.
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: build
+        run: make -j4
+      - name: tests
+        run: make test
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: brew install sdl2
+      - name: build
+        run: make -j4
+      - name: tests
+        run: make test

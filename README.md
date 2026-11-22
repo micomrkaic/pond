@@ -1,5 +1,7 @@
 # pond
 
+[![ci](https://github.com/micomrkaic/pond/actions/workflows/ci.yml/badge.svg)](https://github.com/micomrkaic/pond/actions/workflows/ci.yml)
+
 ![pool preset, rain and breeze](doc/pool.png)
 
 A numerically honest wave tank as screen candy. Linear dispersive water waves
