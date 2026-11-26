@@ -41,6 +41,9 @@ typedef struct { const char *name; double L, depth; int floor; } preset;
 extern const preset presets[];
 #define NPRESETS 4
 
+/* the random streams, see app.rng */
+enum { RNG_RAIN_T, RNG_RAIN, RNG_GUST_T, RNG_GUST, RNG_MISC, RNG_N };
+
 typedef struct app {
     SDL_Window *win;
     /* 2-D path */
@@ -125,10 +128,15 @@ typedef struct app {
     int    at_moved;           /* pixels the mouse has moved since then */
     int in_script;             /* set while the script itself is applying parameters */
     char caption[160];         /* what the script says, shown under the HUD */
-    /* the one random stream the simulation draws on (rain, gusts, random drops,
-     * where a float goes in): splitmix64, so any state, zero included, is a good
-     * seed.  Setting it replays the same randomness; the sound has its own. */
-    uint64_t rng;
+    /* Randomness, all from one seed (the seed parameter; app_seed): a splitmix64
+     * stream per use, so no source's draws shift another's.  Rain and gusts arrive
+     * in simulated time -- each waits out a unit-exponential amount of rate x time
+     * -- with their timing and their content (where, how big) on separate streams,
+     * so the same seed gives the same raindrops and gusts in the same order however
+     * the time is cut into frames.  The sound has its own stream, on its own thread. */
+    int      seed;
+    uint64_t rng[RNG_N];
+    double   rain_wait, gust_wait;  /* expected arrivals still to wait out; 0: not drawn yet */
 } app;
 
 struct script;
@@ -155,7 +163,11 @@ double app_drop_size(const app *a);         /* a raindrop's crater width, metres
 void  app_finger(app *a, double x, double y, double dts);   /* a finger through the water at x, y metres, this frame */
 void  app_jolt(app *a, double dux, double duy);   /* shove the basin by that velocity, over 0.4 of the seiche period */
 void  app_jolt_step(app *a, double dts);          /* the slice of it that falls in this frame */
-double app_rand(app *a);                          /* uniform in [0, 1), from a->rng */
-void  app_seed(app *a, uint64_t seed);            /* restart that stream */
+double app_rand(app *a, int stream);              /* uniform in [0, 1), from a->rng[stream] */
+void  app_seed(app *a, int seed);                 /* restart every stream from this seed */
+/* arrivals of a Poisson process in an interval where `expected` of them are due
+ * (rate x time): how many, drawing waits from `stream` and keeping the remainder in *wait */
+int   app_arrivals(app *a, int stream, double *wait, double expected);
+void  app_rain_step(app *a, double dts);          /* this frame's raindrops */
 
 #endif

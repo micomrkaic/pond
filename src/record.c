@@ -170,6 +170,9 @@ recorder *rec_start(app *a, const char *path)
         r->own = 1;
     }
     r->cy = param_get(a, "yaw"); r->cp = param_get(a, "pitch"); r->cd = param_get(a, "dist");
+    /* a fresh seed, from here on: the opening lines end with it, so a replay's
+     * rain and gusts come from the same place the session's did */
+    param_set(a, "seed", floor(app_rand(a, RNG_MISC) * 2147483647.0));
     snapshot(r, a);
     fflush(r->f);
     return r;

@@ -334,7 +334,8 @@ static void run_action(script *s, app *a, const action *ac)
             if (e == ac->sval) return;
             if (*e == '%') v /= 100.0;
             if (ac->rel) v = param_get(a, ac->name) + ac->rel * v;
-            start_tween(s, a, ac->name, v, ac->over);
+            if (p->kind == PK_INT) { drop_tween(s, ac->name); param_set(a, ac->name, v); }   /* a seed has no halfway */
+            else start_tween(s, a, ac->name, v, ac->over);
         } else {
             drop_tween(s, ac->name);
             param_set_str(a, ac->name, ac->sval);
@@ -350,7 +351,7 @@ static void run_action(script *s, app *a, const action *ac)
         double x, y;
         if (ac->random) {
             do {
-                x = app_rand(a) * w->Lx; y = app_rand(a) * w->Ly;
+                x = app_rand(a, RNG_MISC) * w->Lx; y = app_rand(a, RNG_MISC) * w->Ly;
             } while (w->shape == WAVE_DISK && (x - w->R) * (x - w->R) + (y - w->R) * (y - w->R) > 0.9 * w->R * w->R);
         } else { x = ac->x * w->Lx; y = ac->y * w->Ly; }
         const double sz = ac->size * sqrt(w->Lx * w->Ly);

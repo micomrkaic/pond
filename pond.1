@@ -283,6 +283,15 @@ Master volume 0 to 1; silent with the device kept open.
 .BR sound.drops ", " sound.bed ", " sound.brown ", " sound.breeze ", " sound.harsh
 Drop plinks, the rain bed, brown noise, the breeze, and the gusts and rustle
 in it; 0 to 4, 1 as designed.
+.SS Randomness
+.TP
+.B seed
+Where the randomness starts: the rain, the gusts, random drops and where a
+float goes in, 0 to 2147483647 (default 0).
+Setting it, even to the value it has, starts it over.
+Rain and gusts arrive in simulated time, so the same seed gives the same
+raindrops in the same order at any frame rate; the sound has randomness of
+its own.
 .SH KEYS
 Lower case nudges a parameter down and upper case (shift) up, unless a pair
 is listed.
@@ -501,8 +510,11 @@ presets, floats and
 are written as themselves.
 It ends with
 .BR loop .
-Rain and the breeze are random, so a replay is the same show, not the same
-frames.
+A recording picks a fresh
+.B seed
+as it starts and writes it in its opening lines, so a replay brings the same
+raindrops and gusts in the same order and places; each lands within a frame
+of when it did, so a replay is the same show, though not to the pixel.
 .SH ATTRACT MODE
 .B \-\-attract
 plays scripts one after another, full screen, with the HUD, the help, the

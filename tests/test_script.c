@@ -56,6 +56,7 @@ static app *make_app(int grid)
     a->pix = malloc((size_t)grid * grid * sizeof(uint32_t));
     a->shape = WAVE_RECT;
     a->preset = 1;
+    app_seed(a, 0);
     a->w = app_make_wave(WAVE_RECT, grid, presets[1].L, presets[1].L, presets[1].depth);
     a->rp.floor_style = a->p3.floor_style = presets[1].floor;
     app_reset_camera(a);
@@ -74,6 +75,18 @@ static void run(app *a, double secs, double dt)
 {
     for (double t = 0; t < secs; t += dt) {
         script_update(a->sc, a, dt);
+        app_jolt_step(a, dt);
+        wave_step(a->w, 1.0 / 240.0, 1);
+    }
+}
+
+/* the same, with the rain falling as it does in the program */
+static void run_rain(app *a, double secs, double dt)
+{
+    const int frames = (int)floor(secs / dt + 0.5);   /* counted, so no frame is gained or lost to rounding */
+    for (int f = 0; f < frames; f++) {
+        script_update(a->sc, a, dt);
+        app_rain_step(a, dt);
         app_jolt_step(a, dt);
         wave_step(a->w, 1.0 / 240.0, 1);
     }
@@ -229,28 +242,74 @@ int main(void)
         free_app(a);
     }
 
-    /* --- one random stream: the same seed replays the same random drops and floats --- */
+    /* --- the seed: one seed, one outcome; and rain that does not care about frame rate --- */
     {
         char err[256];
-        const char *src = "at 0 drop random\nat 0.2 drop random\nat 0.4 float random\nat 0.5 float random\nat 1 end\n";
+        const char *src[3] = {
+            "at 0 seed 7\nat 0 drop random\nat 0.2 drop random\nat 0.4 float random\nat 0.5 float random\nat 1 end\n",
+            "at 0 seed 7\nat 0 drop random\nat 0.2 drop random\nat 0.4 float random\nat 0.5 float random\nat 1 end\n",
+            "at 0 seed 8\nat 0 drop random\nat 0.2 drop random\nat 0.4 float random\nat 0.5 float random\nat 1 end\n" };
         double norm[3], fx[3], fy[3];
-        const uint64_t seeds[3] = { 7, 7, 8 };
         for (int k = 0; k < 3; k++) {
             app *a = make_app(64);
-            app_seed(a, seeds[k]);
-            a->sc = script_parse(src, "rng", err, sizeof err);
+            app_seed(a, 1000 + k);            /* whatever came before, the script's seed decides */
+            a->sc = script_parse(src[k], "rng", err, sizeof err);
             script_start(a->sc, a);
             run(a, 1.5, 1.0 / 60.0);
             norm[k] = wave_norm(a->w); fx[k] = a->fl_x[1]; fy[k] = a->fl_y[1];
+            if (k == 0) check(param_get(a, "seed") == 7, "seed is a parameter; a script sets it");
             free_app(a);
         }
         check(norm[0] == norm[1] && fx[0] == fx[1] && fy[0] == fy[1], "the same seed, the same random drops and floats");
         check(norm[0] != norm[2] && (fx[0] != fx[2] || fy[0] != fy[2]), "another seed, others");
-        double lo = 1, hi = 0, sum = 0;
+        {
+            app *a = make_app(16);
+            a->sc = script_parse("at 0 seed 3 over 2\nat 5 end\n", "e", err, sizeof err);
+            if (a->sc) { script_start(a->sc, a); run(a, 0.1, 0.05); }
+            check(a->sc != NULL && param_get(a, "seed") == 3, "seed 3 over 2 jumps straight to 3: a seed has no halfway");
+            free_app(a);
+        }
+
+        /* ten seconds of rain cut into frames of 1/60 s, and into a ragged mix of
+         * 1/23, 1/90, 1/37, 1/144: the same raindrops, in the same order */
+        app *r[2];
+        static const double ragged[4] = { 1.0 / 23, 1.0 / 90, 1.0 / 37, 1.0 / 144 };
+        for (int k = 0; k < 2; k++) {
+            r[k] = make_app(64);
+            param_set(r[k], "seed", 11);
+            param_set(r[k], "rain", 1);
+            param_set(r[k], "rain-rate", 4);
+            double t = 0; int f = 0;
+            while (t < 10.0) {
+                double dt = k == 0 ? 1.0 / 60 : ragged[f++ % 4];
+                if (t + dt > 10.0) dt = 10.0 - t;
+                app_rain_step(r[k], dt);
+                t += dt;
+            }
+        }
+        int same = r[0]->nbub == r[1]->nbub && r[0]->nbub > 10 && r[0]->nbub < NBUB_MAX;
+        for (int i = 0; same && i < r[0]->nbub; i++)
+            same = r[0]->bub_x[i] == r[1]->bub_x[i] && r[0]->bub_y[i] == r[1]->bub_y[i] && r[0]->bub_r[i] == r[1]->bub_r[i];
+        char what[160];
+        snprintf(what, sizeof what, "%d raindrops in 10 s at 4/s, the same ones at 60 fps and at a ragged frame rate", r[0]->nbub);
+        check(same, what);
+        /* and a drop placed at random in between does not move the rain that follows */
+        app_rand(r[1], RNG_MISC);
+        app_rain_step(r[0], 5.0); app_rain_step(r[1], 5.0);
+        check(r[0]->nbub == r[1]->nbub && r[0]->bub_x[r[0]->nbub - 1] == r[1]->bub_x[r[1]->nbub - 1],
+              "the streams are separate: a draw on one leaves the rain alone");
+        free_app(r[0]); free_app(r[1]);
+
         app *a = make_app(16);
-        for (int i = 0; i < 100000; i++) { const double u = app_rand(a); sum += u; if (u < lo) lo = u; if (u > hi) hi = u; }
+        double lo = 1, hi = 0, sum = 0;
+        for (int i = 0; i < 100000; i++) { const double u = app_rand(a, RNG_MISC); sum += u; if (u < lo) lo = u; if (u > hi) hi = u; }
+        int arrivals = 0;
+        double wait = 0;
+        for (int i = 0; i < 100000; i++) arrivals += app_arrivals(a, RNG_RAIN_T, &wait, 0.01);
         free_app(a);
         check(lo >= 0 && hi < 1 && fabs(sum / 100000 - 0.5) < 0.005, "app_rand is uniform on [0, 1)");
+        snprintf(what, sizeof what, "app_arrivals: %d where 1000 are expected (Poisson, sd 32)", arrivals);
+        check(abs(arrivals - 1000) < 130, what);
     }
 
     /* --- the config file: an overlong line is reported and skipped, the next still read --- */
@@ -303,7 +362,7 @@ int main(void)
         check(a->rec != NULL, "a recording starts");
         const double dt = 0.05;
         double t = 0;
-        #define TICK_TO(T) while (t < (T) - 1e-9) { rec_tick(a->rec, a, dt); t += dt; }
+        #define TICK_TO(T) while (t < (T) - 1e-9) { rec_tick(a->rec, a, dt); app_rain_step(a, dt); t += dt; }
         TICK_TO(1.0);
         { double b = param_get(a, "rain"); param_set(a, "rain", 1); rec_param(a->rec, a, "rain", b); }
         /* a key held: the sun swept down, 21 presses of 3 degrees over a second */
@@ -315,6 +374,10 @@ int main(void)
         TICK_TO(6.5);
         for (int i = 1; i <= 10; i++) { TICK_TO(6.5 + 0.05 * i); param_set(a, "yaw", fmod(335.0 - 40.0 * i / 10.0 + 360.0, 360.0)); }
         TICK_TO(8.0);
+        /* the rain so far, to be met again in the replay (each drop leaves a bubble, in order) */
+        const int seed_rec = (int)param_get(a, "seed"), nb8 = a->nbub;
+        double bx8[NBUB_MAX], by8[NBUB_MAX];
+        memcpy(bx8, a->bub_x, sizeof bx8); memcpy(by8, a->bub_y, sizeof by8);
         rec_drop(a->rec, a, 0.3 * a->w->Lx, 0.6 * a->w->Ly, 0.05 * a->w->Lx);
         /* a finger drawn corner to corner over a second */
         for (int i = 0; i <= 20; i++) { TICK_TO(8.5 + 0.05 * i); double u = i / 20.0; rec_finger(a->rec, a, (0.2 + 0.6 * u) * a->w->Lx, (0.2 + 0.6 * u) * a->w->Ly); }
@@ -351,11 +414,18 @@ int main(void)
             app *b = make_app(64);
             b->sc = s;
             script_start(s, b);
-            run(b, 2.5, 0.05);
+            run_rain(b, 2.5, 0.05);
             const double mid = param_get(b, "sun-elev");
             printf("   at 2.5 s the sun is at %.1f (sweeping from 66 to 3)", mid);
             check(mid < 60.0 && mid > 10.0, "");
-            run(b, 8.3, 0.05);
+            run_rain(b, 5.5, 0.05);
+            int same = b->nbub > 0 && abs(b->nbub - nb8) <= 1;
+            for (int i = 0; same && i < b->nbub && i < nb8; i++) same = b->bub_x[i] == bx8[i] && b->bub_y[i] == by8[i];
+            char what[160];
+            snprintf(what, sizeof what, "the recording opens with its seed (%d), and the replay's %d raindrops are the session's %d",
+                     seed_rec, b->nbub, nb8);
+            check(param_get(b, "seed") == seed_rec && same, what);
+            run_rain(b, 2.8, 0.05);
             printf("   at 10.8 s: rain %s, sun %.1f deg at %.0f, camera yaw %.1f pitch %.1f (session: %.1f %.1f), %d float, water %.2g",
                    param_get(b, "rain") > 0.5 ? "on" : "off", param_get(b, "sun-elev"), param_get(b, "sun-azim"),
                    param_get(b, "yaw"), param_get(b, "pitch"), yaw_end, pitch_end, b->nfloat, wave_norm(b->w));
