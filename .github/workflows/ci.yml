@@ -1,5 +1,7 @@
-# pond CI: build the program and run the numerical and manual-page tests
-# on Linux and macOS.
+# pond CI: build the program and run the numerical and manual-page tests on
+# Linux and macOS; the same tests under ASan and UBSan; a minute of fuzzing
+# on the script and config parsers; and the browser build, started in a
+# headless Chromium.
 name: ci
 on:
   push:
@@ -28,3 +30,64 @@ jobs:
         run: make -j4
       - name: tests
         run: make test
+
+  # every test again with AddressSanitizer (leaks too) and UndefinedBehaviorSanitizer;
+  # the first finding fails the job
+  sanitize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: tests under ASan + UBSan
+        run: make -j4 sanitize
+
+  # a minute of libFuzzer on script_parse and config_set, seeded from demos/;
+  # a crash leaves its input as an artifact, to reproduce with build/fuzz_parse FILE
+  fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev clang libclang-rt-dev
+      - name: fuzz the parsers
+        run: make fuzz FUZZ_TIME=60
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crash
+          path: |
+            crash-*
+            leak-*
+            timeout-*
+            oom-*
+          if-no-files-found: ignore
+
+  # the browser build with a pinned emsdk (the distributions' emscripten is too old
+  # to fetch its SDL2 port), started in headless Chromium; the build is kept as an
+  # artifact, ready for a Pages deployment
+  web:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.74
+          actions-cache-folder: emsdk-cache
+      - name: build
+        run: make web
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: playwright
+        run: npm install --no-save --no-package-lock playwright@1.49.1 && npx playwright install --with-deps chromium
+      - name: smoke test in the browser
+        run: node tests/web_smoke.js build/web build/web-smoke.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web
+          path: |
+            build/web
+            build/web-smoke.png
+          if-no-files-found: ignore

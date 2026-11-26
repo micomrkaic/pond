@@ -229,6 +229,14 @@ int config_load(pond_config *c, const char *path)
     int lineno = 0;
     while (fgets(line, sizeof line, f)) {
         lineno++;
+        if (!strchr(line, '\n') && !feof(f)) {
+            /* longer than any setting could be: say so and skip the rest of it,
+             * rather than reading its tail as the next line */
+            int ch;
+            while ((ch = fgetc(f)) != EOF && ch != '\n') {}
+            fprintf(stderr, "%s:%d: line too long, skipped\n", path, lineno);
+            continue;
+        }
         char *s = line;
         char *hash = strpbrk(s, "#;");
         if (hash) *hash = 0;

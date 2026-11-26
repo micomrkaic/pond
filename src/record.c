@@ -34,7 +34,7 @@ typedef struct {
 #define SWEEP_GAP 0.45      /* seconds without a press: the sweep is over */
 
 #define FINGER_MAX 512
-#define FINGER_LINE 40      /* points on one script line (the parser takes 64 words) */
+#define FINGER_LINE 40      /* points on one script line, to keep a recording readable */
 
 struct recorder {
     FILE  *f;

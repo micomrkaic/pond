@@ -53,6 +53,11 @@ done
 [ -z "$bad" ] && echo "options in pond.1: $k, all real"
 fail=${bad:-$fail}; bad=
 
+# one version: the page's header says what the program does
+v=$("$bin" --version | awk '{ print $2 }')
+if grep -q "^\.TH POND 1 [^ ]* \"pond $v\"" "$man"; then echo "version $v, in pond.1 too"
+else echo "pond --version says $v; pond.1's .TH line does not"; fail=1; fi
+
 # the page itself formats without complaint, where a formatter is to hand
 if command -v mandoc >/dev/null 2>&1; then
     w=$(mandoc -T lint -W warning "$man" 2>&1)

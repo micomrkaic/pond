@@ -25,6 +25,7 @@
 #include "../src/script.h"
 #include "../src/record.h"
 #include "../src/attract.h"
+#include "../src/config.h"
 #include <sys/stat.h>
 #include <unistd.h>
 #include <math.h>
@@ -201,7 +202,70 @@ int main(void)
         check(script_parse("at 5 warp 2\nat 3 warp 1\n", "e", err, sizeof err) == NULL && strstr(err, "backwards"), "time may not run backwards");
         check(script_parse("at 0 warp\n", "e", err, sizeof err) == NULL, "a parameter with no value is an error");
         check(script_parse("# only a comment\n", "e", err, sizeof err) == NULL, "an empty script is an error");
+
+        /* a line of any length: a long finger path stays one line, and an error after it
+         * names the right line (it used to be cut at 511 characters, its tail read as the next) */
+        {
+            size_t cap = 16384, len = 0;
+            char *text = malloc(cap);
+            len += (size_t)snprintf(text + len, cap - len, "at 0 finger");
+            for (int k = 0; k < 300; k++)
+                len += (size_t)snprintf(text + len, cap - len, " %.4f,%.4f", 0.1 + 0.8 * k / 299.0, 0.5);
+            snprintf(text + len, cap - len, " over 3\nat 4 end\n");
+            a->sc = script_parse(text, "long", err, sizeof err);
+            check(a->sc != NULL, "a 3600-character finger line (300 points) parses whole");
+            if (a->sc) {
+                wave_clear(a->w);
+                script_start(a->sc, a);
+                run(a, 5.0, 1.0 / 60.0);
+                check(wave_norm(a->w) > 0 && !script_running(a->sc), "the finger draws through the water and the script ends");
+                script_free(a->sc); a->sc = NULL;
+            }
+            snprintf(text + len, cap - len, " over 3\nat 4 warpp 1\n");
+            check(script_parse(text, "long", err, sizeof err) == NULL && strstr(err, "long:2:") && strstr(err, "warpp"),
+                  "and a mistake on the line after it is reported on line 2");
+            free(text);
+        }
         free_app(a);
+    }
+
+    /* --- one random stream: the same seed replays the same random drops and floats --- */
+    {
+        char err[256];
+        const char *src = "at 0 drop random\nat 0.2 drop random\nat 0.4 float random\nat 0.5 float random\nat 1 end\n";
+        double norm[3], fx[3], fy[3];
+        const uint64_t seeds[3] = { 7, 7, 8 };
+        for (int k = 0; k < 3; k++) {
+            app *a = make_app(64);
+            app_seed(a, seeds[k]);
+            a->sc = script_parse(src, "rng", err, sizeof err);
+            script_start(a->sc, a);
+            run(a, 1.5, 1.0 / 60.0);
+            norm[k] = wave_norm(a->w); fx[k] = a->fl_x[1]; fy[k] = a->fl_y[1];
+            free_app(a);
+        }
+        check(norm[0] == norm[1] && fx[0] == fx[1] && fy[0] == fy[1], "the same seed, the same random drops and floats");
+        check(norm[0] != norm[2] && (fx[0] != fx[2] || fy[0] != fy[2]), "another seed, others");
+        double lo = 1, hi = 0, sum = 0;
+        app *a = make_app(16);
+        for (int i = 0; i < 100000; i++) { const double u = app_rand(a); sum += u; if (u < lo) lo = u; if (u > hi) hi = u; }
+        free_app(a);
+        check(lo >= 0 && hi < 1 && fabs(sum / 100000 - 0.5) < 0.005, "app_rand is uniform on [0, 1)");
+    }
+
+    /* --- the config file: an overlong line is reported and skipped, the next still read --- */
+    {
+        const char *path = "build/test-long.conf";
+        FILE *f = fopen(path, "w");
+        fprintf(f, "grid = 128\nhud = ");
+        for (int k = 0; k < 2000; k++) fputc('x', f);
+        fprintf(f, "\ndepth = 1.25\n");
+        fclose(f);
+        pond_config c;
+        config_defaults(&c);
+        check(config_load(&c, path) == 0 && c.grid == 128 && fabs(c.depth - 1.25) < 1e-12 && c.nlate == 0,
+              "a 2000-character config line is skipped whole; the lines round it still count");
+        remove(path);
     }
 
     /* --- every demo parses and runs through twice --- */

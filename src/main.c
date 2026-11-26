@@ -20,6 +20,7 @@
 #include "app.h"
 #include "param.h"
 #include "config.h"
+#include "version.h"
 #include "script.h"
 #include "record.h"
 #include "attract.h"
@@ -115,6 +116,7 @@ static void print_help(void)
          "  --bench N       run N headless frames of the CPU path, print timings, exit;  --snap F  save the last\n"
          "  --config F      read F instead of the default config file;  --no-config  ignore it\n"
          "  --write-config [F]  write the settings as a config file and exit\n"
+         "  --version       print the version and exit;  --help  this\n"
          "\n"
          "Settings come from built-in defaults, then the config file, then these options.\n"
          "The file is the first of $POND_CONFIG, $XDG_CONFIG_HOME/pond/pond.conf,\n"
@@ -611,7 +613,6 @@ static double breeze_speed(const app *a)
     return U < 1.0 ? 1.0 : (U > 20.0 ? 20.0 : U);
 }
 
-static double frand(void) { return (double)rand() / ((double)RAND_MAX + 1.0); }
 
 /* Gusts: patches a sixth to a third of the basin across, touching down anywhere upwind
  * of the far wall, drifting downwind (+x) at 0.6 of the wind speed, swelling and fading
@@ -638,14 +639,14 @@ static void gusts_step(app *a, double dts, wave_gusts *g)
     }
     a->ngust = n;
     /* touch down: keep at least two, sometimes up to four */
-    while (a->ngust < WAVE_NGUST && (a->ngust < 2 || (a->ngust < 4 && frand() < dts * 0.4))) {
+    while (a->ngust < WAVE_NGUST && (a->ngust < 2 || (a->ngust < 4 && app_rand(a) < dts * 0.4))) {
         const int i = a->ngust++;
-        a->gu_r[i] = L * (0.08 + 0.09 * frand());
-        a->gu_x[i] = -a->gu_r[i] + frand() * (0.8 * Lx + a->gu_r[i]);
-        a->gu_y[i] = frand() * Ly;
-        a->gu_a[i] = 0.8 + 0.8 * frand();
+        a->gu_r[i] = L * (0.08 + 0.09 * app_rand(a));
+        a->gu_x[i] = -a->gu_r[i] + app_rand(a) * (0.8 * Lx + a->gu_r[i]);
+        a->gu_y[i] = app_rand(a) * Ly;
+        a->gu_a[i] = 0.8 + 0.8 * app_rand(a);
         a->gu_age[i] = 0.0;
-        a->gu_life[i] = (0.6 + 0.7 * frand()) * (Lx + 2.0 * a->gu_r[i]) / v;
+        a->gu_life[i] = (0.6 + 0.7 * app_rand(a)) * (Lx + 2.0 * a->gu_r[i]) / v;
     }
     /* what the solver and the shading see: each swells and fades over its life */
     double s2 = 0.0;
@@ -699,15 +700,15 @@ static void apply_sources(app *a, double dts)
     }
     if (a->rain) {
         /* Poisson number of drops this frame */
-        double lam = a->rain_rate * dts, p = exp(-lam), u = rand() / (RAND_MAX + 1.0);
+        double lam = a->rain_rate * dts, p = exp(-lam), u = app_rand(a);
         int n = 0;
         while (u > p && n < 50) { u -= p; n++; p *= lam / n; }
         for (int i = 0; i < n; i++) {
             double x, y;
             do {
-                x = rand() / (RAND_MAX + 1.0) * w->Lx; y = rand() / (RAND_MAX + 1.0) * w->Ly;
+                x = app_rand(a) * w->Lx; y = app_rand(a) * w->Ly;
             } while (w->shape == WAVE_DISK && (x - w->R) * (x - w->R) + (y - w->R) * (y - w->R) > w->R * w->R);
-            double s = app_drop_size(a) * (0.5 + rand() / (RAND_MAX + 1.0));
+            double s = app_drop_size(a) * (0.5 + app_rand(a));
             app_splash(a, x, y, s, -0.15 * s);
         }
     }
@@ -960,14 +961,32 @@ static int bench(app *a, int frames, const char *snap)
 }
 
 #ifdef __EMSCRIPTEN__
-/* The browser passes no arguments.  A no-argument main also avoids clang's
- * __main_argc_argv rename, which Emscripten releases before ~3.1.8 (e.g. the
- * one Debian/Ubuntu package) do not know how to export. */
+/* A no-argument main avoids clang's __main_argc_argv rename, which Emscripten
+ * releases before ~3.1.8 (e.g. the one Debian/Ubuntu package) do not know how
+ * to export.  So the arguments the page builds from its address (web/shell.html:
+ * ?preset=sea&boat is --preset sea --boat) are fetched from Module.arguments
+ * here, one per line, and handed on as an ordinary argv. */
 static int pond_main(int argc, char **argv);
 int main(void)
 {
-    char *argv[] = { "pond", NULL };
-    return pond_main(1, argv);
+    enum { MAXARG = 128 };
+    static char *argv[MAXARG + 1];
+    int argc = 0;
+    argv[argc++] = "pond";
+    const char *js = emscripten_run_script_string(
+        "(Module.arguments || []).map(function (a) { return String(a).replace(/\\n/g, ' '); }).join('\\n')");
+    const size_t n = js ? strlen(js) : 0;
+    char *buf = malloc(n + 1);            /* kept for the life of the program, as argv is */
+    if (buf && n) {
+        memcpy(buf, js, n + 1);
+        for (char *p = buf; p && argc < MAXARG; ) {
+            argv[argc++] = p;
+            p = strchr(p, '\n');
+            if (p) *p++ = 0;
+        }
+    }
+    argv[argc] = NULL;
+    return pond_main(argc, argv);
 }
 #define POND_MAIN static int pond_main
 #else
@@ -1011,6 +1030,7 @@ POND_MAIN(int argc, char **argv)
         if (!strcmp(o, "--config") && i + 1 < argc) i++;                 /* handled above */
         else if (!strcmp(o, "--no-config")) ;                            /* handled above */
         else if (!strcmp(o, "--help") || !strcmp(o, "-h")) { print_help(); return 0; }
+        else if (!strcmp(o, "--version")) { printf("pond %s\n", POND_VERSION); return 0; }
         else if (!strcmp(o, "--write-config")) write_cfg = (i + 1 < argc && argv[i + 1][0] != '-') ? argv[++i] : config_path(1);
         else if (!strcmp(o, "--list-params")) list_params = 1;
         else if (!strcmp(o, "--bench") && i + 1 < argc) bench_frames = atoi(argv[++i]);
