@@ -113,6 +113,7 @@ typedef void          GLvoid;
 #define GL_NONE 0
 #define GL_TEXTURE2 0x84C2
 #define GL_TEXTURE3 0x84C3
+#define GL_TEXTURE4 0x84C4
 #define GL_DEPTH_COMPONENT 0x1902
 #define GL_DEPTH_COMPONENT24 0x81A6
 #define GL_DEPTH_ATTACHMENT 0x8D00

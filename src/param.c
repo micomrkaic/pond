@@ -85,6 +85,13 @@ int app_arrivals(app *a, int stream, double *wait, double expected)
     return n;
 }
 
+void app_break_step(app *a, double dts)
+{
+    wave_break(a->w, a->breaking ? a->break_slope : 0.0, dts);
+    const int pct = a->breaking ? (int)floor(100.0 * a->w->brk_frac + 0.5) + 1 : 0;   /* +1: on, nothing breaking */
+    if (pct != a->break_pct) { a->break_pct = pct; a->hud_dirty = 1; }
+}
+
 void app_rain_step(app *a, double dts)
 {
     if (!a->rain) return;
@@ -340,6 +347,8 @@ static void set_dims(app *a, double Lx, double Ly)
 S(s_width, set_dims(a, v, a->shape == WAVE_DISK ? v : a->w->Ly))
 S(s_length, set_dims(a, a->shape == WAVE_DISK ? v : a->w->Lx, v))
 G(g_hos, a->hos_on)                 S(s_hos, a->hos_on = v > 0.5)
+G(g_brk, a->breaking)               S(s_brk, a->breaking = v > 0.5)
+G(g_brk_s, a->break_slope)          S(s_brk_s, a->break_slope = v)
 G(g_damping, a->w->gamma0)          S(s_damping, wave_set_damping(a->w, v))
 G(g_warp, a->warp)                  S(s_warp, a->warp = v)
 
@@ -439,6 +448,8 @@ static const param params[] = {
     RM("length", "basin", "basin length, metres", 0.05, 1000, 1.05, 0, g_length, s_length),
     RM("depth", "basin",  "water depth, metres", 0.002, 5000, 1.1, 0, g_depth, s_depth),
     B("nonlinear", "basin", "the HOS correction (rectangle only)", g_hos, s_hos),
+    B("breaking", "basin",  "waves break where the surface is steeper than break-slope: damped there, and white with foam (key: B)", g_brk, s_brk),
+    RM("break-slope", "basin", "the surface slope breaking starts at (0.44 is the steepest a Stokes wave gets)", 0.05, 2, 1.1, 0, g_brk_s, s_brk_s),
     RM("damping", "basin", "extra uniform damping, 1/s", 0.0001, 10, 2.0, 0, g_damping, s_damping),
     RM("warp", "basin",   "simulated seconds per real second", 1.0 / 64, 64, 1.5, 0, g_warp, s_warp),
     /* sources */

@@ -87,6 +87,13 @@ typedef struct {
     /* cached breeze band: mode indices and weights */
     int *bz_idx; float *bz_w; int bz_n; double bz_k0; float bz_norm;
 
+    /* breaking (wave_break): where it happens, and the foam it leaves */
+    float *foam;               /* per grid cell, 0..1, like eta; NULL until breaking is first asked for */
+    float *bk_a, *bk_b, *bk_c; /* grid scratch */
+    int    foam_live;          /* 1 while any foam is left */
+    double brk_frac;           /* the fraction of the surface breaking, last call */
+    double brk_acc;            /* simulated time since the damping was last applied */
+
     dct_plan px, py;
     float *tmp;
     uint64_t rng;
@@ -165,6 +172,21 @@ void  wave_breeze(wave *w, double k0, double amp, double dt);
 typedef struct { int n; float base; float x[WAVE_NGUST], y[WAVE_NGUST], r[WAVE_NGUST], a[WAVE_NGUST]; } wave_gusts;
 void  wave_breeze_gusty(wave *w, double k0, double amp, double dt, const wave_gusts *g);
 double wave_gust_mask(const wave *w, const wave_gusts *g, double x, double y);   /* unnormalised */
+/* Breaking, as a stand-in: linear waves steepen without limit and never break, so
+ * where the realized surface (eta: call after wave_realize) is steeper than `slope`
+ * the water there is damped -- its height and its vertical velocity both, at up to
+ * WAVE_BREAK_RATE per second, ramping in over half as much again of slope -- and
+ * the energy goes, as in a spilling breaker.  The damping is queued as displacement
+ * and velocity sources, so it reaches the modes with the next wave_step, through the
+ * same transform as any other source; a calm surface costs one gradient pass and
+ * nothing more, and the damping (three transforms) is applied WAVE_BREAK_DT apart,
+ * for all the time since the last, rather than every frame.  Each breaking cell leaves foam (w->foam, 0..1, on the eta grid),
+ * which fades over WAVE_FOAM_LIFE seconds.  slope <= 0: no breaking, the foam just
+ * fades.  Returns the fraction of the surface breaking. */
+#define WAVE_BREAK_RATE 6.0
+#define WAVE_FOAM_LIFE  2.5
+#define WAVE_BREAK_DT   (1.0 / 15.0)   /* the damping goes in this often (simulated seconds), not every frame */
+double wave_break(wave *w, double slope, double dt);
 /* Set a single mode directly (tests). */
 void  wave_set_mode(wave *w, int m, int n, float a, float b);
 

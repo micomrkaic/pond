@@ -117,7 +117,14 @@ int config_set(pond_config *c, const char *k, const char *v)
     if (keyeq(k, "hos-nc"))       { int n = atoi(v); if (n > 0) c->hos_nc = n; return 0; }
     if (keyeq(k, "hos-order"))    { int n = atoi(v); if (n == 2 || n == 3) c->hos_order = n; return 0; }
     /* the basin it starts with: creation-time too, so the wave is built once */
-    if (keyeq(k, "preset"))       { int p = atoi(v) - 1; if (p >= 0 && p < 4) c->preset = p; return 0; }
+    if (keyeq(k, "preset")) {
+        /* 1..4, or the name the parameter table shows (--preset sea, ?preset=sea) */
+        static const char *const names[4] = { "tray", "pond", "pool", "sea" };
+        int p = atoi(v) - 1;
+        for (int i = 0; i < 4; i++) if (keyeq(v, names[i])) p = i;
+        if (p >= 0 && p < 4) c->preset = p;
+        return 0;
+    }
     if (keyeq(k, "shape"))        { c->shape = keyeq(v, "disk") ? WAVE_DISK : WAVE_RECT; return 0; }
     if (keyeq(k, "basin"))        { if (*v) as_pair(v, &c->Lx, &c->Ly); return 0; }
     if (keyeq(k, "width"))        { double x = atof(v); if (x > 0) { c->Lx = x; if (c->Ly <= 0) c->Ly = x; } return 0; }

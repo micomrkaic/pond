@@ -45,7 +45,7 @@ static app *make_app(int grid)
     app *a = calloc(1, sizeof *a);
     a->nx = a->ny = grid;
     a->running = 1;
-    a->warp = 1.0; a->rain_rate = 2.0;
+    a->warp = 1.0; a->rain_rate = 2.0; a->break_slope = 0.15;
     a->paddle_div = 8.0; a->paddle_pos = 0.5; a->paddle_span = 1.0;
     a->paddle_gain = a->breeze_gain = a->finger_gain = 1.0;
     a->volume = 0.7;
@@ -312,8 +312,35 @@ int main(void)
         check(abs(arrivals - 1000) < 130, what);
     }
 
+    /* --- breaking: a parameter the key toggles, a script sets, and the frame applies --- */
+    {
+        char err[256];
+        app *a = make_app(64);
+        check(param_get(a, "breaking") == 0 && fabs(param_get(a, "break-slope") - 0.15) < 1e-12, "breaking starts off, at slope 0.15");
+        param_nudge(a, "breaking", 0);
+        check(param_get(a, "breaking") == 1, "the key's nudge turns it on");
+        param_nudge(a, "breaking", 0);
+        a->sc = script_parse("at 0 breaking on  break-slope 0.1\nat 1 end\n", "brk", err, sizeof err);
+        script_start(a->sc, a);
+        run(a, 0.1, 0.05);
+        check(a->breaking == 1 && fabs(a->break_slope - 0.1) < 1e-12, "a script turns it on and sets the slope");
+        /* a big drop in a small pond, with the frame's breaking step: it foams, and the HUD hears of it */
+        wave_add_drop(a->w, 0.5 * a->w->Lx, 0.5 * a->w->Ly, 0.06 * a->w->Lx, 0.06 * a->w->Lx);
+        int foamed = 0;
+        for (int f = 0; f < 30; f++) { wave_step(a->w, 1.0 / 240.0, 4); wave_realize(a->w); app_break_step(a, 1.0 / 60.0); foamed |= a->w->foam_live; }
+        check(foamed && a->hud_dirty, "app_break_step breaks a big splash, and marks the HUD");
+        free_app(a);
+    }
+
     /* --- the config file: an overlong line is reported and skipped, the next still read --- */
     {
+        pond_config c0;
+        config_defaults(&c0);
+        config_set(&c0, "preset", "sea");
+        const int by_name = c0.preset;
+        config_set(&c0, "preset", "2");
+        check(by_name == 3 && c0.preset == 1, "a preset by name (sea) or by number (2), as the table shows them");
+
         const char *path = "build/test-long.conf";
         FILE *f = fopen(path, "w");
         fprintf(f, "grid = 128\nhud = ");

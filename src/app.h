@@ -64,6 +64,9 @@ typedef struct app {
     int shape;                 /* WAVE_RECT or WAVE_DISK */
     hos *hs;                   /* nonlinear correction (rectangle only) */
     int hos_on, hos_nc, hos_order, hos_skipped;
+    int    breaking;           /* wave_break on: steep water is damped and foams */
+    double break_slope;        /* the slope it starts at */
+    int    break_pct;          /* the percentage breaking the HUD last showed */
     audio *au;                 /* NULL when there is no audio device or --no-audio */
     double volume; int mute;   /* shadowed, so they survive having no device */
     double knob[SND_NUM];
@@ -169,5 +172,6 @@ void  app_seed(app *a, int seed);                 /* restart every stream from t
  * (rate x time): how many, drawing waits from `stream` and keeping the remainder in *wait */
 int   app_arrivals(app *a, int stream, double *wait, double expected);
 void  app_rain_step(app *a, double dts);          /* this frame's raindrops */
+void  app_break_step(app *a, double dts);         /* after wave_realize: breaking and foam, this frame */
 
 #endif
