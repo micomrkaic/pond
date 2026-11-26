@@ -12,3 +12,9 @@ pond-*.png
 .DS_Store
 # shows recorded with enter or --record
 pond-rec-*.pond
+# the browser smoke test and the fuzzer
+/node_modules/
+crash-*
+leak-*
+timeout-*
+oom-*

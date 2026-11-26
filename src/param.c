@@ -49,14 +49,26 @@ wave *app_make_wave(int shape, int grid, double Lx, double Ly, double depth)
 double app_boat_len(const app *a) { return sqrt(a->w->Lx * a->w->Ly) / 12.0; }
 double app_boat_speed(const app *a) { return a->boat_froude * sqrt(a->w->g * app_boat_len(a)); }
 
+double app_rand(app *a)
+{
+    /* splitmix64 (Steele, Lea & Flood 2014): a counter through a mixer */
+    uint64_t z = (a->rng += 0x9E3779B97F4A7C15ull);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    z ^= z >> 31;
+    return (double)(z >> 11) * 0x1.0p-53;
+}
+
+void app_seed(app *a, uint64_t seed) { a->rng = seed; }
+
 void app_add_float(app *a)
 {
     if (a->nfloat >= NFLOAT_MAX) return;
     const wave *w = a->w;
     double x, y;
     do {
-        x = (0.15 + 0.7 * rand() / (RAND_MAX + 1.0)) * w->Lx;
-        y = (0.15 + 0.7 * rand() / (RAND_MAX + 1.0)) * w->Ly;
+        x = (0.15 + 0.7 * app_rand(a)) * w->Lx;
+        y = (0.15 + 0.7 * app_rand(a)) * w->Ly;
     } while (w->shape == WAVE_DISK && (x - w->R) * (x - w->R) + (y - w->R) * (y - w->R) > 0.5 * w->R * w->R);
     a->fl_x[a->nfloat] = x; a->fl_y[a->nfloat] = y;
     a->fl_vx[a->nfloat] = a->fl_vy[a->nfloat] = 0;
@@ -211,7 +223,7 @@ void app_splash(app *a, double x, double y, double s, double amp)
  * a second, scaled to the basin so it can be seen through the glass */
 void app_bubble(app *a, double x, double y, double s)
 {
-    int i = a->nbub < NBUB_MAX ? a->nbub++ : (int)(rand() % NBUB_MAX);
+    int i = a->nbub < NBUB_MAX ? a->nbub++ : (int)(app_rand(a) * NBUB_MAX);
     a->bub_x[i] = x; a->bub_y[i] = y;
     a->bub_r[i] = s / 3.0;
     a->bub_d[i] = 2.5 * a->bub_r[i] + 0.5 * s;

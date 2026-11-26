@@ -74,7 +74,7 @@ static int add_dir(attract *at, const char *dir, const char *prefix)
         if (push_file(at, path) != 0) break;
     }
     closedir(d);
-    qsort(at->files + first, (size_t)(at->n - first), sizeof *at->files, by_name);
+    if (at->n > first) qsort(at->files + first, (size_t)(at->n - first), sizeof *at->files, by_name);
     return at->n - first;
 }
 

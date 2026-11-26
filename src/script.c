@@ -22,6 +22,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <string.h>
 
 typedef enum { A_SET, A_DROP, A_CLEAR, A_CAMERA, A_SAY, A_LOOP, A_END, A_BOAT, A_FLOAT, A_JOLT, A_FINGER } action_kind;
@@ -140,9 +141,11 @@ static void fail(char *err, size_t errn, const char *name, int line, const char 
     else      snprintf(err, errn, "%s:%d: %s", name, line, msg);
 }
 
-script *script_parse(const char *text, const char *name, char *err, size_t errn)
+/* the parser proper; line and tok are scratch big enough for the longest line
+ * (maxlen characters) and every word on it, so no line is ever cut short */
+static script *parse(const char *text, const char *name, char *err, size_t errn,
+                     char *line, char **tok, int maxtok)
 {
-    if (err && errn) err[0] = 0;
     script *s = calloc(1, sizeof *s);
     if (!s) return NULL;
     snprintf(s->name, sizeof s->name, "%s", name ? name : "script");
@@ -152,17 +155,14 @@ script *script_parse(const char *text, const char *name, char *err, size_t errn)
     const char *p = text;
     while (*p) {
         const char *nl = strchr(p, '\n');
-        size_t len = nl ? (size_t)(nl - p) : strlen(p);
-        char line[512];
-        if (len >= sizeof line) len = sizeof line - 1;
+        const size_t len = nl ? (size_t)(nl - p) : strlen(p);
         memcpy(line, p, len); line[len] = 0;
         p += len + (nl ? 1 : 0);
         lineno++;
 
         char *hash = strchr(line, '#');
         if (hash) *hash = 0;
-        char *tok[64];
-        int n = tokenize(line, tok, 64);
+        int n = tokenize(line, tok, maxtok);
         if (n < 0) { fail(err, errn, s->name, lineno, "too many words on one line", NULL); script_free(s); return NULL; }
         if (n == 0) continue;
 
@@ -255,6 +255,28 @@ script *script_parse(const char *text, const char *name, char *err, size_t errn)
     return s;
 }
 
+script *script_parse(const char *text, const char *name, char *err, size_t errn)
+{
+    if (err && errn) err[0] = 0;
+    if (!text) text = "";
+    /* the longest line sizes the scratch: a line of L characters holds at most
+     * L/2 + 1 words (each word a character and a separator) */
+    size_t maxlen = 0;
+    for (const char *p = text; *p; ) {
+        const char *nl = strchr(p, '\n');
+        const size_t len = nl ? (size_t)(nl - p) : strlen(p);
+        if (len > maxlen) maxlen = len;
+        p += len + (nl ? 1 : 0);
+    }
+    const size_t maxtok = maxlen / 2 + 1;
+    if (maxtok > INT_MAX) return NULL;
+    char *line = malloc(maxlen + 1);
+    char **tok = malloc(maxtok * sizeof *tok);
+    script *s = line && tok ? parse(text, name, err, errn, line, tok, (int)maxtok) : NULL;
+    free(line); free(tok);
+    return s;
+}
+
 script *script_load(const char *path, char *err, size_t errn)
 {
     FILE *f = fopen(path, "rb");
@@ -328,7 +350,7 @@ static void run_action(script *s, app *a, const action *ac)
         double x, y;
         if (ac->random) {
             do {
-                x = rand() / (RAND_MAX + 1.0) * w->Lx; y = rand() / (RAND_MAX + 1.0) * w->Ly;
+                x = app_rand(a) * w->Lx; y = app_rand(a) * w->Ly;
             } while (w->shape == WAVE_DISK && (x - w->R) * (x - w->R) + (y - w->R) * (y - w->R) > 0.9 * w->R * w->R);
         } else { x = ac->x * w->Lx; y = ac->y * w->Ly; }
         const double sz = ac->size * sqrt(w->Lx * w->Ly);

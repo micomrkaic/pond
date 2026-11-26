@@ -125,6 +125,10 @@ typedef struct app {
     int    at_moved;           /* pixels the mouse has moved since then */
     int in_script;             /* set while the script itself is applying parameters */
     char caption[160];         /* what the script says, shown under the HUD */
+    /* the one random stream the simulation draws on (rain, gusts, random drops,
+     * where a float goes in): splitmix64, so any state, zero included, is a good
+     * seed.  Setting it replays the same randomness; the sound has its own. */
+    uint64_t rng;
 } app;
 
 struct script;
@@ -151,5 +155,7 @@ double app_drop_size(const app *a);         /* a raindrop's crater width, metres
 void  app_finger(app *a, double x, double y, double dts);   /* a finger through the water at x, y metres, this frame */
 void  app_jolt(app *a, double dux, double duy);   /* shove the basin by that velocity, over 0.4 of the seiche period */
 void  app_jolt_step(app *a, double dts);          /* the slice of it that falls in this frame */
+double app_rand(app *a);                          /* uniform in [0, 1), from a->rng */
+void  app_seed(app *a, uint64_t seed);            /* restart that stream */
 
 #endif

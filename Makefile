@@ -25,8 +25,11 @@ SDL_CFLAGS := $(shell sdl2-config --cflags 2>/dev/null)
 SDL_LIBS   := $(shell sdl2-config --libs 2>/dev/null)
 
 SRC  := src/main.c src/param.c src/config.c src/script.c src/wave.c src/disk.c src/hos.c src/dct.c src/render.c src/view3d.c src/text.c src/audio.c src/dsp.c src/record.c src/attract.c
-HDR  := src/app.h src/param.h src/config.h src/script.h src/wave.h src/dct.h src/hos.h src/render.h src/view3d.h src/text.h src/gl.h src/font8x8.h src/audio.h src/dsp.h src/record.h src/attract.h
+HDR  := src/app.h src/param.h src/config.h src/script.h src/wave.h src/dct.h src/hos.h src/render.h src/view3d.h src/text.h src/gl.h src/font8x8.h src/audio.h src/dsp.h src/record.h src/attract.h src/version.h
 BIN  := pond
+# where the tests are built; `make sanitize` uses build/asan, so it leaves these alone
+B    := build
+VERSION := $(shell sed -n 's/^\#define POND_VERSION "\(.*\)"/\1/p' src/version.h)
 
 EMCC       ?= emcc
 # Fixed heap, no growth: growable memory gives the runtime a resizable
@@ -38,45 +41,83 @@ EMFLAGS    ?= -std=c17 -O3 -msimd128 -sUSE_SDL=2 -sMIN_WEBGL_VERSION=2 -sMAX_WEB
               --preload-file demos
 WEB_DIR    := build/web
 
-.PHONY: all web test bench clean
+.PHONY: all web test bench clean sanitize fuzz dist bindist
 
 all: $(BIN)
 
 $(BIN): $(SRC) $(HDR)
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -o $@ $(SRC) $(SDL_LIBS) $(LDLIBS)
 
-test: build/test_dct build/test_wave build/test_disk build/test_hos build/test_paddle build/test_script $(BIN)
-	./build/test_dct
-	./build/test_wave
-	./build/test_disk
-	./build/test_hos
-	./build/test_paddle
-	./build/test_script
+test: $(B)/test_dct $(B)/test_wave $(B)/test_disk $(B)/test_hos $(B)/test_paddle $(B)/test_script $(BIN)
+	./$(B)/test_dct
+	./$(B)/test_wave
+	./$(B)/test_disk
+	./$(B)/test_hos
+	./$(B)/test_paddle
+	./$(B)/test_script
 	sh tests/test_man.sh ./$(BIN) pond.1
 
-build/test_script: tests/test_script.c src/param.c src/script.c src/record.c src/attract.c src/wave.c src/disk.c src/hos.c src/dct.c src/render.c src/view3d.c src/text.c src/audio.c src/dsp.c src/app.h src/param.h src/script.h src/record.h src/attract.h
-	@mkdir -p build
-	$(CC) $(CFLAGS) $(SDL_CFLAGS) -o $@ tests/test_script.c src/param.c src/script.c src/record.c src/attract.c src/wave.c src/disk.c src/hos.c src/dct.c src/render.c src/view3d.c src/text.c src/audio.c src/dsp.c $(SDL_LIBS) $(LDLIBS)
+$(B)/test_script: tests/test_script.c src/config.c src/param.c src/script.c src/record.c src/attract.c src/wave.c src/disk.c src/hos.c src/dct.c src/render.c src/view3d.c src/text.c src/audio.c src/dsp.c src/app.h src/param.h src/config.h src/script.h src/record.h src/attract.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) -o $@ tests/test_script.c src/config.c src/param.c src/script.c src/record.c src/attract.c src/wave.c src/disk.c src/hos.c src/dct.c src/render.c src/view3d.c src/text.c src/audio.c src/dsp.c $(SDL_LIBS) $(LDLIBS)
 
-build/test_paddle: tests/test_paddle.c src/wave.c src/disk.c src/dct.c src/wave.h src/dct.h
-	@mkdir -p build
+$(B)/test_paddle: tests/test_paddle.c src/wave.c src/disk.c src/dct.c src/wave.h src/dct.h
+	@mkdir -p $(B)
 	$(CC) $(CFLAGS) -o $@ tests/test_paddle.c src/wave.c src/disk.c src/dct.c $(LDLIBS)
 
-build/test_hos: tests/test_hos.c src/hos.c src/wave.c src/disk.c src/dct.c src/hos.h src/wave.h src/dct.h
-	@mkdir -p build
+$(B)/test_hos: tests/test_hos.c src/hos.c src/wave.c src/disk.c src/dct.c src/hos.h src/wave.h src/dct.h
+	@mkdir -p $(B)
 	$(CC) $(CFLAGS) -o $@ tests/test_hos.c src/hos.c src/wave.c src/disk.c src/dct.c $(LDLIBS)
 
-build/test_disk: tests/test_disk.c src/wave.c src/disk.c src/dct.c src/wave.h src/dct.h
-	@mkdir -p build
+$(B)/test_disk: tests/test_disk.c src/wave.c src/disk.c src/dct.c src/wave.h src/dct.h
+	@mkdir -p $(B)
 	$(CC) $(CFLAGS) -o $@ tests/test_disk.c src/wave.c src/disk.c src/dct.c $(LDLIBS)
 
-build/test_dct: tests/test_dct.c src/dct.c src/dct.h
-	@mkdir -p build
+$(B)/test_dct: tests/test_dct.c src/dct.c src/dct.h
+	@mkdir -p $(B)
 	$(CC) $(CFLAGS) -o $@ tests/test_dct.c src/dct.c $(LDLIBS)
 
-build/test_wave: tests/test_wave.c src/wave.c src/disk.c src/dct.c src/wave.h src/dct.h
-	@mkdir -p build
+$(B)/test_wave: tests/test_wave.c src/wave.c src/disk.c src/dct.c src/wave.h src/dct.h
+	@mkdir -p $(B)
 	$(CC) $(CFLAGS) -o $@ tests/test_wave.c src/wave.c src/disk.c src/dct.c $(LDLIBS)
+
+# the tests again, built with AddressSanitizer and UndefinedBehaviorSanitizer
+# (leaks included on Linux), into build/asan; any finding stops the run.  CI runs this.
+SAN_FLAGS := -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer
+sanitize:
+	UBSAN_OPTIONS=print_stacktrace=1 $(MAKE) test B=build/asan BIN=build/asan/pond \
+	  CFLAGS="-std=c17 -O1 -g -Wall -Wextra -Wpedantic $(SAN_FLAGS)" LDLIBS="-lm $(SAN_FLAGS)"
+
+# the script and config parsers under libFuzzer (needs clang): shows are files people
+# swap, so a malformed one should be an error message, never a crash.  The demos seed
+# the corpus; new inputs that reach new code collect in build/fuzz-corpus.
+FUZZCC    ?= clang
+FUZZ_TIME ?= 60
+fuzz: $(B)/fuzz_parse
+	@mkdir -p $(B)/fuzz-corpus
+	./$(B)/fuzz_parse -max_total_time=$(FUZZ_TIME) -max_len=8192 -timeout=10 $(B)/fuzz-corpus demos
+
+$(B)/fuzz_parse: tests/fuzz_parse.c src/config.c src/param.c src/script.c src/record.c src/attract.c src/wave.c src/disk.c src/hos.c src/dct.c src/render.c src/view3d.c src/text.c src/audio.c src/dsp.c $(HDR)
+	@mkdir -p $(B)
+	$(FUZZCC) -std=c17 -O1 -g -fsanitize=fuzzer,address,undefined $(SDL_CFLAGS) -o $@ tests/fuzz_parse.c src/config.c src/param.c src/script.c src/record.c src/attract.c src/wave.c src/disk.c src/hos.c src/dct.c src/render.c src/view3d.c src/text.c src/audio.c src/dsp.c $(SDL_LIBS) -lm
+
+# a source tarball of what is committed, and a binary one of this machine's build
+# (the program, its manual, the demos), named for the version and the platform;
+# the release workflow attaches both to a GitHub release when a tag v$(VERSION) is pushed
+PLATFORM := $(shell uname -s | tr A-Z a-z)-$(shell uname -m)
+dist:
+	@mkdir -p build
+	git archive --format=tar.gz --prefix=pond-$(VERSION)/ -o build/pond-$(VERSION).tar.gz HEAD
+	@echo build/pond-$(VERSION).tar.gz
+
+bindist: $(BIN)
+	rm -rf build/pond-$(VERSION)-$(PLATFORM)
+	mkdir -p build/pond-$(VERSION)-$(PLATFORM)/demos
+	cp $(BIN) pond.1 README.md LICENSE build/pond-$(VERSION)-$(PLATFORM)/
+	cp demos/*.pond build/pond-$(VERSION)-$(PLATFORM)/demos/
+	tar -C build -czf build/pond-$(VERSION)-$(PLATFORM).tar.gz pond-$(VERSION)-$(PLATFORM)
+	@echo build/pond-$(VERSION)-$(PLATFORM).tar.gz
 
 # headless timing; needs no display
 bench: $(BIN)
@@ -102,12 +143,10 @@ web: $(SRC) $(HDR) web/shell.html
 clean:
 	rm -rf $(BIN) build pond-*.bmp
 
-# Install/uninstall targets for a C project, portable to GNU make 3.81 (macOS)
-# and BSD/GNU install(1). Paste into the project's Makefile and set PROG.
+# Install / uninstall, portable to GNU make 3.81 (macOS) and BSD/GNU install(1).
 #
-#   make install                         -> ~/.local/bin/PROG
+#   make install                         -> ~/.local/bin/pond
 #   make install PREFIX=/usr/local       -> system-wide (with sudo)
-#   app-install                          -> ~/.local/stow/PROG, stowed into ~/.local
 #
 # Command-line PREFIX overrides the ?= default. DESTDIR is for packagers.
 

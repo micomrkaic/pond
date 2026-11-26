@@ -28,6 +28,10 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     make install    # ~/.local/bin/pond and its manual;  PREFIX=/usr/local (with sudo) for everyone
     man ./pond.1    # the manual, before it is installed
     make uninstall
+    make sanitize   # the tests again under ASan + UBSan, built in build/asan/
+    make fuzz       # a minute of libFuzzer on the script and config parsers (clang)
+    make dist       # source tarball of HEAD;  make bindist: this platform's binary, manual, demos
+    ./pond --version
 
     ./pond                                 # 512^2 grid, 1280x800 window, "pond" preset
     ./pond --basin 25x12 --depth 1.8       # any rectangle, in metres
@@ -59,7 +63,7 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
 
 In the browser the grid defaults to 256^2; append `?grid=512` to the URL for
 the finer mesh (single-threaded WASM, so budget accordingly; 512 is the cap,
-the heap is fixed at 128 MB). `make web
+the heap is fixed at 160 MB). `make web
 WEB_DIR=docs` puts the build where GitHub Pages can serve it from `/docs`.
 With Debian's or Ubuntu's emscripten package, whose cache under
 `/usr/share/emscripten` is read-only, `make web` copies that cache once to
@@ -1182,7 +1186,21 @@ map with additive blending, which is the same forward map).
   grid, not an addition to this one.
 - **The OS screen-saver hooks** for the attract mode: a macOS `.saver`
   bundle, an XScreenSaver entry. `pond --attract` is the program they would
-  start.
+  start, and the release tarballs (see Development) are what they would wrap.
+- **Repeatable shows**: everything random in the simulation — rain, gusts,
+  random drops, where a float goes in — draws on one stream, `app_rand`, whose
+  state is `app->rng` (`app_seed` restarts it). A `seed` parameter, set at the
+  top of a recording, is all that stands between a replay of the same show
+  and a replay of the same frames; `tests/test_script.c` already checks that
+  one seed gives one outcome. The sound keeps its own stream, on its own thread.
+- **Packaging**: tagged releases carry tarballs for Linux and macOS, which a
+  Homebrew formula or a distribution package can be written against; both
+  still need SDL2 from the system.
+- **Pages from CI**: the `web` job builds the browser version with a pinned
+  emsdk, starts it in headless Chromium, and keeps the build as an artifact.
+  Pointing Pages at GitHub Actions (Settings → Pages → Source) and adding a
+  deploy step would retire the committed `docs/` and the extra
+  "Web build" commit per release.
 
 ## Layout
 
@@ -1202,18 +1220,49 @@ map with additive blending, which is the same forward map).
     src/dsp.[ch]      noise-suite synthesis library, unchanged
     src/render.[ch]   top-down CPU shading (--2d)
     src/main.c        SDL2 window, input, timing, bench, Emscripten loop
-    tests/            dct, wave, disk, hos, paddle, script and manual tests (run with `make test`)
+    src/version.h     the version, in one place
+    tests/            dct, wave, disk, hos, paddle, script and manual tests (run with `make test`);
+                      fuzz_parse.c (make fuzz) and web_smoke.js (the browser build, headless)
+    .github/          CI (ci.yml) and releases on a v* tag (release.yml)
     pond.1            the manual: options, parameters, keys, scripts, files
     web/shell.html    Emscripten shell
 
 The 3-D path was exercised under Xvfb with Mesa's llvmpipe (OpenGL 4.5 core).
-The web build compiles cleanly with Emscripten 3.1.6 (WebGL2, same GLSL with a
-`#version 300 es` header) but has not been run in a browser here.
+The web build compiles cleanly with Emscripten 3.1.6 and with emsdk 3.1.74
+(WebGL2, same GLSL with a `#version 300 es` header), and CI starts it in a
+headless Chromium on every push (`tests/web_smoke.js`).
 
-Emscripten notes: emsdk is the easy route. The Debian/Ubuntu `emscripten`
-package ships a frozen cache without the SDL2 port; `make web` copies it to
+Emscripten notes: emsdk is the easy route. Ubuntu 24.04's `emscripten`
+package (3.1.6) can no longer fetch its SDL2 port at all — GitHub's archive
+of that SDL release no longer matches the hash it expects — unless the port
+is already in its cache. That package also ships a frozen cache without the SDL2 port; `make web` copies it to
 `~/.cache/emscripten` and unfreezes the copy (see Build). `-sMINIFY_HTML=0` is in the Makefile because that package's
 HTML minifier is broken with current Node.
+
+## Development
+
+CI (`.github/workflows/ci.yml`) runs on every push and pull request:
+
+| job | what |
+|---|---|
+| `linux`, `macos` | `make` and `make test` |
+| `sanitize` | `make sanitize`: every test under AddressSanitizer (leaks included) and UndefinedBehaviorSanitizer; the first finding fails |
+| `fuzz` | `make fuzz FUZZ_TIME=60`: libFuzzer on `script_parse` and `config_set`, the corpus seeded from `demos/`; a crashing input is kept as an artifact |
+| `web` | `make web` with emsdk 3.1.74, then `tests/web_smoke.js`: the page gets a WebGL2 context, builds the scene, takes `?attract` as `--attract`, and logs no errors; the build and a screenshot are kept as an artifact |
+
+To run the browser check locally:
+
+    make web && npm i --no-save playwright && npx playwright install chromium
+    node tests/web_smoke.js build/web shot.png
+
+Releases: bump `POND_VERSION` in `src/version.h` and the `.TH` line of
+`pond.1` together (`make test` checks they agree), commit, then
+
+    git tag v0.43 && git push origin v0.43
+
+and `.github/workflows/release.yml` checks the tag against the version,
+builds and tests on Linux and macOS, and publishes a GitHub release with the
+source tarball (`make dist`) and one binary tarball per platform (`make bindist`).
 
 ## License
 
