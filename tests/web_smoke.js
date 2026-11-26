@@ -31,7 +31,7 @@ const server = http.createServer((req, res) => {
 
 (async () => {
   await new Promise(r => server.listen(0, '127.0.0.1', r));
-  const url = `http://127.0.0.1:${server.address().port}/?attract&preset=pool`;
+  const url = `http://127.0.0.1:${server.address().port}/?attract&preset=pool&grid=128`;
   const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   const logs = [], errors = [];
@@ -44,7 +44,9 @@ const server = http.createServer((req, res) => {
   await page.waitForTimeout(2000);
   await page.mouse.click(640, 450);
   await page.waitForTimeout(1000);
-  if (shot) await page.screenshot({ path: shot });
+  // a picture for a person to look at, not a check: software GL on a small CI
+  // runner can be too busy to hand one over in time, and that is no failure
+  if (shot) await page.screenshot({ path: shot, timeout: 15000 }).catch(e => console.log('no screenshot: ' + e.message.split('\n')[0]));
   await browser.close();
   server.close();
 
