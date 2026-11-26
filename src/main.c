@@ -639,14 +639,18 @@ static void gusts_step(app *a, double dts, wave_gusts *g)
     }
     a->ngust = n;
     /* touch down: keep at least two, sometimes up to four */
-    while (a->ngust < WAVE_NGUST && (a->ngust < 2 || (a->ngust < 4 && app_rand(a) < dts * 0.4))) {
+    /* extra touchdowns arrive at 0.4 a second, in simulated time; one that finds four
+     * already down is let go.  Timing and content are separate streams (see app.rng). */
+    int extra = app_arrivals(a, RNG_GUST_T, &a->gust_wait, 0.4 * dts);
+    while (a->ngust < WAVE_NGUST && (a->ngust < 2 || (extra > 0 && a->ngust < 4))) {
+        if (a->ngust >= 2) extra--;
         const int i = a->ngust++;
-        a->gu_r[i] = L * (0.08 + 0.09 * app_rand(a));
-        a->gu_x[i] = -a->gu_r[i] + app_rand(a) * (0.8 * Lx + a->gu_r[i]);
-        a->gu_y[i] = app_rand(a) * Ly;
-        a->gu_a[i] = 0.8 + 0.8 * app_rand(a);
+        a->gu_r[i] = L * (0.08 + 0.09 * app_rand(a, RNG_GUST));
+        a->gu_x[i] = -a->gu_r[i] + app_rand(a, RNG_GUST) * (0.8 * Lx + a->gu_r[i]);
+        a->gu_y[i] = app_rand(a, RNG_GUST) * Ly;
+        a->gu_a[i] = 0.8 + 0.8 * app_rand(a, RNG_GUST);
         a->gu_age[i] = 0.0;
-        a->gu_life[i] = (0.6 + 0.7 * app_rand(a)) * (Lx + 2.0 * a->gu_r[i]) / v;
+        a->gu_life[i] = (0.6 + 0.7 * app_rand(a, RNG_GUST)) * (Lx + 2.0 * a->gu_r[i]) / v;
     }
     /* what the solver and the shading see: each swells and fades over its life */
     double s2 = 0.0;
@@ -698,20 +702,7 @@ static void apply_sources(app *a, double dts)
             rec_finger(a->rec, a, x, y);
         }
     }
-    if (a->rain) {
-        /* Poisson number of drops this frame */
-        double lam = a->rain_rate * dts, p = exp(-lam), u = app_rand(a);
-        int n = 0;
-        while (u > p && n < 50) { u -= p; n++; p *= lam / n; }
-        for (int i = 0; i < n; i++) {
-            double x, y;
-            do {
-                x = app_rand(a) * w->Lx; y = app_rand(a) * w->Ly;
-            } while (w->shape == WAVE_DISK && (x - w->R) * (x - w->R) + (y - w->R) * (y - w->R) > w->R * w->R);
-            double s = app_drop_size(a) * (0.5 + app_rand(a));
-            app_splash(a, x, y, s, -0.15 * s);
-        }
-    }
+    app_rain_step(a, dts);
     if (a->paddle) {
         /* A wavemaker run at constant speed rather than constant stroke: peak velocity
          * u0, so the stroke is u0/omega, longest at the low frequencies, and the
@@ -1098,6 +1089,7 @@ POND_MAIN(int argc, char **argv)
     a.shape = cfg.shape;
     a.hos_nc = cfg.hos_nc; a.hos_order = cfg.hos_order;
     if (cfg.shape == WAVE_DISK && !cfg.mode3d) { fprintf(stderr, "the disk basin needs the 3-D view\n"); return 1; }
+    app_seed(&a, 0);                         /* every stream, before anything draws on one */
     a.w = app_make_wave(cfg.shape, cfg.grid, presets[cfg.preset].L, presets[cfg.preset].L, presets[cfg.preset].depth);
     if (!a.pix || !a.w) { fprintf(stderr, "out of memory\n"); return 1; }
     a.preset = cfg.preset;

@@ -49,17 +49,58 @@ wave *app_make_wave(int shape, int grid, double Lx, double Ly, double depth)
 double app_boat_len(const app *a) { return sqrt(a->w->Lx * a->w->Ly) / 12.0; }
 double app_boat_speed(const app *a) { return a->boat_froude * sqrt(a->w->g * app_boat_len(a)); }
 
-double app_rand(app *a)
+static uint64_t mix64(uint64_t z)
 {
-    /* splitmix64 (Steele, Lea & Flood 2014): a counter through a mixer */
-    uint64_t z = (a->rng += 0x9E3779B97F4A7C15ull);
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-    z ^= z >> 31;
+    return z ^ (z >> 31);
+}
+
+double app_rand(app *a, int stream)
+{
+    /* splitmix64 (Steele, Lea & Flood 2014): a counter through a mixer */
+    const uint64_t z = mix64(a->rng[stream] += 0x9E3779B97F4A7C15ull);
     return (double)(z >> 11) * 0x1.0p-53;
 }
 
-void app_seed(app *a, uint64_t seed) { a->rng = seed; }
+void app_seed(app *a, int seed)
+{
+    /* each stream starts at a scrambled (seed, stream) pair: far apart on the counter */
+    a->seed = seed;
+    for (int k = 0; k < RNG_N; k++) a->rng[k] = mix64(((uint64_t)(uint32_t)seed << 8 | (uint64_t)k) + 0x632BE59BD9B4E019ull);
+    a->rain_wait = a->gust_wait = 0.0;
+}
+
+int app_arrivals(app *a, int stream, double *wait, double expected)
+{
+    int n = 0;
+    if (!(expected > 0.0)) return 0;
+    if (*wait <= 0.0) *wait = -log(1.0 - app_rand(a, stream));
+    while (*wait <= expected) {
+        expected -= *wait;
+        *wait = -log(1.0 - app_rand(a, stream));
+        n++;
+    }
+    *wait -= expected;
+    return n;
+}
+
+void app_rain_step(app *a, double dts)
+{
+    if (!a->rain) return;
+    const wave *w = a->w;
+    const int n = app_arrivals(a, RNG_RAIN_T, &a->rain_wait, a->rain_rate * dts);
+    for (int i = 0; i < n; i++) {
+        double x, y;
+        do {
+            x = app_rand(a, RNG_RAIN) * w->Lx; y = app_rand(a, RNG_RAIN) * w->Ly;
+        } while (w->shape == WAVE_DISK && (x - w->R) * (x - w->R) + (y - w->R) * (y - w->R) > w->R * w->R);
+        const double s = app_drop_size(a) * (0.5 + app_rand(a, RNG_RAIN));
+        /* a frame too long to show them all (a stall at high warp) still draws them,
+         * so the drops after it are the ones the seed would have given */
+        if (i < 50) app_splash(a, x, y, s, -0.15 * s);
+    }
+}
 
 void app_add_float(app *a)
 {
@@ -67,8 +108,8 @@ void app_add_float(app *a)
     const wave *w = a->w;
     double x, y;
     do {
-        x = (0.15 + 0.7 * app_rand(a)) * w->Lx;
-        y = (0.15 + 0.7 * app_rand(a)) * w->Ly;
+        x = (0.15 + 0.7 * app_rand(a, RNG_MISC)) * w->Lx;
+        y = (0.15 + 0.7 * app_rand(a, RNG_MISC)) * w->Ly;
     } while (w->shape == WAVE_DISK && (x - w->R) * (x - w->R) + (y - w->R) * (y - w->R) > 0.5 * w->R * w->R);
     a->fl_x[a->nfloat] = x; a->fl_y[a->nfloat] = y;
     a->fl_vx[a->nfloat] = a->fl_vy[a->nfloat] = 0;
@@ -223,7 +264,7 @@ void app_splash(app *a, double x, double y, double s, double amp)
  * a second, scaled to the basin so it can be seen through the glass */
 void app_bubble(app *a, double x, double y, double s)
 {
-    int i = a->nbub < NBUB_MAX ? a->nbub++ : (int)(app_rand(a) * NBUB_MAX);
+    int i = a->nbub < NBUB_MAX ? a->nbub++ : (int)(app_rand(a, RNG_MISC) * NBUB_MAX);
     a->bub_x[i] = x; a->bub_y[i] = y;
     a->bub_r[i] = s / 3.0;
     a->bub_d[i] = 2.5 * a->bub_r[i] + 0.5 * s;
@@ -371,6 +412,9 @@ G(g_mute, a->mute)                  S(s_mute, { a->mute = v > 0.5; if (a->au) au
     G(g_##nm, a->knob[K]) S(s_##nm, { a->knob[K] = v; if (a->au) audio_set_knob(a->au, K, v); })
 KNOB(drops, SND_DROPS) KNOB(bed, SND_BED) KNOB(brown, SND_BROWN) KNOB(sbreeze, SND_BREEZE) KNOB(harsh, SND_HARSH)
 
+/* randomness: setting the seed, even to the value it has, starts every stream over */
+G(g_seed, a->seed)                  S(s_seed, app_seed(a, (int)v))
+
 /* --------------------------------------------------------------- the table */
 
 static const char *const preset_names[] = { "tray", "pond", "pool", "sea", NULL };
@@ -385,6 +429,7 @@ static const char *const look_names[] = { "animation", "video", NULL };
 #define E(name, grp, help, names, g, s)           { name, PK_ENUM, grp, help, 0, 0, 1, 1, 0, 0, names, g, s }
 #define RM(name, grp, help, lo, hi, step, snap, g, s) { name, PK_REAL, grp, help, lo, hi, 0, step, 1, snap, NULL, g, s }
 #define RA(name, grp, help, lo, hi, step, wrap, g, s) { name, PK_REAL, grp, help, lo, hi, wrap, step, 0, 0, NULL, g, s }
+#define I(name, grp, help, lo, hi, g, s)          { name, PK_INT, grp, help, lo, hi, 0, 1, 0, 0, NULL, g, s }
 
 static const param params[] = {
     /* basin */
@@ -444,6 +489,9 @@ static const param params[] = {
     RM("sound.brown", "sound",  "brown noise", 0, 4, 1.25, 0.05, g_brown, s_brown),
     RM("sound.breeze", "sound", "the breeze", 0, 4, 1.25, 0.05, g_sbreeze, s_sbreeze),
     RM("sound.harsh", "sound",  "gusts and rustle in the breeze", 0, 4, 1.25, 0.05, g_harsh, s_harsh),
+    /* last, so a recording's opening lines set it after everything else: the
+     * floats those lines put in draw on the old streams, and the show starts fresh */
+    I("seed", "random", "where the randomness starts (rain, gusts, random drops, floats); setting it starts it over, so a show replays the same raindrops", 0, 2147483647, g_seed, s_seed),
 };
 #define NPARAMS ((int)(sizeof params / sizeof params[0]))
 
@@ -603,7 +651,8 @@ void param_list(const app *a, FILE *f)
             int k = 0;
             range[0] = 0;
             for (int j = 0; p->names[j]; j++) k += snprintf(range + k, sizeof range - k, "%s%s", j ? "/" : "", p->names[j]);
-        } else snprintf(range, sizeof range, "%g .. %g%s", p->lo, p->hi, p->mult ? "" : "");
+        } else if (p->kind == PK_INT) snprintf(range, sizeof range, "%.0f .. %.0f", p->lo, p->hi);
+        else snprintf(range, sizeof range, "%g .. %g%s", p->lo, p->hi, p->mult ? "" : "");
         fprintf(f, "%-14s %-10s %-34s  %s\n", p->name, v, range, p->help);
     }
 }

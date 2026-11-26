@@ -158,6 +158,7 @@ land in the same place, `src/param.c`, and `--list-params` prints the lot:
     ...
     yaw            35         0 .. 360                camera yaw, degrees
     sound.harsh    0.15       0 .. 4                  gusts and rustle in the breeze
+    seed           0          0 .. 2147483647         where the randomness starts (rain, gusts, ...
 
 Every name is a `--name value` option (booleans take no value; `--no-name`
 turns one off), a line in the config file, and — for the ones with a key —
@@ -292,8 +293,12 @@ times a second; and the camera, however it was moved — mouse, wheel, keys,
 back, smoothed between them. Jolts, presets, floats and `clear` are written
 as themselves. The help panel and full screen are not recorded.
 
-Rain, the breeze and the gusts are random, so a replay is the same show, not
-the same frames; the drops you clicked and the finger you drew are exact.
+A recording picks a fresh `seed` as it starts and writes it last in its
+opening lines, so a replay brings the same raindrops and the same gusts, in
+the same order and places, as the session had; the drops you clicked and the
+finger you drew are exact. Each event lands within a frame of when it did,
+so it is the same show, though not to the pixel: frame times differ from
+run to run.
 The recording ends with `loop`, which is what a screen saver wants; change
 it to `end` for a one-off. `tests/test_script.c` records a session through
 the same calls the keyboard and mouse make, replays the file on a fresh
@@ -597,6 +602,21 @@ is spread over 0.4 of the fundamental's period with a raised-cosine profile,
 which averages out everything shorter: 78 % of the slope in the fundamental,
 nothing above $n=8$. The water sloshes at the fundamental: the test gets
 2.418 s for a 2 m tank 30 cm deep against the mode's 2.415.
+
+### Randomness
+
+Everything random in the simulation — the rain, the gusts, a `drop random`,
+where a float goes in — comes from the `seed` parameter (0 unless set).
+Each use has its own splitmix64 stream, started from the seed and the
+stream's number, so drawing on one never shifts another. Rain and gust
+touchdowns are Poisson arrivals counted in *simulated* time: each waits out
+a unit exponential of rate × time, on a timing stream of its own, and what
+arrives — where, how big — is drawn from a second stream. So ten seconds of
+rain cut into frames of 1/60 s, or into a ragged mix of frame lengths, is the
+same raindrops in the same order (`tests/test_script.c` checks exactly that),
+and a change of `rain-rate` takes effect at once. Setting `seed`, even to
+the value it already has, starts every stream over; a recording sets a fresh
+one as it starts. The sound draws its own randomness, on the audio thread.
 
 ### Validity
 
@@ -1187,12 +1207,11 @@ map with additive blending, which is the same forward map).
 - **The OS screen-saver hooks** for the attract mode: a macOS `.saver`
   bundle, an XScreenSaver entry. `pond --attract` is the program they would
   start, and the release tarballs (see Development) are what they would wrap.
-- **Repeatable shows**: everything random in the simulation — rain, gusts,
-  random drops, where a float goes in — draws on one stream, `app_rand`, whose
-  state is `app->rng` (`app_seed` restarts it). A `seed` parameter, set at the
-  top of a recording, is all that stands between a replay of the same show
-  and a replay of the same frames; `tests/test_script.c` already checks that
-  one seed gives one outcome. The sound keeps its own stream, on its own thread.
+- **Replays to the pixel**: the `seed` parameter already makes a replay's
+  rain and gusts the session's (see Randomness). What is left is timing:
+  sources go in at frame boundaries, so a replay differs from its session by
+  up to a frame per event. Stepping the simulation on a fixed clock, apart
+  from the display's, would close that.
 - **Packaging**: tagged releases carry tarballs for Linux and macOS, which a
   Homebrew formula or a distribution package can be written against; both
   still need SDL2 from the system.
