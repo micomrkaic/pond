@@ -67,6 +67,7 @@ typedef struct app {
     int    breaking;           /* wave_break on: steep water is damped and foams */
     double break_slope;        /* the slope it starts at */
     int    break_pct;          /* the percentage breaking the HUD last showed */
+    double fetch;              /* how far the wind has blown over open water, metres; 0: the basin's length */
     audio *au;                 /* NULL when there is no audio device or --no-audio */
     double volume; int mute;   /* shadowed, so they survive having no device */
     double knob[SND_NUM];
@@ -173,5 +174,9 @@ void  app_seed(app *a, int seed);                 /* restart every stream from t
 int   app_arrivals(app *a, int stream, double *wait, double expected);
 void  app_rain_step(app *a, double dts);          /* this frame's raindrops */
 void  app_break_step(app *a, double dts, double dt_real);   /* after wave_realize: breaking, foam and its hiss, this frame */
+/* the breeze's forcing: its spectral peak k0 (1/m) and amplitude (m per sqrt s); and,
+ * if hs is given, the significant height the sea settles at (m).  With wind, a
+ * fetch-limited sea for that wind over `fetch` (or the basin's length) */
+void  app_wind_sea(const app *a, double *k0, double *amp, double *hs);
 
 #endif

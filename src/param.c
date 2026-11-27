@@ -85,6 +85,46 @@ int app_arrivals(app *a, int stream, double *wait, double expected)
     return n;
 }
 
+/* The breeze on its own puts its peak at an eighth of the basin.  With wind U, the sea
+ * a real wind raises over a fetch F of open water (JONSWAP / SMB): peak at
+ * omega_p = 22 (g^2 / (U F))^(1/3) and significant height H_s = 0.0016 U sqrt(F / g),
+ * F the basin's own length unless `fetch` says how far the wind has come.  A short
+ * fetch is a young sea, short and quick; a long one, long and slow and higher.  Held:
+ *  - to the fully developed sea (Pierson-Moskowitz), which no fetch passes:
+ *    omega_p >= 0.855 g / U, H_s <= 0.24 U^2 / g;
+ *  - to what the basin can hold: the peak wave at most half its length, and no
+ *    shorter than four cells (all a coarse sea preset can do).  Where the basin
+ *    shortens the peak, the height comes down with it, keeping the sea's own
+ *    steepness: a long sea pressed into a small basin is the same sea in miniature,
+ *    not a steeper one.  With no fetch set none of this binds on any preset, so
+ *    the sea is the basin-length one it always was.
+ * The forcing's steady state is amp / sqrt(2 gamma), so amp leaves the rms at H_s / 4. */
+void app_wind_sea(const app *a, double *k0, double *amp, double *hs)
+{
+    const wave *w = a->w;
+    const double L = w->Lx > w->Ly ? w->Lx : w->Ly;
+    double k = 2.0 * M_PI * 8.0 / L, A = a->breeze_gain * 3.0e-4 * L, H = -1.0;
+    if (a->wind > 0) {
+        const double U = a->wind, F = a->fetch > 0 ? a->fetch : w->Lx, g = w->g;
+        double om_p = 22.0 * cbrt(g * g / (U * F));
+        if (om_p < 0.855 * g / U) om_p = 0.855 * g / U;
+        const double k_sea = wave_k_of_omega(w, om_p);
+        const double kmin = 2.0 * M_PI / (0.5 * L);
+        const double kmax = M_PI / (4.0 * fmin(w->dx, w->dy));
+        k = k_sea;
+        if (k < kmin) k = kmin;
+        if (k > kmax) k = kmax;
+        H = 0.0016 * U * sqrt(F / g);
+        if (H > 0.24 * U * U / g) H = 0.24 * U * U / g;
+        if (k > k_sea) H *= k_sea / k;           /* shortened by the basin: the same steepness */
+        const double gam = w->gamma0 + 2.0 * w->nu * k * k;
+        A = a->breeze_gain * 0.25 * H * sqrt(2.0 * gam);
+    }
+    if (k0) *k0 = k;
+    if (amp) *amp = A;
+    if (hs) *hs = H;
+}
+
 void app_break_step(app *a, double dts, double dt_real)
 {
     wave_break(a->w, a->breaking ? a->break_slope : 0.0, dts);
@@ -364,6 +404,7 @@ S(s_length, set_dims(a, a->shape == WAVE_DISK ? v : a->w->Lx, v))
 G(g_hos, a->hos_on)                 S(s_hos, a->hos_on = v > 0.5)
 G(g_brk, a->breaking)               S(s_brk, a->breaking = v > 0.5)
 G(g_brk_s, a->break_slope)          S(s_brk_s, a->break_slope = v)
+G(g_fetch, a->fetch)                S(s_fetch, a->fetch = v)
 G(g_damping, a->w->gamma0)          S(s_damping, wave_set_damping(a->w, v))
 G(g_warp, a->warp)                  S(s_warp, a->warp = v)
 
@@ -473,7 +514,8 @@ static const param params[] = {
     RM("rain-rate", "sources", "drops per simulated second", 0.05, 200, 1.5, 0, g_rain_rate, s_rain_rate),
     B("breeze", "sources",  "wind sea on", g_breeze, s_breeze),
     RM("drop-size", "sources", "a raindrop's crater width, metres (0: 2 cm, or a few cells on a coarse grid; a click is twice it)", 0, 10, 1.5, 0.005, g_dropsz, s_dropsz),
-    RA("wind", "sources",   "wind speed, m/s: a fetch-limited sea over the basin's length (0: the breeze's own knobs)", 0, 30, 1, 0, g_wind, s_wind),
+    RA("wind", "sources",   "wind speed, m/s: a fetch-limited sea over the basin's length, or over fetch (0: the breeze's own knobs)", 0, 30, 1, 0, g_wind, s_wind),
+    RM("fetch", "sources",  "how far the wind has blown over open water, metres (0: the basin's length): longer is a longer, slower, higher sea", 0, 100000, 2.0, 10, g_fetch, s_fetch),
     B("gusts", "sources",   "the breeze comes in gusts that roughen drifting patches (cat's paws); off: evenly", g_gusts, s_gusts),
     RM("breeze-gain", "sources", "multiplier on the wind forcing", 0.01, 100, 1.5, 0, g_bgain, s_bgain),
     B("boat", "sources",    "a boat driving round the basin, leaving its wake", g_boat, s_boat),

@@ -151,7 +151,10 @@ static void update_hud(app *a)
         int k = 0;
         if (a->sun_elev < 30) k += snprintf(ex + k, sizeof ex - k, a->sun_elev < -3 ? "  night" : "  sun %.0f deg", a->sun_elev);
         if (a->shake) k += snprintf(ex + k, sizeof ex - k, "  shake %.2fg %.1fHz", a->shake_amp, a->shake_freq);
-        if (a->wind > 0) k += snprintf(ex + k, sizeof ex - k, "  wind %.0f m/s", a->wind);
+        if (a->wind > 0) {
+            k += snprintf(ex + k, sizeof ex - k, "  wind %.0f m/s", a->wind);
+            if (a->fetch > 0) k += snprintf(ex + k, sizeof ex - k, a->fetch >= 1000 ? " over %.3g km" : " over %.0f m", a->fetch >= 1000 ? a->fetch / 1000 : a->fetch);
+        }
         if (a->boat) k += snprintf(ex + k, sizeof ex - k, "  boat %.2f m/s", app_boat_speed(a));
         if (a->nfloat) k += snprintf(ex + k, sizeof ex - k, "  floats %d", a->nfloat);
         strncat(line2, ex, sizeof line2 - strlen(line2) - 1);
@@ -726,23 +729,8 @@ static void apply_sources(app *a, double dts)
         wave_add_paddle(w, a->paddle_wall, a->paddle_pos, a->paddle_span, 0.006 * L, accel, dts);
     }
     if (a->breeze) {
-        double k0 = 2.0 * M_PI * 8.0 / L;        /* spectral peak at L/8 */
-        double amp = a->breeze_gain * 3.0e-4 * L;
-        if (a->wind > 0) {
-            /* a fetch-limited sea (JONSWAP / SMB) for wind U over the basin's length F:
-             * peak at omega_p = 22 (g^2 / (U F))^(1/3), significant height
-             * H_s = 0.0016 U sqrt(F / g); the forcing's steady state is amp / sqrt(2 gamma),
-             * so amp is set to leave the rms at H_s / 4.  The peak is held inside what the
-             * grid can carry, which is all a coarse sea preset can do. */
-            const double U = a->wind, F = w->Lx;
-            const double om_p = 22.0 * cbrt(w->g * w->g / (U * F));
-            k0 = wave_k_of_omega(w, om_p);
-            const double kmax = M_PI / (4.0 * fmin(w->dx, w->dy));
-            if (k0 > kmax) k0 = kmax;
-            const double Hs = 0.0016 * U * sqrt(F / w->g);
-            const double gam = w->gamma0 + 2.0 * w->nu * k0 * k0;
-            amp = a->breeze_gain * 0.25 * Hs * sqrt(2.0 * gam);
-        }
+        double k0, amp;
+        app_wind_sea(a, &k0, &amp, NULL);
         double gust = a->au ? 0.5 + audio_gust(a->au) : 1.0;   /* the gusts you hear roughen the water */
         wave_gusts wg;
         gusts_step(a, dts, &wg);
