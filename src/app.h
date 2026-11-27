@@ -172,6 +172,6 @@ void  app_seed(app *a, int seed);                 /* restart every stream from t
  * (rate x time): how many, drawing waits from `stream` and keeping the remainder in *wait */
 int   app_arrivals(app *a, int stream, double *wait, double expected);
 void  app_rain_step(app *a, double dts);          /* this frame's raindrops */
-void  app_break_step(app *a, double dts);         /* after wave_realize: breaking and foam, this frame */
+void  app_break_step(app *a, double dts, double dt_real);   /* after wave_realize: breaking, foam and its hiss, this frame */
 
 #endif

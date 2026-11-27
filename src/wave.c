@@ -261,7 +261,7 @@ void wave_clear(wave *w)
     memset(w->src_p, 0, N * sizeof(float));
     w->dirty_d = w->dirty_v = w->dirty_p = 0;
     if (w->foam) memset(w->foam, 0, N * sizeof(float));
-    w->foam_live = 0; w->brk_frac = 0; w->brk_acc = 0;
+    w->foam_live = 0; w->brk_frac = 0; w->brk_acc = 0; w->brk_amt = 0;
     w->t = 0;
 }
 
@@ -937,7 +937,7 @@ static void box3(const wave *w, const float *in, float *out)
 double wave_break(wave *w, double slope, double dt)
 {
     const size_t N = (size_t)w->nx * w->ny, NM = (size_t)w->nmodes;
-    w->brk_frac = 0.0;
+    w->brk_frac = 0.0; w->brk_amt = 0.0;
     if (!(dt > 0.0)) return 0.0;
     const float decay = (float)exp(-dt / WAVE_FOAM_LIFE);
     if (!(slope > 0.0)) {
@@ -968,11 +968,27 @@ double wave_break(wave *w, double slope, double dt)
     grid_gradient(w, w->bk_c, m, d);
     size_t nb = 0;
     const float s2 = (float)(slope * slope), inv = (float)(1.0 / (0.5 * slope)), sl = (float)slope;
+    double sw = 0.0, sx = 0.0, sy = 0.0, sxx = 0.0;    /* where it breaks, for the ear */
     for (size_t i = 0; i < N; i++) {
         const float q = m[i] * m[i] + d[i] * d[i];
         float x = 0.0f;
-        if (q > s2) { x = (sqrtf(q) - sl) * inv; if (x > 1.0f) x = 1.0f; nb++; }
+        if (q > s2) {
+            x = (sqrtf(q) - sl) * inv; if (x > 1.0f) x = 1.0f; nb++;
+            const int ci = (int)(i % (size_t)w->nx), cj = (int)(i / (size_t)w->nx);
+            double px, py;
+            if (w->shape == WAVE_DISK) {
+                const double r = (cj + 0.5) * w->dr, th = ci * w->dth;
+                px = w->R + r * cos(th); py = w->R + r * sin(th);
+            } else { px = (ci + 0.5) * w->dx; py = (cj + 0.5) * w->dy; }
+            sw += x; sx += x * px; sy += x * py; sxx += x * (px * px + py * py);
+        }
         m[i] = x;
+    }
+    w->brk_amt = sw / (double)N;
+    if (sw > 0.0) {
+        w->brk_x = sx / sw; w->brk_y = sy / sw;
+        const double v = sxx / sw - w->brk_x * w->brk_x - w->brk_y * w->brk_y;
+        w->brk_spread = v > 0.0 ? sqrt(v) : 0.0;
     }
     /* spread over the cells round each breaking one: a breaker's turbulence, and its
      * whitewater, are wider than its steepest cell (and a one-cell mask would put

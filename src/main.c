@@ -106,7 +106,7 @@ static void print_help(void)
          "  --list-params   show them all with their ranges and current values, and exit\n"
          "  e.g. --paddle --paddle-freq 1.2 --paddle-span 0.15 --glass floor --yaw 60 --no-hud\n"
          "  --scene S       any of rain,paddle,breeze     --cam Y,P,D   camera yaw, pitch, distance\n"
-         "  --sound K=V,... the five sound levels           --hos         nonlinear correction on\n"
+         "  --sound K=V,... the six sound levels            --hos         nonlinear correction on\n"
          "\n"
          "Per run:\n"
          "  --script F      run a script: timed parameter settings, see demos/ and README\n"
@@ -160,10 +160,12 @@ static void update_hud(app *a)
     if (a->shape == WAVE_DISK) snprintf(dims, sizeof dims, "disk D=%.3g m", a->w->Lx);
     else snprintf(dims, sizeof dims, "%.3g x %.3g m", a->w->Lx, a->w->Ly);
     char line3[160] = "";
+    char surf[32] = "";
+    if (a->au && a->breaking) snprintf(surf, sizeof surf, "  breaking %.0f%%", 100 * audio_knob(a->au, SND_BREAK));
     if (a->au)
-        snprintf(line3, sizeof line3, "\nsnd: drops %.0f%%  bed %.0f%%  brown %.0f%%  breeze %.0f%%  harsh %.0f%%",
+        snprintf(line3, sizeof line3, "\nsnd: drops %.0f%%  bed %.0f%%  brown %.0f%%  breeze %.0f%%  harsh %.0f%%%s",
                  100 * audio_knob(a->au, SND_DROPS), 100 * audio_knob(a->au, SND_BED), 100 * audio_knob(a->au, SND_BROWN),
-                 100 * audio_knob(a->au, SND_BREEZE), 100 * audio_knob(a->au, SND_HARSH));
+                 100 * audio_knob(a->au, SND_BREEZE), 100 * audio_knob(a->au, SND_HARSH), surf);
     char line4[128] = "";
     if (a->paddle) {
         static const char *const wall_names[] = { "wall x=0", "wall x=Lx", "wall y=0", "wall y=Ly" };
@@ -826,7 +828,7 @@ static void frame(void *ud)
     advance(a, dt);
     rec_tick(a->rec, a, dt);
     wave_realize(a->w);
-    app_break_step(a, a->paused ? 0.0 : dt * a->warp);
+    app_break_step(a, a->paused ? 0.0 : dt * a->warp, dt);
     if (a->hud_dirty) update_hud(a);
 
     /* the boat and the floats, where the sources put them this frame */
@@ -938,7 +940,7 @@ static int bench(app *a, int frames, const char *snap)
         } else wave_step(a->w, sub, n);
         Uint64 t2 = SDL_GetPerformanceCounter();
         wave_realize(a->w);
-        app_break_step(a, dt);
+        app_break_step(a, dt, dt);
         Uint64 t3 = SDL_GetPerformanceCounter();
         if (a->shape == WAVE_RECT) render_frame(a->w, &a->rp, a->pix);
         Uint64 t4 = SDL_GetPerformanceCounter();
@@ -951,7 +953,7 @@ static int bench(app *a, int frames, const char *snap)
            1e3 * t_src / frames, a->hos_on ? "+HOS" : "", 1e3 * t_step / frames, a->breaking ? "+breaking" : "", 1e3 * t_real / frames, 1e3 * t_rend / frames,
            1e3 * tot / frames, frames / tot);
     printf("  rms slope %.4f   mode norm %.3e", wave_rms_slope(a->w), wave_norm(a->w));
-    if (a->breaking) printf("   breaking %.2f%% of the surface", 100.0 * a->w->brk_frac);
+    if (a->breaking) printf("   breaking %.2f%% of the surface (amount %.2g)", 100.0 * a->w->brk_frac, a->w->brk_amt);
     printf("\n");
     if (snap) {
         SDL_Surface *s = SDL_CreateRGBSurfaceWithFormatFrom(a->pix, a->nx, a->ny, 32, a->nx * 4, SDL_PIXELFORMAT_ARGB8888);
@@ -1084,7 +1086,7 @@ POND_MAIN(int argc, char **argv)
     a.paddle_wall = 0; a.paddle_pos = 0.5; a.paddle_span = 1.0; a.paddle_mark = 1;
     a.paddle_gain = a.breeze_gain = a.finger_gain = 1.0;
     a.volume = 0.7; a.mute = 0;
-    a.knob[SND_DROPS] = 1.0; a.knob[SND_BED] = 1.0; a.knob[SND_BROWN] = 0.0; a.knob[SND_BREEZE] = 1.0; a.knob[SND_HARSH] = 0.15;
+    a.knob[SND_DROPS] = 1.0; a.knob[SND_BED] = 1.0; a.knob[SND_BROWN] = 0.0; a.knob[SND_BREEZE] = 1.0; a.knob[SND_HARSH] = 0.15; a.knob[SND_BREAK] = 1.0;
     a.frames_left = a_frames;
     a.snap_path = snap3d;
     a.mode3d = cfg.mode3d;

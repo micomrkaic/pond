@@ -85,9 +85,23 @@ int app_arrivals(app *a, int stream, double *wait, double expected)
     return n;
 }
 
-void app_break_step(app *a, double dts)
+void app_break_step(app *a, double dts, double dt_real)
 {
     wave_break(a->w, a->breaking ? a->break_slope : 0.0, dts);
+    if (a->au) {
+        /* how loud: the square root of how much breaks, full from about 1 % of the
+         * surface breaking (a mean breaking measure of 5e-4) -- a fleck under the breeze
+         * (2e-5) is a whisper at 0.2, whitecaps in a gale (2e-4) 0.6, a hard-driven
+         * wavemaker full; where: the centroid, heard as a splash there would be; how
+         * wide: its spread against half the basin */
+        const wave *w = a->w;
+        const double amt = w->brk_amt;
+        const double level = amt > 0.0 ? sqrt(amt / 5e-4) : 0.0;
+        double pan = 0.0, att = 1.0;
+        if (amt > 0.0 && a->v3) view3d_listen(a->v3, w->brk_x, w->brk_y, &pan, &att);
+        const double half = 0.5 * (w->Lx > w->Ly ? w->Lx : w->Ly);
+        audio_set_break(a->au, level, pan, att, w->brk_spread / half, dt_real);
+    }
     const int pct = a->breaking ? (int)floor(100.0 * a->w->brk_frac + 0.5) + 1 : 0;   /* +1: on, nothing breaking */
     if (pct != a->break_pct) { a->break_pct = pct; a->hud_dirty = 1; }
 }
@@ -420,6 +434,7 @@ G(g_mute, a->mute)                  S(s_mute, { a->mute = v > 0.5; if (a->au) au
 #define KNOB(nm, K) \
     G(g_##nm, a->knob[K]) S(s_##nm, { a->knob[K] = v; if (a->au) audio_set_knob(a->au, K, v); })
 KNOB(drops, SND_DROPS) KNOB(bed, SND_BED) KNOB(brown, SND_BROWN) KNOB(sbreeze, SND_BREEZE) KNOB(harsh, SND_HARSH)
+KNOB(sbreak, SND_BREAK)
 
 /* randomness: setting the seed, even to the value it has, starts every stream over */
 G(g_seed, a->seed)                  S(s_seed, app_seed(a, (int)v))
@@ -500,6 +515,7 @@ static const param params[] = {
     RM("sound.brown", "sound",  "brown noise", 0, 4, 1.25, 0.05, g_brown, s_brown),
     RM("sound.breeze", "sound", "the breeze", 0, 4, 1.25, 0.05, g_sbreeze, s_sbreeze),
     RM("sound.harsh", "sound",  "gusts and rustle in the breeze", 0, 4, 1.25, 0.05, g_harsh, s_harsh),
+    RM("sound.breaking", "sound", "the hiss and crackle of breaking whitewater", 0, 4, 1.25, 0.05, g_sbreak, s_sbreak),
     /* last, so a recording's opening lines set it after everything else: the
      * floats those lines put in draw on the old streams, and the show starts fresh */
     I("seed", "random", "where the randomness starts (rain, gusts, random drops, floats); setting it starts it over, so a show replays the same raindrops", 0, 2147483647, g_seed, s_seed),
