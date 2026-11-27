@@ -618,8 +618,24 @@ turbulence is wider than its steepest point, and a one-cell mask would put
 grid-scale ripples back) and goes in as displacement and velocity sources,
 through the same transform as every other source, so it works on the disk
 too. Where the water broke it turns white: a foam field on the grid, drawn
-as a matt, patchy film lit by the sun and the sky, which fades over a few
-seconds (`WAVE_FOAM_LIFE`, 2.5 s) once the breaking stops.
+as a matt film lit by the sun and the sky. Thick foam fades in a couple of
+seconds (`WAVE_FOAM_LIFE`, 2.5 s); the thin lace it leaves fades ever more
+slowly, towards 10 s (`WAVE_FOAM_RESIDUAL`), as real residual foam does, so
+it lasts long enough to be seen to travel.
+
+The foam drifts with the water. Every fifteenth of a simulated second, while
+there is any, `wave_foam_drift` takes the surface velocity — the same field
+the floats ride, the orbital motion at the surface plus the term that turns
+into Stokes drift — and moves the foam along it, semi-Lagrangian, on the
+rectangle's grid or the disk's polar one. So foam sways back and forth with
+each passing wave and creeps downwave, at Stokes' rate: nothing
+second-order is coded, it comes out of following the linear field. Like the
+floats, it is carried by the velocity times the display gain, so it keeps
+pace with the waves as drawn. Its patches are stamped into it as it forms
+(smooth noise on a lattice six cells apart) and carried with it; the shader
+adds only a fine grain, so drifting foam does not slide under a pattern fixed
+to the basin. The interpolation softens it a little as it goes, which reads
+as foam dispersing.
 
 The smoothing is what keeps rain out of it: a raindrop's crater is as steep
 as 0.15 but only a few cells across, and smoothed it is well below.
@@ -627,7 +643,13 @@ as 0.15 but only a few cells across, and smoothed it is well below.
 standing wave of slope 0.45 comes down to about the breaking slope, with 13 %
 of its energy left where the unbroken one keeps 70 %; the damping hardly
 cares how time is cut into frames; the program's raindrops, on the 512 grid
-and the browser's 256, never foam; and the disk breaks too.
+and the browser's 256, never foam; the disk breaks too; the foam thins to a
+lace and vanishes when the fading law says (26.3 s from 0.31, to the tenth);
+a uniform 10 cm/s current carries a blob 0.200 m in 2 s on the rectangle
+(0.194 on the disk) and no current leaves it untouched to the bit; and 1 Hz
+waves from a wavemaker carry a stripe of foam 0.62 m downwave in 5 s, where
+Stokes drift, ωka² cosh 2kh / (2 sinh² kh) from the measured amplitude,
+says 0.73.
 
 The default threshold, 0.15, is below the slopes real waves spill at
 (0.3–0.44, the last the Stokes limit), because the grid's smoothed slope is
@@ -640,7 +662,9 @@ raise it for less. In the tray, ripples a few centimetres long do break
 (microbreaking) but would not make whitewater; pond draws the foam anyway.
 Calm, breaking costs a smoothing and a gradient pass per frame (about 2 ms at
 512²); breaking, the damping's three transforms are paid 15 times a
-simulated second, not every frame.
+simulated second, not every frame, and while there is foam the surface
+velocity's two more, for the drift (3–4 ms a frame on average at 512² on a
+slow machine).
 
 ### Randomness
 
@@ -1248,10 +1272,11 @@ map with additive blending, which is the same forward map).
   affordable.
 - HOS on the disk needs radial derivatives of the eigenbasis, which are not
   diagonal there; a finite-difference gradient on the polar grid would do.
-- Breaking is the local-dissipation stand-in (see Breaking), and it is
-  heard (see Sound). A breaker that plunges, or foam that drifts with the
-  surface current instead of fading in place, would need the velocity field
-  each frame.
+- Breaking is the local-dissipation stand-in (see Breaking); it is heard
+  (see Sound), and its foam drifts with the surface current. A breaker that
+  plunges is beyond it. The current is the waves' own; a wind-driven surface
+  current (a few percent of the wind speed), which would carry foam and floats
+  downwind into streaks, is not modelled.
 - **Arbitrary basin shapes**, ellipses included, mean numerically computed
   Neumann eigenmodes and a dense transform; see the discussion of the disk
   for why the circle is special.

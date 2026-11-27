@@ -96,6 +96,8 @@ typedef struct {
     double brk_amt;            /* how hard: the mean over the surface of the 0..1 breaking measure */
     double brk_x, brk_y;       /* where: the breaking's centroid, metres (the sources' coordinates) */
     double brk_spread;         /* and how spread out: its rms distance from that, metres */
+    float *fu, *fv;            /* the surface velocity the foam drifts with (wave_foam_drift) */
+    double fd_acc;             /* simulated time since the foam last moved */
 
     dct_plan px, py;
     float *tmp;
@@ -184,12 +186,26 @@ double wave_gust_mask(const wave *w, const wave_gusts *g, double x, double y);  
  * same transform as any other source; a calm surface costs one gradient pass and
  * nothing more, and the damping (three transforms) is applied WAVE_BREAK_DT apart,
  * for all the time since the last, rather than every frame.  Each breaking cell leaves foam (w->foam, 0..1, on the eta grid),
- * which fades over WAVE_FOAM_LIFE seconds.  slope <= 0: no breaking, the foam just
- * fades.  Returns the fraction of the surface breaking. */
-#define WAVE_BREAK_RATE 6.0
-#define WAVE_FOAM_LIFE  2.5
+ * which fades: thick foam over WAVE_FOAM_LIFE seconds, the thin lace it leaves
+ * (below WAVE_FOAM_THIN) more and more slowly, out to WAVE_FOAM_RESIDUAL.
+ * slope <= 0: no breaking, the foam just fades.  Returns the fraction of the
+ * surface breaking. */
+#define WAVE_BREAK_RATE    6.0
+#define WAVE_FOAM_LIFE     2.5
+#define WAVE_FOAM_RESIDUAL 10.0
+#define WAVE_FOAM_THIN     0.25
+#define WAVE_FOAM_MIN      0.005         /* thinner than this is gone */
 #define WAVE_BREAK_DT   (1.0 / 15.0)   /* the damping goes in this often (simulated seconds), not every frame */
 double wave_break(wave *w, double slope, double dt);
+/* The foam drifts with the water: every WAVE_BREAK_DT while there is foam, the
+ * surface velocity (wave_velocity: the orbital motion at the surface, with the term
+ * that gives Stokes drift), times `gain`, carries it -- semi-Lagrangian, on the
+ * rectangle's grid or the disk's polar one -- so it sways with each wave and creeps
+ * downwave, as the floats do.  gain is the display gain the floats use, so the foam
+ * keeps pace with the waves as drawn; 0 holds it still.  Call after wave_realize. */
+void   wave_foam_drift(wave *w, double gain, double dt);
+/* one semi-Lagrangian step of the foam along the grid velocity (u, v) * scale, for dt */
+void   wave_foam_advect(wave *w, const float *u, const float *v, double scale, double dt);
 /* Set a single mode directly (tests). */
 void  wave_set_mode(wave *w, int m, int n, float a, float b);
 

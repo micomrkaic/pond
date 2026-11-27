@@ -25,6 +25,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define PI 3.14159265358979323846
+
 static int fails = 0;
 static void check(int ok, const char *what)
 {
@@ -102,15 +104,20 @@ int main(void)
         check(wave_norm(b) < 0.4 * wave_norm(a) && peak_b < 0.15 * 1.6 && frac > 0.0, what);
         check(b->foam_live, "and it foamed");
 
-        /* breaking off: the foam fades, from its whitest to nothing (1e-3) in WAVE_FOAM_LIFE x ln(peak / 1e-3) */
+        /* breaking off: the foam fades -- thick foam at 1 / WAVE_FOAM_LIFE down to WAVE_FOAM_THIN,
+         * then the thin lace at a rate falling to 1 / WAVE_FOAM_RESIDUAL as it thins:
+         * df/dt = -a f - b f^2 there, so 1/f = (1/f0 + b/a) e^(a t) - b/a */
         double fmax = 0.0;
         for (int i = 0; i < b->nx * b->ny; i++) if (b->foam[i] > fmax) fmax = b->foam[i];
-        const double expect = WAVE_FOAM_LIFE * log(fmax / 1e-3);
+        const double A = 1.0 / WAVE_FOAM_RESIDUAL, B = (1.0 / WAVE_FOAM_LIFE - A) / WAVE_FOAM_THIN;
+        const double f0 = fmax > WAVE_FOAM_THIN ? WAVE_FOAM_THIN : fmax;
+        const double expect = (fmax > WAVE_FOAM_THIN ? WAVE_FOAM_LIFE * log(fmax / WAVE_FOAM_THIN) : 0.0)
+                            + log((1.0 / WAVE_FOAM_MIN + B / A) / (1.0 / f0 + B / A)) / A;
         double t = 0.0;
         const double dt = 1.0 / 60.0;
-        while (b->foam_live && t < 60.0) { wave_break(b, 0.0, dt); t += dt; }
-        snprintf(what, sizeof what, "with breaking off the foam (at most %.2f) is gone in %.1f s (%.1f expected)", fmax, t, expect);
-        check(!b->foam_live && fabs(t - expect) < 0.1, what);
+        while (b->foam_live && t < 120.0) { wave_break(b, 0.0, dt); t += dt; }
+        snprintf(what, sizeof what, "with breaking off the foam (at most %.2f) thins to a lace and is gone in %.1f s (%.1f expected)", fmax, t, expect);
+        check(!b->foam_live && fabs(t - expect) < 0.2, what);
         wave_destroy(a); wave_destroy(b);
     }
 
@@ -146,6 +153,91 @@ int main(void)
         char what[160];
         snprintf(what, sizeof what, "twenty raindrops on a %d grid (craters as steep as %.2f): no breaking, no foam", grid, steep);
         check(frac == 0.0 && !w->foam_live, what);
+        wave_destroy(w);
+    }
+
+    /* --- the foam drifts: a uniform current carries it exactly, on both grids --- */
+    for (int disk = 0; disk <= 1; disk++) {
+        wave *w = disk ? wave_create_disk(128, 64, 4.0, 1.0) : wave_create(128, 128, 4.0, 4.0, 1.0);
+        wave_realize(w);
+        wave_break(w, 10.0, 1.0 / 60.0);           /* nothing breaks at 10: it only sets up the foam */
+        const int nx = w->nx, ny = w->ny;
+        const size_t N = (size_t)nx * ny;
+        float *u = calloc(N, sizeof(float)), *v = calloc(N, sizeof(float));
+        double s0 = 0, x0 = 0, y0 = 0;
+        for (int j = 0; j < ny; j++)
+            for (int i = 0; i < nx; i++) {
+                double px, py;
+                if (disk) { const double r = (j + 0.5) * w->dr, th = i * w->dth; px = w->R + r * cos(th); py = w->R + r * sin(th); }
+                else { px = (i + 0.5) * w->dx; py = (j + 0.5) * w->dy; }
+                const double q = ((px - 1.4) * (px - 1.4) + (py - 2.0) * (py - 2.0)) / (0.25 * 0.25);
+                const float f = (float)exp(-q);
+                w->foam[(size_t)i + (size_t)nx * j] = f;
+                u[(size_t)i + (size_t)nx * j] = 0.1f;    /* 10 cm/s along x */
+                const double area = disk ? (j + 0.5) : 1.0;   /* the disk's cells grow with the radius */
+                s0 += f * area; x0 += f * area * px; y0 += f * area * py;
+            }
+        w->foam_live = 1;
+        x0 /= s0; y0 /= s0;
+        float *keep = malloc(N * sizeof(float));
+        memcpy(keep, w->foam, N * sizeof(float));
+        wave_foam_advect(w, v, v, 1.0, 1.0);      /* no current: nothing moves, to the bit */
+        const int still = memcmp(keep, w->foam, N * sizeof(float)) == 0;
+        for (int k = 0; k < 30; k++) wave_foam_advect(w, u, v, 1.0, 1.0 / 15.0);   /* 2 s */
+        double s1 = 0, x1 = 0, y1 = 0;
+        for (int j = 0; j < ny; j++)
+            for (int i = 0; i < nx; i++) {
+                double px, py;
+                if (disk) { const double r = (j + 0.5) * w->dr, th = i * w->dth; px = w->R + r * cos(th); py = w->R + r * sin(th); }
+                else { px = (i + 0.5) * w->dx; py = (j + 0.5) * w->dy; }
+                const double area = disk ? (j + 0.5) : 1.0;
+                const double f = w->foam[(size_t)i + (size_t)nx * j];
+                s1 += f * area; x1 += f * area * px; y1 += f * area * py;
+            }
+        x1 /= s1; y1 /= s1;
+        char what[200];
+        snprintf(what, sizeof what, "%s: no current holds the foam still; 10 cm/s for 2 s carries it %.3f m (0.200), %.3f across, keeping %.0f%% of it",
+                 disk ? "the disk" : "the rectangle", x1 - x0, y1 - y0, 100.0 * s1 / s0);
+        check(still && fabs(x1 - x0 - 0.2) < 0.01 && fabs(y1 - y0) < 0.01 && fabs(s1 / s0 - 1.0) < 0.05, what);
+        free(u); free(v); free(keep);
+        wave_destroy(w);
+    }
+
+    /* --- and the water's own current carries it: waves from a wavemaker take a stripe
+     *     of foam downwave at Stokes' rate, omega k a^2 cosh 2kh / (2 sinh^2 kh) --- */
+    {
+        wave *w = wave_create(256, 64, 12.0, 3.0, 2.0);
+        const double dt = 1.0 / 60.0, om = 2.0 * PI;
+        int f = 0;
+        for (; f < 4 * 60; f++) { wave_add_paddle(w, 0, 0.5, 1.0, 0.05, 0.75 * om * sin(om * f * dt), dt); wave_step(w, 1.0 / 240.0, 4); }
+        wave_realize(w);
+        double a = 0.0;
+        for (int i = 0; i < w->nx * w->ny; i++) {
+            const double x = (i % w->nx + 0.5) * w->dx;
+            if (x > 1.5 && x < 3.5 && fabs(w->eta[i]) > a) a = fabs(w->eta[i]);
+        }
+        wave_break(w, 10.0, dt);
+        double s0 = 0, x0 = 0;
+        for (int j = 0; j < w->ny; j++)
+            for (int i = 0; i < w->nx; i++) {
+                const double x = (i + 0.5) * w->dx;
+                const float v = (x > 2.0 && x < 2.3) ? 1.0f : 0.0f;
+                w->foam[i + w->nx * j] = v; s0 += v; x0 += v * x;
+            }
+        w->foam_live = 1;
+        for (int k = 0; k < 5 * 60; k++, f++) {
+            wave_add_paddle(w, 0, 0.5, 1.0, 0.05, 0.75 * om * sin(om * f * dt), dt);
+            wave_step(w, 1.0 / 240.0, 4); wave_realize(w); wave_foam_drift(w, 1.0, dt);
+        }
+        double s1 = 0, x1 = 0;
+        for (int j = 0; j < w->ny; j++)
+            for (int i = 0; i < w->nx; i++) { const double v = w->foam[i + w->nx * j]; s1 += v; x1 += v * (i + 0.5) * w->dx; }
+        const double moved = x1 / s1 - x0 / s0;
+        const double k = wave_k_of_omega(w, om), h = w->depth;
+        const double us = om * k * a * a * cosh(2.0 * k * h) / (2.0 * sinh(k * h) * sinh(k * h));
+        char what[200];
+        snprintf(what, sizeof what, "1 Hz waves %.0f cm high carry foam %.2f m downwave in 5 s; Stokes drift says %.2f", 100.0 * a, moved, 5.0 * us);
+        check(w->foam_live && moved > 0.6 * 5.0 * us && moved < 1.3 * 5.0 * us, what);
         wave_destroy(w);
     }
 
