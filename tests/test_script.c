@@ -33,6 +33,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define PI_ 3.14159265358979323846
+
 static int fails = 0;
 static void check(int ok, const char *what)
 {
@@ -329,6 +331,51 @@ int main(void)
         int foamed = 0;
         for (int f = 0; f < 30; f++) { wave_step(a->w, 1.0 / 240.0, 4); wave_realize(a->w); app_break_step(a, 1.0 / 60.0, 1.0 / 60.0); foamed |= a->w->foam_live; }
         check(foamed && a->hud_dirty, "app_break_step breaks a big splash, and marks the HUD");
+        free_app(a);
+    }
+
+    /* --- fetch: the wind over open water before the basin; 0 is the basin's own
+     *     length, and leaves the sea exactly as it was --- */
+    {
+        app *a = make_app(512);
+        param_set(a, "preset", 2);                       /* the 12 m pool */
+        param_set(a, "wind", 12);
+        double k0, amp, hs;
+        app_wind_sea(a, &k0, &amp, &hs);
+        /* the sea as it was computed before fetch existed */
+        const wave *w = a->w;
+        const double om_old = 22.0 * cbrt(w->g * w->g / (12.0 * w->Lx));
+        double k_old = wave_k_of_omega(w, om_old);
+        const double hs_old = 0.0016 * 12.0 * sqrt(w->Lx / w->g), kmax_old = PI_ / (4.0 * fmin(w->dx, w->dy));
+        if (k_old > kmax_old) k_old = kmax_old;
+        const double amp_old = 0.25 * hs_old * sqrt(2.0 * (w->gamma0 + 2.0 * w->nu * k_old * k_old));
+        check(k0 == k_old && amp == amp_old && hs == hs_old, "fetch 0: the pool's wind sea is the basin-length one, to the bit");
+        double f_prev = 1e9, h_prev = 0.0;
+        int longer_slower_higher = 1;
+        const double fetches[4] = { 100, 1000, 10000, 100000 };
+        char what[200];
+        for (int i = 0; i < 4; i++) {
+            param_set(a, "fetch", fetches[i]);
+            app_wind_sea(a, &k0, &amp, &hs);
+            const double f = wave_omega(w, k0) / (2.0 * PI_);
+            if (!(f <= f_prev && hs >= h_prev)) longer_slower_higher = 0;
+            f_prev = f; h_prev = hs;
+            if (fetches[i] == 1000) {
+                snprintf(what, sizeof what, "12 m/s over 1 km of fetch: %.2f Hz waves %.1f m long, %.0f cm high (0.70 Hz, 3.2 m, 19 cm)", f, 2 * PI_ / k0, 100 * hs);
+                check(fabs(f - 0.70) < 0.02 && fabs(2 * PI_ / k0 - 3.18) < 0.05 && fabs(hs - 0.194) < 0.005, what);
+            }
+        }
+        check(longer_slower_higher, "a longer fetch: never quicker, never lower");
+        check(2 * PI_ / k0 <= 0.5 * w->Lx + 1e-9, "however long the fetch, at least two waves fit in the basin");
+        param_set(a, "preset", 3);                       /* the 80 m sea, 100 km of fetch */
+        app_wind_sea(a, &k0, &amp, &hs);
+        const double f = wave_omega(a->w, k0) / (2.0 * PI_), fpm = 0.855 * a->w->g / 12.0 / (2.0 * PI_);
+        snprintf(what, sizeof what, "the sea, 100 km of fetch: %.2f Hz (a fully developed sea, %.2f, or the basin's limit), %.2f m high (at most %.2f)",
+                 f, fpm, hs, 0.24 * 144 / a->w->g);
+        check(f >= fpm - 1e-9 && hs <= 0.24 * 144 / a->w->g + 1e-9, what);
+        param_set(a, "wind", 0);
+        app_wind_sea(a, &k0, &amp, &hs);
+        check(fabs(k0 - 2 * PI_ * 8 / 80.0) < 1e-12 && hs < 0, "no wind: the breeze's own sea, fetch or no");
         free_app(a);
     }
 

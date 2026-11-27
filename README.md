@@ -41,6 +41,7 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     ./pond --scene paddle --paddle-span 0.12 --paddle-pos 0.25 --paddle-wall y=0
     ./pond --preset 3 --boat --floats 4    # a hull under way on the pool, four floats in its wake
     ./pond --preset 4 --wind 12 --boat     # a 12 m/s wind sea, and a boat through it
+    ./pond --preset 3 --wind 12 --fetch 1000   # the same wind after 1 km of open water: a long, rolling sea
     ./pond --preset 2 --shake --shake-freq 3   # the pond shaken at 3 Hz: Faraday waves at 1.5
     ./pond --script demos/tour.pond        # three minutes of everything, on a loop; Escape stops it
     ./pond --script demos/showcase.pond    # every feature once, ten minutes
@@ -556,6 +557,24 @@ The band's $k^{-2}$ tail is faded out between 0.35 and 0.6 of the grid's
 Nyquist wavenumber: with the peak clamped at a quarter of Nyquist, as it is
 for every wind the presets can hold, an untapered tail forced the grid-scale
 modes themselves and the surface came out pixel-sharp.
+
+That is the sea a wind raises crossing the basin alone, and on a small basin
+it is a young, quick chop whatever the wind: 12 m/s across the 12 m pool is
+2.9 Hz waves 19 cm long, and a lighter wind only makes them shorter. Real
+water is rarely that young. `fetch` says how far the wind has blown over open
+water before it reaches the basin, and the sea is the one it would have
+raised over that distance: over 1 km, the same 12 m/s brings 0.7 Hz waves
+3.2 m long and 19 cm high into the pool, rolling through at 2.2 m/s. Longer
+is longer, slower and higher, up to the fully developed (Pierson–Moskowitz)
+sea that no fetch passes, $\omega_p \ge 0.855\,g/U$ and
+$H_s \le 0.24\,U^2/g$. The basin still has to hold it: the peak wave is
+kept to at most half its length, and where that shortens it the height comes
+down with it, so a long sea pressed into a small basin keeps its own
+steepness rather than standing up steeper than water would. `fetch 0` (the
+default) is the basin's own length, and the sea is the one it always was —
+`tests/test_script.c` checks that to the bit. The gusts still cross at 0.6 of
+the wind speed: a strong wind's cat's paws race over a small basin, whatever
+the fetch.
 
 Floats (`E`) are drawn riding the surface — the view lifts every vertex onto
 the water under it, so a hull heaves and tilts for free — and are carried by

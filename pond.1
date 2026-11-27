@@ -226,8 +226,17 @@ A wind sea on; a multiplier on its forcing; whether it comes in drifting
 gusts (cat's paws).
 .TP
 .B wind
-Wind speed, m/s, 0 to 30: a fetch\-limited sea over the basin's length
+Wind speed, m/s, 0 to 30: a fetch\-limited sea over the basin's length,
+or over
+.B fetch
 (0: the breeze's own settings).
+.TP
+.B fetch
+How far the wind has blown over open water before the basin, metres, 0 to
+100000 (0, the default: the basin's own length).
+A short fetch is a young sea, short and quick; a longer one is longer,
+slower and higher, up to a fully developed sea, and never longer than half
+the basin.
 .TP
 .BR boat ", " boat\-speed
 A boat driving round the basin; its speed as a Froude number (0.4 is a
