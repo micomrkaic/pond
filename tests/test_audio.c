@@ -15,21 +15,20 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-/* The breaking hiss, listened to: SDL's dummy audio driver runs the callback in
- * real time with no device, and POND_WAV writes down what it played.  Silence,
- * then a breaker off to the right (it swells in, sits in its band, and is heard
- * on the right), then it stops (and trails off rather than cutting), then a point
- * in the middle (left and right the same) and a breaking spread all round (left
- * and right independent). */
-#define _POSIX_C_SOURCE 200809L
+/* The breaking hiss, listened to: an offline audio (no device) renders exactly
+ * what the device's callback would, frame by frame, while the setting is refreshed
+ * each 16 ms frame as the program does.  Silence, then a breaker off to the right
+ * (it swells in, sits in its band, and is heard on the right), then it stops (and
+ * trails off rather than cutting), then a point in the middle (left and right the
+ * same) and a breaking spread all round (left and right independent). */
 #include "../src/audio.h"
-#include <SDL.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define PI 3.14159265358979323846
+#define RATE 44100
 
 static int fails = 0;
 static void check(int ok, const char *what)
@@ -38,13 +37,19 @@ static void check(int ok, const char *what)
     if (!ok) fails++;
 }
 
-/* hold a setting for `secs`, refreshing it each 16 ms frame as the program does */
+static float *buf;
+static long nbuf;
+
+/* hold a setting for `secs`: 16 ms frames, each set then rendered, as the program does */
 static void hold(audio *a, double secs, double level, double pan, double width)
 {
-    const Uint32 t0 = SDL_GetTicks();
-    while (SDL_GetTicks() - t0 < (Uint32)(secs * 1000.0)) {
-        audio_set_break(a, level, pan, 1.0, width, 0.016);
-        SDL_Delay(16);
+    const int frame = (int)(0.016 * RATE);
+    const long end = nbuf + (long)(secs * RATE);
+    while (nbuf < end) {
+        const int n = (int)(end - nbuf < frame ? end - nbuf : frame);
+        audio_set_break(a, level, pan, 1.0, width, n / (double)RATE);
+        audio_render(a, buf + 2 * nbuf, n);
+        nbuf += n;
     }
 }
 
@@ -74,14 +79,11 @@ static stats measure(const float *s, long frames, double rate, double t0, double
 
 int main(void)
 {
-    const char *path = "build/test-break.wav";
-    setenv("SDL_AUDIODRIVER", "dummy", 1);
-    setenv("POND_WAV", path, 1);
-    audio *a = audio_open();
-    if (!a) { printf("no audio (SDL's dummy driver): SKIPPED\nall audio tests passed (skipped)\n"); return 0; }
+    audio *a = audio_open_offline(RATE);
+    buf = calloc((size_t)(6 * RATE) * 2, sizeof(float));
+    if (!a || !buf) { check(0, "an offline audio"); return 1; }
     audio_set_volume(a, 1.0);
 
-    /* the phases, in seconds of wall clock (the dummy driver keeps real time) */
     hold(a, 0.5, 0.0, 0.0, 0.0);           /* 0.0 .. 0.5  nothing */
     hold(a, 1.5, 1.0, 0.8, 0.0);           /* 0.5 .. 2.0  a breaker, to the right */
     hold(a, 1.5, 0.0, 0.8, 0.0);           /* 2.0 .. 3.5  it stops */
@@ -89,23 +91,9 @@ int main(void)
     hold(a, 1.0, 1.0, 0.0, 1.0);           /* 4.5 .. 5.5  spread all round */
     audio_close(a);
 
-    /* the recording: a 44-byte float WAV header, then stereo floats */
-    FILE *f = fopen(path, "rb");
-    if (!f) { check(0, "the recording is there"); return 1; }
-    fseek(f, 0, SEEK_END);
-    const long bytes = ftell(f) - 44;
-    fseek(f, 24, SEEK_SET);
-    uint32_t rate = 0;
-    if (fread(&rate, 4, 1, f) != 1) rate = 44100;
-    fseek(f, 44, SEEK_SET);
-    const long frames = bytes / 8;
-    float *s = malloc((size_t)bytes);
-    if (!s || fread(s, 1, (size_t)bytes, f) != (size_t)bytes) { check(0, "the recording reads"); fclose(f); return 1; }
-    fclose(f);
-    remove(path);
-    printf("   %.2f s recorded at %u Hz\n", frames / (double)rate, rate);
-
-    const double R = rate;
+    const long frames = nbuf;
+    const float *s = buf;
+    const double R = RATE;
     stats quiet = measure(s, frames, R, 0.1, 0.4);
     stats on    = measure(s, frames, R, 0.9, 1.9);
     stats tail0 = measure(s, frames, R, 2.05, 2.25);
@@ -128,7 +116,7 @@ int main(void)
     snprintf(what, sizeof what, "spread all round: left and right independent (correlation %.2f)", wide.lr);
     check(fabs(wide.lr) < 0.3 && wide.l > 0.01 && wide.r > 0.01, what);
 
-    free(s);
+    free(buf);
     printf(fails ? "%d audio test(s) failed\n" : "all audio tests passed\n", fails);
     return fails ? 1 : 0;
 }

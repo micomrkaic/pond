@@ -33,6 +33,10 @@
 typedef struct audio audio;
 
 audio *audio_open(void);                         /* NULL if no device; everything then no-ops */
+/* no device: nothing plays until audio_render asks for it, exactly as the device's
+ * callback would be asked (tests, and rendering sound offline) */
+audio *audio_open_offline(double rate);
+void   audio_render(audio *a, float *out, int frames);   /* stereo, interleaved */
 void   audio_close(audio *a);
 
 void   audio_set_volume(audio *a, double v);     /* 0..1 */
