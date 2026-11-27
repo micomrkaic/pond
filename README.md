@@ -49,7 +49,7 @@ handful of entry points used are fetched through `SDL_GL_GetProcAddress`
     ./pond --cpu-caustics                  # if the GPU pass is unavailable or suspect
     ./pond --mute                          # starts silent; --no-audio opens no device at all
                                            # POND_WAV=take.wav records what you hear
-    ./pond --sound bed=0.5,brown=0.3       # knobs: drops, bed, brown, breeze, harsh (1 = as designed)
+    ./pond --sound bed=0.5,brown=0.3       # knobs: drops, bed, brown, breeze, harsh, breaking (1 = as designed)
     ./pond --preset 3 --scene rain,breeze  # pool, with sources already on
     ./pond --glass 1 --preset 3 --scene breeze   # floor only: bright water, caustics, no walls
     ./pond --glass 3 --cam 40,-20,1.3      # start looking up through a glass bottom
@@ -159,6 +159,7 @@ land in the same place, `src/param.c`, and `--list-params` prints the lot:
     ...
     yaw            35         0 .. 360                camera yaw, degrees
     sound.harsh    0.15       0 .. 4                  gusts and rustle in the breeze
+    sound.breaking 1          0 .. 4                  the hiss and crackle of breaking whitewater
     seed           0          0 .. 2147483647         where the randomness starts (rain, gusts, ...
 
 Every name is a `--name value` option (booleans take no value; `--no-name`
@@ -1169,11 +1170,25 @@ simulation rather than alongside it:
   and the water shows a sea breeze, so by default it is tuned down to a
   steady, soft, mid-high hiss; the `harsh` knob moves it back towards the
   gale.
-- **Five knobs**, on keys, `--sound` and the config file's `sound.*`, all multipliers on the designed
+- **Breaking water hisses where it breaks.** With `breaking` on, the
+  whitewater is a band of noise, 500 Hz–6 kHz (the rush of a spilling
+  crest), its loudness surging irregularly by ±50 % at a couple of hertz,
+  and over it a crackle of bubbles bursting in the foam: 1–3.5 ms bursts at
+  2.5–6.5 kHz, up to 150 a second. Both come from where the water breaks:
+  `wave_break` reports the breaking's centroid and spread, the hiss is
+  panned and attenuated as a splash there would be, and it opens from a
+  point to the full stereo width as the breaking spreads. How loud follows
+  the square root of how much breaks — a whisper for a fleck under the
+  breeze, most of the way up for whitecaps in a gale, full from about 1 % of
+  the surface breaking (a hard-driven wavemaker) — swelling in over 40 ms
+  and trailing off over 0.6 s, as the foam does. It is pond's own layer, in `audio.c`, made from the suite's
+  noise and filters.
+- **Six knobs**, on keys, `--sound` and the config file's `sound.*`, all multipliers on the designed
   levels shown on the HUD's third line: `drops` (ticks, splashes and
   plinks of the drops you see), `bed` (the grain crackle and hiss of the
   ones you don't), `brown` (a little room tone, off by default), `breeze`
-  (its level) and `harsh` (its gustiness, rustle, tremor and tone together).
+  (its level), `harsh` (its gustiness, rustle, tremor and tone together)
+  and `breaking` (the whitewater's hiss and crackle; no key).
 - Rain adds the bed at the rain rate; on basins of 40 m and up, under the
   breeze, the sea layer follows the surface's rms slope, both in level and
   in how hard the surf breaks. The wavemaker is silent: a paddle in a tank
@@ -1233,10 +1248,10 @@ map with additive blending, which is the same forward map).
   affordable.
 - HOS on the disk needs radial derivatives of the eigenbasis, which are not
   diagonal there; a finite-difference gradient on the polar grid would do.
-- Breaking is the local-dissipation stand-in (see Breaking). A breaker that
-  plunges, or foam that drifts with the surface current instead of fading in
-  place, would need the velocity field each frame; a hiss from the whitewater
-  in the sound would be the cheap half of that.
+- Breaking is the local-dissipation stand-in (see Breaking), and it is
+  heard (see Sound). A breaker that plunges, or foam that drifts with the
+  surface current instead of fading in place, would need the velocity field
+  each frame.
 - **Arbitrary basin shapes**, ellipses included, mean numerically computed
   Neumann eigenmodes and a dense transform; see the discussion of the disk
   for why the circle is special.

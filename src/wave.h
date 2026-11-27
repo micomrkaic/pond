@@ -93,6 +93,9 @@ typedef struct {
     int    foam_live;          /* 1 while any foam is left */
     double brk_frac;           /* the fraction of the surface breaking, last call */
     double brk_acc;            /* simulated time since the damping was last applied */
+    double brk_amt;            /* how hard: the mean over the surface of the 0..1 breaking measure */
+    double brk_x, brk_y;       /* where: the breaking's centroid, metres (the sources' coordinates) */
+    double brk_spread;         /* and how spread out: its rms distance from that, metres */
 
     dct_plan px, py;
     float *tmp;

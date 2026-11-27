@@ -49,19 +49,24 @@ $(BIN): $(SRC) $(HDR)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -o $@ $(SRC) $(SDL_LIBS) $(LDLIBS)
 
-test: $(B)/test_dct $(B)/test_wave $(B)/test_disk $(B)/test_hos $(B)/test_paddle $(B)/test_break $(B)/test_script $(BIN)
+test: $(B)/test_dct $(B)/test_wave $(B)/test_disk $(B)/test_hos $(B)/test_paddle $(B)/test_break $(B)/test_audio $(B)/test_script $(BIN)
 	./$(B)/test_dct
 	./$(B)/test_wave
 	./$(B)/test_disk
 	./$(B)/test_hos
 	./$(B)/test_paddle
 	./$(B)/test_break
+	./$(B)/test_audio
 	./$(B)/test_script
 	sh tests/test_man.sh ./$(BIN) pond.1
 
 $(B)/test_script: tests/test_script.c src/config.c src/param.c src/script.c src/record.c src/attract.c src/wave.c src/disk.c src/hos.c src/dct.c src/render.c src/view3d.c src/text.c src/audio.c src/dsp.c src/app.h src/param.h src/config.h src/script.h src/record.h src/attract.h
 	@mkdir -p $(B)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -o $@ tests/test_script.c src/config.c src/param.c src/script.c src/record.c src/attract.c src/wave.c src/disk.c src/hos.c src/dct.c src/render.c src/view3d.c src/text.c src/audio.c src/dsp.c $(SDL_LIBS) $(LDLIBS)
+
+$(B)/test_audio: tests/test_audio.c src/audio.c src/dsp.c src/audio.h src/dsp.h
+	@mkdir -p $(B)
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) -o $@ tests/test_audio.c src/audio.c src/dsp.c $(SDL_LIBS) $(LDLIBS)
 
 $(B)/test_break: tests/test_break.c src/wave.c src/disk.c src/dct.c src/wave.h src/dct.h
 	@mkdir -p $(B)

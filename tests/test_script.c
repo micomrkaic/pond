@@ -49,7 +49,7 @@ static app *make_app(int grid)
     a->paddle_div = 8.0; a->paddle_pos = 0.5; a->paddle_span = 1.0;
     a->paddle_gain = a->breeze_gain = a->finger_gain = 1.0;
     a->volume = 0.7;
-    a->knob[SND_DROPS] = 1; a->knob[SND_BED] = 1; a->knob[SND_BREEZE] = 1; a->knob[SND_HARSH] = 0.15;
+    a->knob[SND_DROPS] = 1; a->knob[SND_BED] = 1; a->knob[SND_BREEZE] = 1; a->knob[SND_HARSH] = 0.15; a->knob[SND_BREAK] = 1;
     a->show_hud = 1;
     render_defaults(&a->rp);
     a->p3.gain = 1.0f;
@@ -327,7 +327,7 @@ int main(void)
         /* a big drop in a small pond, with the frame's breaking step: it foams, and the HUD hears of it */
         wave_add_drop(a->w, 0.5 * a->w->Lx, 0.5 * a->w->Ly, 0.06 * a->w->Lx, 0.06 * a->w->Lx);
         int foamed = 0;
-        for (int f = 0; f < 30; f++) { wave_step(a->w, 1.0 / 240.0, 4); wave_realize(a->w); app_break_step(a, 1.0 / 60.0); foamed |= a->w->foam_live; }
+        for (int f = 0; f < 30; f++) { wave_step(a->w, 1.0 / 240.0, 4); wave_realize(a->w); app_break_step(a, 1.0 / 60.0, 1.0 / 60.0); foamed |= a->w->foam_live; }
         check(foamed && a->hud_dirty, "app_break_step breaks a big splash, and marks the HUD");
         free_app(a);
     }
