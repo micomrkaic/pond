@@ -67,6 +67,9 @@ typedef struct app {
     int    breaking;           /* wave_break on: steep water is damped and foams */
     double break_slope;        /* the slope it starts at */
     int    break_pct;          /* the percentage breaking the HUD last showed */
+    double wind_drift;         /* the wind's surface current, as a fraction of its speed (0: none) */
+    double cur_u;              /* that current now, m/s along +x (the wind's way); it spins up and down */
+    int    cur_shown;          /* the cm/s the HUD last showed */
     audio *au;                 /* NULL when there is no audio device or --no-audio */
     double volume; int mute;   /* shadowed, so they survive having no device */
     double knob[SND_NUM];
@@ -173,5 +176,7 @@ void  app_seed(app *a, int seed);                 /* restart every stream from t
 int   app_arrivals(app *a, int stream, double *wait, double expected);
 void  app_rain_step(app *a, double dts);          /* this frame's raindrops */
 void  app_break_step(app *a, double dts, double dt_real);   /* after wave_realize: breaking, foam and its hiss, this frame */
+double app_breeze_speed(const app *a);            /* the breeze's speed, m/s: the wind if set, else what its knobs amount to */
+void  app_current_step(app *a, double dts);       /* the wind's surface current, spinning up or down this frame */
 
 #endif

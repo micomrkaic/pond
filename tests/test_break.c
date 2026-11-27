@@ -181,9 +181,9 @@ int main(void)
         x0 /= s0; y0 /= s0;
         float *keep = malloc(N * sizeof(float));
         memcpy(keep, w->foam, N * sizeof(float));
-        wave_foam_advect(w, v, v, 1.0, 1.0);      /* no current: nothing moves, to the bit */
+        wave_foam_advect(w, v, v, 1.0, 0.0, 0.0, 1.0);      /* no current: nothing moves, to the bit */
         const int still = memcmp(keep, w->foam, N * sizeof(float)) == 0;
-        for (int k = 0; k < 30; k++) wave_foam_advect(w, u, v, 1.0, 1.0 / 15.0);   /* 2 s */
+        for (int k = 0; k < 30; k++) wave_foam_advect(w, u, v, 1.0, 0.0, 0.0, 1.0 / 15.0);   /* 2 s */
         double s1 = 0, x1 = 0, y1 = 0;
         for (int j = 0; j < ny; j++)
             for (int i = 0; i < nx; i++) {
@@ -227,7 +227,7 @@ int main(void)
         w->foam_live = 1;
         for (int k = 0; k < 5 * 60; k++, f++) {
             wave_add_paddle(w, 0, 0.5, 1.0, 0.05, 0.75 * om * sin(om * f * dt), dt);
-            wave_step(w, 1.0 / 240.0, 4); wave_realize(w); wave_foam_drift(w, 1.0, dt);
+            wave_step(w, 1.0 / 240.0, 4); wave_realize(w); wave_foam_drift(w, 1.0, 0.0, 0.0, dt);
         }
         double s1 = 0, x1 = 0;
         for (int j = 0; j < w->ny; j++)
@@ -238,6 +238,59 @@ int main(void)
         char what[200];
         snprintf(what, sizeof what, "1 Hz waves %.0f cm high carry foam %.2f m downwave in 5 s; Stokes drift says %.2f", 100.0 * a, moved, 5.0 * us);
         check(w->foam_live && moved > 0.6 * 5.0 * us && moved < 1.3 * 5.0 * us, what);
+        wave_destroy(w);
+    }
+
+    /* --- the wind's surface current: it carries foam across open water at its own
+     *     speed, gathers it at the lee wall without losing it, and brings none in
+     *     from the weather side; on the disk, to the rim downwind --- */
+    for (int disk = 0; disk <= 1; disk++) {
+        wave *w = disk ? wave_create_disk(128, 64, 4.0, 1.0) : wave_create(128, 128, 4.0, 4.0, 1.0);
+        wave_realize(w);
+        wave_break(w, 10.0, 1.0 / 60.0);
+        const int nx = w->nx, ny = w->ny;
+        double s0 = 0, x0 = 0;
+        for (int j = 0; j < ny; j++)
+            for (int i = 0; i < nx; i++) {
+                double px, py, area = 1.0;
+                if (disk) { const double r = (j + 0.5) * w->dr, th = i * w->dth; px = w->R + r * cos(th); py = w->R + r * sin(th); area = j + 0.5; }
+                else { px = (i + 0.5) * w->dx; py = (j + 0.5) * w->dy; }
+                const float f = (float)exp(-((px - 1.6) * (px - 1.6) + (py - 2.0) * (py - 2.0)) / (0.2 * 0.2));
+                w->foam[(size_t)i + (size_t)nx * j] = f;
+                s0 += f * area; x0 += f * area * px;
+            }
+        w->foam_live = 1;
+        x0 /= s0;
+        /* 1 s at 10 cm/s, in open water: 0.1 m */
+        for (int k = 0; k < 15; k++) wave_foam_advect(w, NULL, NULL, 0.0, 0.1, 0.0, 1.0 / 15.0);
+        double s1 = 0, x1 = 0, far = 0, weather = 0;
+        for (int j = 0; j < ny; j++)
+            for (int i = 0; i < nx; i++) {
+                double px, py, area = 1.0;
+                if (disk) { const double r = (j + 0.5) * w->dr, th = i * w->dth; px = w->R + r * cos(th); py = w->R + r * sin(th); area = j + 0.5; }
+                else { px = (i + 0.5) * w->dx; py = (j + 0.5) * w->dy; }
+                (void)py;
+                const double f = w->foam[(size_t)i + (size_t)nx * j];
+                s1 += f * area; x1 += f * area * px;
+            }
+        x1 /= s1;
+        /* then 30 s more at 20 cm/s: far more than the 2.4 m to the lee wall */
+        for (int k = 0; k < 30 * 15; k++) wave_foam_advect(w, NULL, NULL, 0.0, 0.2, 0.0, 1.0 / 15.0);
+        double s2 = 0;
+        for (int j = 0; j < ny; j++)
+            for (int i = 0; i < nx; i++) {
+                double px, area = 1.0;
+                if (disk) { const double r = (j + 0.5) * w->dr, th = i * w->dth; px = w->R + r * cos(th); area = j + 0.5; }
+                else px = (i + 0.5) * w->dx;
+                const double f = w->foam[(size_t)i + (size_t)nx * j];
+                s2 += f * area;
+                if (px > 0.85 * w->Lx) far += f * area;
+                if (px < 0.5 * w->Lx) weather += f * area;
+            }
+        char what[240];
+        snprintf(what, sizeof what, "%s, a 10 cm/s current: foam carried %.3f m in 1 s (0.100); after 30 s more at 20 cm/s, %.0f%% of it gathered at the lee wall, %.0f%% of it still there, none on the weather side",
+                 disk ? "the disk" : "the rectangle", x1 - x0, 100.0 * far / s2, 100.0 * s2 / s0);
+        check(fabs(x1 - x0 - 0.1) < 0.01 && far > 0.95 * s2 && fabs(s2 / s0 - 1.0) < 0.02 && weather < 1e-6 * s0, what);
         wave_destroy(w);
     }
 

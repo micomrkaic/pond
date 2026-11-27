@@ -978,16 +978,53 @@ static void foam_fade(wave *w, double dt, const float *dep)
     w->foam_live = live;
 }
 
-void wave_foam_advect(wave *w, const float *u, const float *v, double scale, double dt)
+/* 0 at a wall, 1 from `edge` in, smoothly; and its derivative in d */
+static double wall_taper(double d, double edge)
+{
+    if (d <= 0.0) return 0.0;
+    if (d >= edge) return 1.0;
+    const double t = d / edge;
+    return t * t * (3.0 - 2.0 * t);
+}
+static double wall_taper_d(double d, double edge)
+{
+    if (d <= 0.0 || d >= edge) return 0.0;
+    const double t = d / edge;
+    return 6.0 * t * (1.0 - t) / edge;
+}
+
+void wave_foam_advect(wave *w, const float *u, const float *v, double scale, double cu, double cv, double dt)
 {
     if (!w->foam || !w->foam_live || !w->bk_c) return;
     const int nx = w->nx, ny = w->ny;
     float *out = w->bk_c;
     const float *f = w->foam;
+    const int current = cu != 0.0 || cv != 0.0;
+    const double cell = w->shape == WAVE_DISK ? w->dr : (w->dx < w->dy ? w->dx : w->dy);
+    const double L = w->Lx > w->Ly ? w->Lx : w->Ly;
+    const double edge = WAVE_CURRENT_EDGE * L > 4.0 * cell ? WAVE_CURRENT_EDGE * L : 4.0 * cell;
     for (int j = 0; j < ny; j++)
         for (int i = 0; i < nx; i++) {
             const size_t c = (size_t)i + (size_t)nx * j;
-            const double dx = scale * u[c] * dt, dy = scale * v[c] * dt;   /* where this cell's water was dt ago */
+            double ux = u ? scale * u[c] : 0.0, uy = v ? scale * v[c] : 0.0;
+            double div = 0.0;      /* the current's divergence: negative where it slows into a wall */
+            if (current) {
+                if (w->shape == WAVE_DISK) {
+                    const double r = (j + 0.5) * w->dr, th = i * w->dth;
+                    const double t = wall_taper(w->R - r, edge);
+                    ux += t * cu; uy += t * cv;
+                    div = -wall_taper_d(w->R - r, edge) * (cu * cos(th) + cv * sin(th));
+                } else {
+                    const double x = (i + 0.5) * w->dx, y = (j + 0.5) * w->dy;
+                    const double ax = wall_taper(x, edge), bx = wall_taper(w->Lx - x, edge);
+                    const double ay = wall_taper(y, edge), by = wall_taper(w->Ly - y, edge);
+                    ux += cu * ax * bx;
+                    uy += cv * ay * by;
+                    div = cu * (wall_taper_d(x, edge) * bx - ax * wall_taper_d(w->Lx - x, edge))
+                        + cv * (wall_taper_d(y, edge) * by - ay * wall_taper_d(w->Ly - y, edge));
+                }
+            }
+            const double dx = ux * dt, dy = uy * dt;   /* where this cell's water was dt ago */
             double fi, fj;
             if (w->shape == WAVE_DISK) {
                 const double r = (j + 0.5) * w->dr, th = i * w->dth;
@@ -1016,24 +1053,49 @@ void wave_foam_advect(wave *w, const float *u, const float *v, double scale, dou
                 i1 = i0 + 1; tx = fi - i0;
             }
             const float *r0 = f + (size_t)nx * j0, *r1 = r0 + nx;
-            out[c] = (float)((1 - ty) * ((1 - tx) * r0[i0] + tx * r0[i1]) + ty * ((1 - tx) * r1[i0] + tx * r1[i1]));
+            double val = (1 - ty) * ((1 - tx) * r0[i0] + tx * r0[i1]) + ty * ((1 - tx) * r1[i0] + tx * r1[i1]);
+            /* foam floats: where the current converges into a wall the water goes down
+             * and the foam stays on top and thickens, df/dt = -f div u (up to a cap, so a
+             * lee wall's band stays a band) */
+            if (div != 0.0) { val *= exp(-div * dt); if (val > WAVE_FOAM_PILE) val = WAVE_FOAM_PILE; }
+            out[c] = (float)val;
         }
+    if (current) {
+        /* the step is not conservative by itself -- the interpolation holds the lee band
+         * a few cells wide while the convergence keeps thickening it -- so it is held to
+         * the foam there was: the current carries foam about, it makes none (the disk's
+         * cells weigh as their radius) */
+        double m0 = 0.0, m1 = 0.0;
+        for (int j = 0; j < ny; j++) {
+            const double wgt = w->shape == WAVE_DISK ? j + 0.5 : 1.0;
+            double a0 = 0.0, a1 = 0.0;
+            for (int i = 0; i < nx; i++) { a0 += f[(size_t)i + (size_t)nx * j]; a1 += out[(size_t)i + (size_t)nx * j]; }
+            m0 += wgt * a0; m1 += wgt * a1;
+        }
+        if (m1 > 0.0) {
+            const float k = (float)(m0 / m1);
+            for (size_t c = 0; c < (size_t)nx * ny; c++) { out[c] *= k; if (out[c] > (float)WAVE_FOAM_PILE) out[c] = (float)WAVE_FOAM_PILE; }
+        }
+    }
     memcpy(w->foam, out, (size_t)nx * ny * sizeof(float));
 }
 
-void wave_foam_drift(wave *w, double gain, double dt)
+void wave_foam_drift(wave *w, double gain, double cu, double cv, double dt)
 {
-    if (!w->foam || !w->foam_live || !(gain > 0.0) || !(dt > 0.0)) { w->fd_acc = 0.0; return; }
+    const int waves = gain > 0.0, current = cu != 0.0 || cv != 0.0;
+    if (!w->foam || !w->foam_live || !(waves || current) || !(dt > 0.0)) { w->fd_acc = 0.0; return; }
     w->fd_acc += dt;
     if (w->fd_acc < WAVE_BREAK_DT) return;
     const double span = w->fd_acc;
     w->fd_acc = 0.0;
-    const size_t N = (size_t)w->nx * w->ny;
-    if (!w->fu) w->fu = malloc(N * sizeof(float));
-    if (!w->fv) w->fv = malloc(N * sizeof(float));
-    if (!w->fu || !w->fv) return;
-    wave_velocity(w, w->fu, w->fv);
-    wave_foam_advect(w, w->fu, w->fv, gain, span);
+    if (waves) {
+        const size_t N = (size_t)w->nx * w->ny;
+        if (!w->fu) w->fu = malloc(N * sizeof(float));
+        if (!w->fv) w->fv = malloc(N * sizeof(float));
+        if (!w->fu || !w->fv) return;
+        wave_velocity(w, w->fu, w->fv);
+        wave_foam_advect(w, w->fu, w->fv, gain, cu, cv, span);
+    } else wave_foam_advect(w, NULL, NULL, 0.0, cu, cv, span);
 }
 
 double wave_break(wave *w, double slope, double dt)

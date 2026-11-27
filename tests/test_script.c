@@ -45,7 +45,7 @@ static app *make_app(int grid)
     app *a = calloc(1, sizeof *a);
     a->nx = a->ny = grid;
     a->running = 1;
-    a->warp = 1.0; a->rain_rate = 2.0; a->break_slope = 0.15;
+    a->warp = 1.0; a->rain_rate = 2.0; a->break_slope = 0.15; a->wind_drift = 0.02;
     a->paddle_div = 8.0; a->paddle_pos = 0.5; a->paddle_span = 1.0;
     a->paddle_gain = a->breeze_gain = a->finger_gain = 1.0;
     a->volume = 0.7;
@@ -329,6 +329,28 @@ int main(void)
         int foamed = 0;
         for (int f = 0; f < 30; f++) { wave_step(a->w, 1.0 / 240.0, 4); wave_realize(a->w); app_break_step(a, 1.0 / 60.0, 1.0 / 60.0); foamed |= a->w->foam_live; }
         check(foamed && a->hud_dirty, "app_break_step breaks a big splash, and marks the HUD");
+        free_app(a);
+    }
+
+    /* --- the wind's surface current: it spins up towards 2 % of the wind, dies away
+     *     with the breeze, and wind-drift 0 is none --- */
+    {
+        app *a = make_app(32);
+        param_set(a, "breeze", 1); param_set(a, "wind", 10);
+        for (int f = 0; f < 20 * 60; f++) app_current_step(a, 1.0 / 60.0);
+        const double at20 = a->cur_u;
+        for (int f = 0; f < 100 * 60; f++) app_current_step(a, 1.0 / 60.0);
+        const double steady = a->cur_u;
+        param_set(a, "breeze", 0);
+        for (int f = 0; f < 20 * 60; f++) app_current_step(a, 1.0 / 60.0);
+        const double after = a->cur_u;
+        char what[200];
+        snprintf(what, sizeof what, "a 10 m/s wind: the current %.1f cm/s after 20 s (%.1f expected), %.1f steady (20.0); 20 s after it drops, %.1f",
+                 100 * at20, 100 * 0.2 * (1 - exp(-1.0)), 100 * steady, 100 * after);
+        check(fabs(at20 - 0.2 * (1 - exp(-1.0))) < 0.002 && fabs(steady - 0.2) < 0.002 && fabs(after - steady * exp(-1.0)) < 0.002 && a->hud_dirty, what);
+        param_set(a, "breeze", 1); param_set(a, "wind-drift", 0);
+        for (int f = 0; f < 200 * 60; f++) app_current_step(a, 1.0 / 60.0);
+        check(a->cur_u == 0.0, "wind-drift 0: no current");
         free_app(a);
     }
 

@@ -85,10 +85,31 @@ int app_arrivals(app *a, int stream, double *wait, double expected)
     return n;
 }
 
+double app_breeze_speed(const app *a)
+{
+    double U = a->wind > 0 ? a->wind : 3.0 * a->breeze_gain;
+    return U < 1.0 ? 1.0 : (U > 20.0 ? 20.0 : U);
+}
+
+/* The wind drags the top of the water along: a surface current of about 2 % of the
+ * wind speed (objects drift at ~3 %, a third of it Stokes drift, which the waves here
+ * already give).  It takes time to set up and to die away -- 20 s here, where at sea
+ * it is longer -- and runs with the wind, along +x. */
+#define CURRENT_SPINUP 20.0
+void app_current_step(app *a, double dts)
+{
+    if (!(dts > 0.0)) return;
+    const double target = a->breeze ? a->wind_drift * app_breeze_speed(a) : 0.0;
+    a->cur_u += (target - a->cur_u) * (1.0 - exp(-dts / CURRENT_SPINUP));
+    if (fabs(a->cur_u) < 1e-5 && target == 0.0) a->cur_u = 0.0;
+    const int cms = a->cur_u > 0.005 ? (int)floor(100.0 * a->cur_u + 0.5) : 0;
+    if (cms != a->cur_shown) { a->cur_shown = cms; a->hud_dirty = 1; }
+}
+
 void app_break_step(app *a, double dts, double dt_real)
 {
     wave_break(a->w, a->breaking ? a->break_slope : 0.0, dts);
-    wave_foam_drift(a->w, (double)a->p3.gain, dts);   /* the display gain, as the floats have it */
+    wave_foam_drift(a->w, (double)a->p3.gain, a->cur_u, 0.0, dts);   /* the waves at the display gain, as the floats have them, and the wind's current */
     if (a->au) {
         /* how loud: the square root of how much breaks, full from about 1 % of the
          * surface breaking (a mean breaking measure of 5e-4) -- a fleck under the breeze
@@ -364,6 +385,7 @@ S(s_length, set_dims(a, a->shape == WAVE_DISK ? v : a->w->Lx, v))
 G(g_hos, a->hos_on)                 S(s_hos, a->hos_on = v > 0.5)
 G(g_brk, a->breaking)               S(s_brk, a->breaking = v > 0.5)
 G(g_brk_s, a->break_slope)          S(s_brk_s, a->break_slope = v)
+G(g_wdrift, a->wind_drift)          S(s_wdrift, a->wind_drift = v)
 G(g_damping, a->w->gamma0)          S(s_damping, wave_set_damping(a->w, v))
 G(g_warp, a->warp)                  S(s_warp, a->warp = v)
 
@@ -475,6 +497,7 @@ static const param params[] = {
     RM("drop-size", "sources", "a raindrop's crater width, metres (0: 2 cm, or a few cells on a coarse grid; a click is twice it)", 0, 10, 1.5, 0.005, g_dropsz, s_dropsz),
     RA("wind", "sources",   "wind speed, m/s: a fetch-limited sea over the basin's length (0: the breeze's own knobs)", 0, 30, 1, 0, g_wind, s_wind),
     B("gusts", "sources",   "the breeze comes in gusts that roughen drifting patches (cat's paws); off: evenly", g_gusts, s_gusts),
+    RA("wind-drift", "sources", "the surface current the breeze drives, as a fraction of its speed: it carries floats and foam downwind (0: none)", 0, 0.1, 0.005, 0, g_wdrift, s_wdrift),
     RM("breeze-gain", "sources", "multiplier on the wind forcing", 0.01, 100, 1.5, 0, g_bgain, s_bgain),
     B("boat", "sources",    "a boat driving round the basin, leaving its wake", g_boat, s_boat),
     RM("boat-speed", "sources", "the boat's speed as a Froude number U / sqrt(g L_boat); 0.4 is a dinghy under way", 0.1, 2, 1.25, 0, g_boat_fr, s_boat_fr),

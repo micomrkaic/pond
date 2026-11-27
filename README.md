@@ -569,6 +569,19 @@ field is. Half of it comes from the vertical term: at $z=0$ the drift is half
 what it should be, which is why the surface velocity is evaluated at the
 surface.
 
+On top of the waves' own current there is the wind's (`wind-drift`). Wind
+drags the top of the water along: things afloat drift at about 3 % of the
+wind speed, a third of that the Stokes drift the waves already give here, so
+under the breeze the surface also moves downwind at 2 % of its speed (0.02,
+a knob; 0 is none). It spins up and dies away with a 20 s time constant —
+at sea it is longer — and the HUD shows it. A basin is closed, so the
+current fades to nothing within a few cells of the walls (2 % of the basin,
+or four cells), where it converges: the water goes down and what floats stays
+on top. The floats ride it to the lee wall and gather there; the foam rides
+it too, thickening where it converges (∂f/∂t = −f ∇·u, held to the foam there
+was, since the step alone is not conservative), so whitecaps upwind leave a
+band of foam along the lee wall, and none comes in from the weather side.
+
 ### Shaking: Faraday waves and the seiche
 
 Shake the basin vertically and gravity becomes $g\,(1 + a\cos\Omega t)$ in
@@ -626,7 +639,8 @@ it lasts long enough to be seen to travel.
 The foam drifts with the water. Every fifteenth of a simulated second, while
 there is any, `wave_foam_drift` takes the surface velocity — the same field
 the floats ride, the orbital motion at the surface plus the term that turns
-into Stokes drift — and moves the foam along it, semi-Lagrangian, on the
+into Stokes drift, and the wind's surface current (see Sources) — and moves
+the foam along it, semi-Lagrangian, on the
 rectangle's grid or the disk's polar one. So foam sways back and forth with
 each passing wave and creeps downwave, at Stokes' rate: nothing
 second-order is coded, it comes out of following the linear field. Like the
@@ -649,7 +663,9 @@ a uniform 10 cm/s current carries a blob 0.200 m in 2 s on the rectangle
 (0.194 on the disk) and no current leaves it untouched to the bit; and 1 Hz
 waves from a wavemaker carry a stripe of foam 0.62 m downwave in 5 s, where
 Stokes drift, ωka² cosh 2kh / (2 sinh² kh) from the measured amplitude,
-says 0.73.
+says 0.73; and a current carries foam across open water at its own speed,
+gathers all of it at the lee wall in 30 s, keeps exactly the foam there was,
+and brings none in from the weather side, on the rectangle and the disk.
 
 The default threshold, 0.15, is below the slopes real waves spill at
 (0.3–0.44, the last the Stokes limit), because the grid's smoothed slope is
@@ -1273,10 +1289,10 @@ map with additive blending, which is the same forward map).
 - HOS on the disk needs radial derivatives of the eigenbasis, which are not
   diagonal there; a finite-difference gradient on the polar grid would do.
 - Breaking is the local-dissipation stand-in (see Breaking); it is heard
-  (see Sound), and its foam drifts with the surface current. A breaker that
-  plunges is beyond it. The current is the waves' own; a wind-driven surface
-  current (a few percent of the wind speed), which would carry foam and floats
-  downwind into streaks, is not modelled.
+  (see Sound), and its foam drifts with the surface current, the waves' and
+  the wind's. A breaker that plunges is beyond it, and so are the windrows a
+  real gale combs foam into (Langmuir circulation: counter-rotating rolls
+  under the wind, converging in lines along it).
 - **Arbitrary basin shapes**, ellipses included, mean numerically computed
   Neumann eigenmodes and a dense transform; see the discussion of the disk
   for why the circle is special.

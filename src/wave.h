@@ -202,10 +202,20 @@ double wave_break(wave *w, double slope, double dt);
  * that gives Stokes drift), times `gain`, carries it -- semi-Lagrangian, on the
  * rectangle's grid or the disk's polar one -- so it sways with each wave and creeps
  * downwave, as the floats do.  gain is the display gain the floats use, so the foam
- * keeps pace with the waves as drawn; 0 holds it still.  Call after wave_realize. */
-void   wave_foam_drift(wave *w, double gain, double dt);
-/* one semi-Lagrangian step of the foam along the grid velocity (u, v) * scale, for dt */
-void   wave_foam_advect(wave *w, const float *u, const float *v, double scale, double dt);
+ * keeps pace with the waves as drawn; 0 holds it still.  (cu, cv) is a steady surface
+ * current on top, m/s: the wind's drift, see wave_foam_advect.  Call after wave_realize. */
+void   wave_foam_drift(wave *w, double gain, double cu, double cv, double dt);
+/* one semi-Lagrangian step of the foam for dt along the grid velocity (u, v) * scale
+ * (u, v may be NULL: none) plus a steady current (cu, cv) m/s -- the wind's drift.
+ * A basin is closed, so the current's normal part dies away within a few cells of
+ * each wall (WAVE_CURRENT_EDGE of the basin, or four cells), and there it converges:
+ * the water goes down, the foam stays on top and thickens (df/dt = -f div u, up to
+ * WAVE_FOAM_PILE), so foam it carries to the lee wall gathers there in a band, and
+ * none comes in from outside the weather one.  (The waves' own convergence comes and
+ * goes with each wave and is left out.) */
+#define WAVE_CURRENT_EDGE 0.02
+#define WAVE_FOAM_PILE    4.0          /* the thickest foam piles (1 is full cover) */
+void   wave_foam_advect(wave *w, const float *u, const float *v, double scale, double cu, double cv, double dt);
 /* Set a single mode directly (tests). */
 void  wave_set_mode(wave *w, int m, int n, float a, float b);
 

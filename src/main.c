@@ -146,12 +146,13 @@ static void update_hud(app *a)
     snprintf(line2, sizeof line2, "warp %.2gx  gain %.2g  damp %.3g/s%s%s%s%s%s%s",
              a->warp, (double)a->p3.gain, a->w->gamma0, nl, snd,
              a->rain ? "  rain" : "", a->breeze ? " breeze" : "", a->paddle ? " paddle" : "", a->paused ? "  PAUSED" : "");
-    if (a->wind > 0 || a->boat || a->nfloat || a->shake || a->sun_elev < 30) {
+    if (a->wind > 0 || a->boat || a->nfloat || a->shake || a->sun_elev < 30 || a->cur_u > 0.005) {
         char ex[200];
         int k = 0;
         if (a->sun_elev < 30) k += snprintf(ex + k, sizeof ex - k, a->sun_elev < -3 ? "  night" : "  sun %.0f deg", a->sun_elev);
         if (a->shake) k += snprintf(ex + k, sizeof ex - k, "  shake %.2fg %.1fHz", a->shake_amp, a->shake_freq);
         if (a->wind > 0) k += snprintf(ex + k, sizeof ex - k, "  wind %.0f m/s", a->wind);
+        if (a->cur_u > 0.005) k += snprintf(ex + k, sizeof ex - k, "  current %.0f cm/s", 100.0 * a->cur_u);
         if (a->boat) k += snprintf(ex + k, sizeof ex - k, "  boat %.2f m/s", app_boat_speed(a));
         if (a->nfloat) k += snprintf(ex + k, sizeof ex - k, "  floats %d", a->nfloat);
         strncat(line2, ex, sizeof line2 - strlen(line2) - 1);
@@ -586,8 +587,9 @@ static void drive_boat(app *a, double dts)
 /* the floats: they ride the surface (the view lifts them) and are carried by the
  * water's own velocity at the surface, so they orbit with the waves and drift
  * downwave at Stokes' rate -- the Lagrangian mean of the linear field, nothing
- * second-order coded.  The velocity costs two inverse transforms a frame, so it
- * is computed only while there are floats to carry. */
+ * second-order coded -- and by the wind's surface current, which takes them
+ * downwind to gather at the lee wall.  The velocity costs two inverse transforms
+ * a frame on the disk, so it is computed only while there are floats to carry. */
 static void drift_floats(app *a, double dts)
 {
     wave *w = a->w;
@@ -607,19 +609,13 @@ static void drift_floats(app *a, double dts)
         double u, v;
         if (direct) wave_velocity_at(w, a->fl_x[i], a->fl_y[i], &u, &v);
         else { u = grid_at(w, a->fl_u, a->fl_x[i], a->fl_y[i]); v = grid_at(w, a->fl_v, a->fl_x[i], a->fl_y[i]); }
-        a->fl_vx[i] = gain * u; a->fl_vy[i] = gain * v;
+        a->fl_vx[i] = gain * u + a->cur_u; a->fl_vy[i] = gain * v;   /* the waves as drawn, and the wind's current */
         a->fl_x[i] += a->fl_vx[i] * dts;
         a->fl_y[i] += a->fl_vy[i] * dts;
         keep_in(w, size, &a->fl_x[i], &a->fl_y[i], &a->fl_vx[i], &a->fl_vy[i]);
     }
 }
 
-/* the breeze's own speed: the wind if it is set, else what its knobs amount to */
-static double breeze_speed(const app *a)
-{
-    double U = a->wind > 0 ? a->wind : 3.0 * a->breeze_gain;
-    return U < 1.0 ? 1.0 : (U > 20.0 ? 20.0 : U);
-}
 
 
 /* Gusts: patches a sixth to a third of the basin across, touching down anywhere upwind
@@ -628,7 +624,7 @@ static double breeze_speed(const app *a)
 static void gusts_step(app *a, double dts, wave_gusts *g)
 {
     const wave *w = a->w;
-    const double U = breeze_speed(a), v = 0.6 * U;
+    const double U = app_breeze_speed(a), v = 0.6 * U;
     const double Lx = w->Lx, Ly = w->Ly, L = Lx > Ly ? Lx : Ly;
     g->n = 0; g->base = 0.15f;
     if (!a->gusts) { a->ngust = 0; a->p3.ngust = 0; a->p3.wind_u = (float)U; a->p3.gust_base = 1.0f; a->p3.gust_norm = 1.0f; return; }
@@ -701,6 +697,7 @@ static void apply_sources(app *a, double dts)
         else if (a->boat_fade > target) a->boat_fade = fmax(target, a->boat_fade - step);
         if (a->boat_fade > 0) drive_boat(a, dts);
     }
+    app_current_step(a, dts);
     if (a->nfloat && dts > 0) drift_floats(a, dts);
 
     if (a->dragging) {
@@ -1079,6 +1076,7 @@ POND_MAIN(int argc, char **argv)
     a.warp = 1.0;
     a.rain_rate = 2.0;
     a.break_slope = 0.15;
+    a.wind_drift = 0.02;
     a.boat_froude = 0.4;
     a.gusts = 1;
     a.shake_amp = 0.5; a.shake_freq = 4.0;
