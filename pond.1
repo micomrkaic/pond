@@ -193,6 +193,18 @@ Water depth, metres, 0.002 to 5000.
 .B nonlinear
 The HOS correction (rectangle only).
 .TP
+.B breaking
+Waves break where the surface, smoothed over three cells, is steeper than
+.BR break\-slope :
+the water there is damped, as in a spilling breaker, and turns white with foam
+that fades over a few seconds.
+Off by default (key
+.BR B ).
+.TP
+.B break\-slope
+The slope breaking starts at, 0.05 to 2 (default 0.15).
+Lower gives more whitecaps; 0.44 is the steepest a Stokes wave gets.
+.TP
 .B damping
 Extra uniform damping, 1/s.
 .TP
@@ -325,6 +337,9 @@ Depth; make it square again, keeping the area.
 .TP
 .B y
 Nonlinear correction.
+.TP
+.B B
+Breaking on or off.
 .TP
 .BR "\- =" ", " x / X
 Time warp; damping.

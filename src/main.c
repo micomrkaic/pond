@@ -54,6 +54,7 @@ static const char *const help_lines[] = {
     "[ ]   { }                 width, length  (5% a press; hold to sweep)",
     ", .   \\                   depth;  square it up, same area",
     "y                         nonlinear (HOS) on / off",
+    "B                         breaking: steep water spills and foams",
     "- =   x / X               time warp;  damping",
     "g / G   f                 display gain;  floor pattern",
     "t                         container: opaque, floor, glass, +bottom, none",
@@ -67,7 +68,7 @@ static const char *const help_lines[] = {
     ";   ' / \"   / / ?          shake the basin (Faraday);  amplitude;  frequency",
     "0 / )   (alt: harder)     jolt it sideways along x, along y: the seiche",
     "5 / %   6 / ^             the sun lower / higher (below -6: night, moon);  round, back",
-    "b                         breeze (wind sea)",
+    "b                         breeze (wind sea);  B: breaking",
     "p / P                     wavemaker on / off;  next wall",
     "k / K   l / L             its frequency;  its span",
     "< >                       slide it along the wall",
@@ -129,10 +130,15 @@ static void update_hud(app *a)
 {
     static const char *glass_names[] = { "opaque", "floor only", "glass walls", "glass walls + bottom", "no walls" };
     char buf[800], line2[320];
-    char nl[48];
+    char nl[80];
     if (a->hos_on && a->hs) snprintf(nl, sizeof nl, "  HOS M=%d nc=%d%s", hos_order(a->hs), hos_nc(a->hs), a->hos_skipped ? " (too steep)" : "");
     else if (a->hos_on) snprintf(nl, sizeof nl, "  HOS: rectangle only");
     else snprintf(nl, sizeof nl, "  linear");
+    if (a->breaking) {
+        const size_t l = strlen(nl);
+        if (a->w->brk_frac > 0.0) snprintf(nl + l, sizeof nl - l, ", breaking %.0f%%", 100.0 * a->w->brk_frac);
+        else snprintf(nl + l, sizeof nl - l, ", breaking");
+    }
     char snd[24];
     if (!a->au) snprintf(snd, sizeof snd, "  no sound");
     else if (audio_muted(a->au)) snprintf(snd, sizeof snd, "  muted");
@@ -257,7 +263,7 @@ typedef struct { SDL_Keycode key; int shift; const char *name; int dir; } keybin
 static const keybind keybinds[] = {
     { SDLK_r, -1, "rain", 0 },
     { SDLK_i,  0, "rain-rate", -1 },      { SDLK_i, 1, "rain-rate", +1 },
-    { SDLK_b, -1, "breeze", 0 },
+    { SDLK_b,  0, "breeze", 0 },          { SDLK_b, 1, "breaking", 0 },
     { SDLK_w,  0, "wind", -1 },           { SDLK_w, 1, "wind", +1 },
     { SDLK_e,  0, "boat", 0 },            { SDLK_e, 1, "floats", +1 },
     { SDLK_5,  0, "sun-elev", -1 },       { SDLK_5, 1, "sun-elev", +1 },
@@ -820,6 +826,7 @@ static void frame(void *ud)
     advance(a, dt);
     rec_tick(a->rec, a, dt);
     wave_realize(a->w);
+    app_break_step(a, a->paused ? 0.0 : dt * a->warp);
     if (a->hud_dirty) update_hud(a);
 
     /* the boat and the floats, where the sources put them this frame */
@@ -931,6 +938,7 @@ static int bench(app *a, int frames, const char *snap)
         } else wave_step(a->w, sub, n);
         Uint64 t2 = SDL_GetPerformanceCounter();
         wave_realize(a->w);
+        app_break_step(a, dt);
         Uint64 t3 = SDL_GetPerformanceCounter();
         if (a->shape == WAVE_RECT) render_frame(a->w, &a->rp, a->pix);
         Uint64 t4 = SDL_GetPerformanceCounter();
@@ -939,10 +947,12 @@ static int bench(app *a, int frames, const char *snap)
     }
     double tot = t_src + t_step + t_real + t_rend;
     printf("grid %dx%d, %d frames (%.1f s simulated), preset %s\n", a->nx, a->ny, frames, frames * dt, presets[a->preset].name);
-    printf("  sources %.2f ms   inject+step%s %.2f ms   inverse DCT %.2f ms   2-D render %.2f ms   total %.2f ms/frame (%.0f fps)\n",
-           1e3 * t_src / frames, a->hos_on ? "+HOS" : "", 1e3 * t_step / frames, 1e3 * t_real / frames, 1e3 * t_rend / frames,
+    printf("  sources %.2f ms   inject+step%s %.2f ms   inverse DCT%s %.2f ms   2-D render %.2f ms   total %.2f ms/frame (%.0f fps)\n",
+           1e3 * t_src / frames, a->hos_on ? "+HOS" : "", 1e3 * t_step / frames, a->breaking ? "+breaking" : "", 1e3 * t_real / frames, 1e3 * t_rend / frames,
            1e3 * tot / frames, frames / tot);
-    printf("  rms slope %.4f   mode norm %.3e\n", wave_rms_slope(a->w), wave_norm(a->w));
+    printf("  rms slope %.4f   mode norm %.3e", wave_rms_slope(a->w), wave_norm(a->w));
+    if (a->breaking) printf("   breaking %.2f%% of the surface", 100.0 * a->w->brk_frac);
+    printf("\n");
     if (snap) {
         SDL_Surface *s = SDL_CreateRGBSurfaceWithFormatFrom(a->pix, a->nx, a->ny, 32, a->nx * 4, SDL_PIXELFORMAT_ARGB8888);
         if (s && SDL_SaveBMP(s, snap) == 0) printf("  saved %s\n", snap);
@@ -1066,6 +1076,7 @@ POND_MAIN(int argc, char **argv)
     a.running = 1;
     a.warp = 1.0;
     a.rain_rate = 2.0;
+    a.break_slope = 0.15;
     a.boat_froude = 0.4;
     a.gusts = 1;
     a.shake_amp = 0.5; a.shake_freq = 4.0;

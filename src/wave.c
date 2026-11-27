@@ -69,7 +69,13 @@ static void build_dispersion(wave *w)
         for (int plane = 0; plane < 2; plane++)
             for (int m = 0; m < M; m++)
                 for (int n = 0; n < nr; n++) {
-                    const double k = w->kappa[(size_t)m * nr + n] / w->R;
+                    /* the constant mode's eigenvalue comes out of the solver as rounding
+                     * (~1e-7, not 0): call it 0, so the mean level keeps omega = 0 and stays
+                     * pinned, and a velocity source never divides by its tiny omega (the
+                     * next eigenvalue is 1.84, far from this) */
+                    double kap = w->kappa[(size_t)m * nr + n];
+                    if (kap < 1e-3) kap = 0.0;
+                    const double k = kap / w->R;
                     const size_t idx = (size_t)plane * M * nr + (size_t)m * nr + n;
                     w->kmag[idx]  = (float)k;
                     w->omega[idx] = (float)wave_omega(w, k);
@@ -214,6 +220,7 @@ void wave_destroy(wave *w)
     free(w->Rr); free(w->Ri); free(w->eta); free(w->src_d); free(w->src_v); free(w->src_p); free(w->fara); free(w->vtmp); free(w->tmp);
     for (int p = 2; p <= WAVE_MAXPOW; p++) { free(w->Rpr[p]); free(w->Rpi[p]); }
     free(w->bz_idx); free(w->bz_w);
+    free(w->foam); free(w->bk_a); free(w->bk_b); free(w->bk_c);
     free(w->G); free(w->kappa); free(w->sq_rho); free(w->isq_rho);
     free(w->spec_re); free(w->spec_im); free(w->fre); free(w->fim); free(w->tmpm); free(w->ncut);
     if (w->px.n) dct_plan_free(&w->px);
@@ -253,6 +260,8 @@ void wave_clear(wave *w)
     memset(w->src_v, 0, N * sizeof(float));
     memset(w->src_p, 0, N * sizeof(float));
     w->dirty_d = w->dirty_v = w->dirty_p = 0;
+    if (w->foam) memset(w->foam, 0, N * sizeof(float));
+    w->foam_live = 0; w->brk_frac = 0; w->brk_acc = 0;
     w->t = 0;
 }
 
@@ -892,6 +901,114 @@ void wave_breeze_gusty(wave *w, double k0, double amp, double dt, const wave_gus
     const float norm = (float)(1.0 / sqrt(s2 / wsum));
     for (size_t k = 0; k < N; k++) w->src_d[k] += f[k] * norm;
     w->dirty_d = 1;
+}
+
+/* a 3x3 box over the grid, as a pass along x and a pass along y (out may not be in):
+ * along x the rectangle stops at its walls and the disk's angle wraps round; along y
+ * both stop (the disk's rings end at the centre and at the rim) */
+static void box3(const wave *w, const float *in, float *out)
+{
+    const int nx = w->nx, ny = w->ny, wrap = w->shape == WAVE_DISK;
+    const float third = 1.0f / 3.0f;
+    for (int j = 0; j < ny; j++) {
+        const float *r = in + (size_t)nx * j;
+        float *o = out + (size_t)nx * j;
+        for (int i = 1; i < nx - 1; i++) o[i] = (r[i - 1] + r[i] + r[i + 1]) * third;
+        if (wrap) { o[0] = (r[nx - 1] + r[0] + r[1]) * third; o[nx - 1] = (r[nx - 2] + r[nx - 1] + r[0]) * third; }
+        else      { o[0] = 0.5f * (r[0] + r[1]);              o[nx - 1] = 0.5f * (r[nx - 2] + r[nx - 1]); }
+    }
+    /* along y, in place, a row behind: keep the row above as it was before this pass */
+    float *prev = w->tmp;                  /* nx floats of scratch (the transform's row buffer) */
+    memcpy(prev, out, (size_t)nx * sizeof(float));
+    for (int j = 0; j < ny; j++) {
+        float *o = out + (size_t)nx * j;
+        const float *nxt = j + 1 < ny ? out + (size_t)nx * (j + 1) : NULL;
+        const int c = 1 + (j > 0) + (nxt != NULL);
+        const float inv = 1.0f / (float)c;
+        for (int i = 0; i < nx; i++) {
+            const float cur = o[i];
+            float sum = cur + (nxt ? nxt[i] : 0.0f) + (j > 0 ? prev[i] : 0.0f);
+            prev[i] = cur;
+            o[i] = sum * inv;
+        }
+    }
+}
+
+double wave_break(wave *w, double slope, double dt)
+{
+    const size_t N = (size_t)w->nx * w->ny, NM = (size_t)w->nmodes;
+    w->brk_frac = 0.0;
+    if (!(dt > 0.0)) return 0.0;
+    const float decay = (float)exp(-dt / WAVE_FOAM_LIFE);
+    if (!(slope > 0.0)) {
+        /* off: what foam there is fades */
+        if (w->foam && w->foam_live) {
+            int live = 0;
+            for (size_t i = 0; i < N; i++) {
+                const float f = w->foam[i] * decay;
+                w->foam[i] = f < 1e-3f ? 0.0f : f;
+                live |= f >= 1e-3f;
+            }
+            w->foam_live = live;
+        }
+        return 0.0;
+    }
+    if (!w->foam) w->foam = calloc(N, sizeof(float));
+    if (!w->bk_a) w->bk_a = malloc(N * sizeof(float));
+    if (!w->bk_b) w->bk_b = malloc(N * sizeof(float));
+    if (!w->bk_c) w->bk_c = malloc(N * sizeof(float));
+    if (!w->foam || !w->bk_a || !w->bk_b || !w->bk_c) return 0.0;
+
+    /* how far past the breaking slope each cell is: 0 below it, 1 at 1.5 times it.
+     * The slope is taken on the surface smoothed over 3 x 3 cells: a wave that can
+     * break is many cells long and hardly changes, while a raindrop's crater, steep
+     * but only a few cells across, is flattened below it and does not foam. */
+    float *m = w->bk_a, *d = w->bk_b;
+    box3(w, w->eta, w->bk_c);
+    grid_gradient(w, w->bk_c, m, d);
+    size_t nb = 0;
+    const float s2 = (float)(slope * slope), inv = (float)(1.0 / (0.5 * slope)), sl = (float)slope;
+    for (size_t i = 0; i < N; i++) {
+        const float q = m[i] * m[i] + d[i] * d[i];
+        float x = 0.0f;
+        if (q > s2) { x = (sqrtf(q) - sl) * inv; if (x > 1.0f) x = 1.0f; nb++; }
+        m[i] = x;
+    }
+    /* spread over the cells round each breaking one: a breaker's turbulence, and its
+     * whitewater, are wider than its steepest cell (and a one-cell mask would put
+     * grid-scale ripples back in) */
+    if (nb) box3(w, m, d);
+    /* the foam: a breaking crest whitens the water round it; elsewhere it fades */
+    if (!nb && !w->foam_live) return 0.0;
+    int live = 0;
+    for (size_t i = 0; i < N; i++) {
+        float f = w->foam[i] * decay;
+        if (nb) { const float a = 3.0f * d[i] > 1.0f ? 1.0f : 3.0f * d[i]; if (a > f) f = a; }
+        w->foam[i] = f < 1e-3f ? 0.0f : f;
+        live |= f >= 1e-3f;
+    }
+    w->foam_live = live;
+    if (nb == 0) { w->brk_acc = 0.0; return 0.0; }
+    w->brk_frac = (double)nb / (double)N;
+
+    /* the damping: the fraction of the height and of the vertical velocity taken away
+     * for the time since it last went in, WAVE_BREAK_DT apart (breaking takes tenths
+     * of a second; its three transforms need not be paid every frame) */
+    w->brk_acc += dt;
+    if (w->brk_acc < WAVE_BREAK_DT) return w->brk_frac;
+    const double span = w->brk_acc;
+    w->brk_acc = 0.0;
+    for (size_t i = 0; i < N; i++) {
+        const float f = d[i] > 0.0f ? (float)(1.0 - exp(-WAVE_BREAK_RATE * d[i] * span)) : 0.0f;
+        d[i] = f;
+        if (f > 0.0f) w->src_d[i] -= f * w->eta[i];
+    }
+    w->dirty_d = 1;
+    for (size_t i = 0; i < NM; i++) w->tmpm[i] = w->B[i] * w->omega[i];   /* eta_t, in modes */
+    modes_to_grid(w, w->vtmp);
+    for (size_t i = 0; i < N; i++) if (d[i] > 0.0f) w->src_v[i] -= d[i] * w->vtmp[i];
+    w->dirty_v = 1;
+    return w->brk_frac;
 }
 
 void wave_set_mode(wave *w, int m, int n, float a, float b)

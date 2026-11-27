@@ -71,7 +71,7 @@ With Debian's or Ubuntu's emscripten package, whose cache under
 Use `h` for the help there; on a touch
 screen, one finger is the finger, two fingers orbit and pinch-zoom, and a
 bar of buttons along the bottom stands in for the keys (presets, rain,
-breeze, wind, wavemaker, boat, floats, warp, container, HUD, help); it
+breeze, breaking, wind, wavemaker, boat, floats, warp, container, HUD, help); it
 appears only on devices without a fine pointer.
 
 ## Controls
@@ -92,6 +92,7 @@ and Mac keyboards give them to the system):
 | `Tab` | look: animation (the clean render) → video (as a camera would film it) |
 | `n` | basin shape: rectangle ↔ disk (the field starts over) |
 | `y` | nonlinear (HOS) correction on/off (rectangle only) |
+| `B` | breaking on/off: steep water spills and turns white with foam (see Breaking) |
 | `m` `a`/`A` | sound on/off, volume down/up |
 | `j`/`J` `u`/`U` | drop level, rain-bed level |
 | `7` `8` `9` (shift: up) | brown noise, breeze level, breeze harshness |
@@ -602,6 +603,43 @@ is spread over 0.4 of the fundamental's period with a raised-cosine profile,
 which averages out everything shorter: 78 % of the slope in the fundamental,
 nothing above $n=8$. The water sloshes at the fundamental: the test gets
 2.418 s for a 2 m tank 30 cm deep against the mode's 2.415.
+
+### Breaking (`B`, optional)
+
+Linear waves never break: forced hard enough they just keep steepening. With
+`breaking` on (`B`), `wave_break` stands in for it the usual way, as a local
+dissipation. Each frame it takes the slope of the surface, smoothed over
+3 × 3 cells, and where that passes `break-slope` the water is damped — its
+height and its vertical velocity both, at up to 6 /s, ramping in over half as
+much again of slope — so the excess goes, as in a spilling breaker. The
+damping is spread over the cells round each breaking one (a breaker's
+turbulence is wider than its steepest point, and a one-cell mask would put
+grid-scale ripples back) and goes in as displacement and velocity sources,
+through the same transform as every other source, so it works on the disk
+too. Where the water broke it turns white: a foam field on the grid, drawn
+as a matt, patchy film lit by the sun and the sky, which fades over a few
+seconds (`WAVE_FOAM_LIFE`, 2.5 s) once the breaking stops.
+
+The smoothing is what keeps rain out of it: a raindrop's crater is as steep
+as 0.15 but only a few cells across, and smoothed it is well below.
+`tests/test_break.c` checks that: a gentle wave is left alone to the bit; a
+standing wave of slope 0.45 comes down to about the breaking slope, with 13 %
+of its energy left where the unbroken one keeps 70 %; the damping hardly
+cares how time is cut into frames; the program's raindrops, on the 512 grid
+and the browser's 256, never foam; and the disk breaks too.
+
+The default threshold, 0.15, is below the slopes real waves spill at
+(0.3–0.44, the last the Stokes limit), because the grid's smoothed slope is
+below a real crest's: what breaks at sea is the short, sharp end of the
+waves, which a 16 cm cell does not hold. At 0.15 the sea preset whitecaps in
+a gale (25 m/s), the pool in a strong wind (12–20 m/s), and a hard-driven
+wavemaker along its crests, while rain and a calm surface stay clean and the
+default breeze leaves a rare fleck. Lower it for a storm (`--break-slope 0.1`),
+raise it for less. In the tray, ripples a few centimetres long do break
+(microbreaking) but would not make whitewater; pond draws the foam anyway.
+Calm, breaking costs a smoothing and a gradient pass per frame (about 2 ms at
+512²); breaking, the damping's three transforms are paid 15 times a
+simulated second, not every frame.
 
 ### Randomness
 
@@ -1195,9 +1233,10 @@ map with additive blending, which is the same forward map).
   affordable.
 - HOS on the disk needs radial derivatives of the eigenbasis, which are not
   diagonal there; a finite-difference gradient on the polar grid would do.
-- Breaking cannot come from HOS; a dissipation model that mimics it
-  (locally increasing damping where steepness exceeds ~0.3) is the usual
-  stand-in.
+- Breaking is the local-dissipation stand-in (see Breaking). A breaker that
+  plunges, or foam that drifts with the surface current instead of fading in
+  place, would need the velocity field each frame; a hiss from the whitewater
+  in the sound would be the cheap half of that.
 - **Arbitrary basin shapes**, ellipses included, mean numerically computed
   Neumann eigenmodes and a dense transform; see the discussion of the disk
   for why the circle is special.

@@ -169,9 +169,21 @@ void render_frame(const wave *w, const render_params *rp, uint32_t *pix)
             d2 = d2 * d2; d2 = d2 * d2; d2 = d2 * d2;                 /* ^8 */
             const float glint = 0.55f * d + 0.12f * d2;
 
+            /* foam where the waves broke: a white, matt, patchy film over the water */
+            float fo = 0.0f;
+            if (w->foam && w->foam_live) {
+                const float f = w->foam[(size_t)j * nx + i];
+                if (f > 0.0f) {
+                    const unsigned hsh = ((unsigned)i * 73856093u) ^ ((unsigned)j * 19349663u);
+                    const float n = (float)((hsh >> 8) & 255u) / 255.0f;
+                    fo = clampf(1.4f * f - 0.5f * n, 0.0f, 0.85f);
+                }
+            }
+
             uint32_t p = 0xFF000000u;
             for (int k = 0; k < 3; k++) {
                 float v = (1.0f - R) * under[k] + R * 1.6f * sky[k] + glint * suncol[k];
+                v += (0.9f * exposure - v) * fo;
                 v = srgb[(int)(clampf(v, 0.0f, 1.0f) * 1024.0f)];
                 p |= (uint32_t)(v * 255.0f + 0.5f) << (16 - 8 * k);
             }

@@ -340,13 +340,17 @@ static const char *vs_surf = GLSL(
     uniform float u_gain;
     uniform int u_shape;
     uniform mat4 u_vp;
+    uniform sampler2D u_foam;  /* where waves broke: 0..1 on the height grid */
+    uniform int u_foam_on;
     out vec3 v_pos;
     out vec3 v_nrm;
+    out float v_foam;
     float H(int i, int j) {
         i = clamp(i, 0, u_n.x - 1); j = clamp(j, 0, u_n.y - 1);
         return texelFetch(u_height, ivec2(i, j), 0).r * u_gain;
     }
     void main() {
+        v_foam = u_foam_on == 1 ? texelFetch(u_foam, ivec2(int(a_uv.x), int(a_uv.y)), 0).r : 0.0;
         if (u_shape == 1) {
             /* polar grid: column j = angle, row i = ring; ring 0 is drawn at the centre,
              * ring nr-1 at the wall (half a cell of stretch), derivatives at the true radius */
@@ -398,6 +402,7 @@ static const char *vs_surf = GLSL(
 static const char *fs_surf_head = GLSL(
     in vec3 v_pos;
     in vec3 v_nrm;
+    in float v_foam;
     uniform vec3 u_cam;
     uniform vec2 u_L;
     uniform float u_depth;
@@ -562,6 +567,17 @@ static const char *glsl_hull = GLSL(
         return abs(x) < 0.5 && abs(z) < 0.93 * b;
     }
 );
+/* --- whitecaps: a matt white film where the waves broke (wave_break's foam) --- */
+static const char *glsl_foam = GLSL(
+    /* whitecaps: a matt white film where the waves broke, lit by the sun and the sky,
+     * broken into patches and streaks (two octaves of the common vnoise) that thin as it fades */
+    float foam_cover(float f, vec2 q) {
+        float L = max(u_L.x, u_L.y);
+        float n = 0.65 * vnoise(q * (45.0 / L)) + 0.35 * vnoise(q * (140.0 / L) + 17.0);
+        return clamp(1.5 * f - 0.8 * (1.0 - n), 0.0, 0.9);
+    }
+    vec3 foam_col() { return lit(vec3(0.82, 0.84, 0.86) * (0.30 + 0.70 * max(u_sun.y, 0.0))); }
+);
 static const char *fs_surf = GLSL(
     bool in_basin(vec2 q) {
         if (u_shape == 1) return length(q - 0.5 * u_L) <= 0.5 * u_L.x;
@@ -684,6 +700,7 @@ static const char *fs_surf = GLSL(
             } else rc = sky_s(R, glint ? 0.0 : 1.0);
             c = mix(inside(v_pos, T), rc, F);
             if (glint) c += glitter(N, V, v_pos);
+            if (v_foam > 0.004) c = mix(c, foam_col(), foam_cover(v_foam, v_pos.xz));
         } else {
             vec3 Nn = -N;
             float cv = max(dot(Nn, V), 0.0);
@@ -1706,6 +1723,8 @@ struct view3d {
     GLuint vao_solid, vbo_solid;                  /* slab 36 verts, then 4 walls x 36 */
     GLuint vao_sides, vbo_sides, ebo_sides; int n_sides_idx, n_bottom_idx;   /* bottom face follows the sides */
     GLuint tex_h, tex_lm, tex_ovl;
+    GLuint tex_foam;           /* unit 4: wave->foam, while there is any */
+    int    foam_on;
 
     float *lm_acc; float *lm_tmp; uint8_t *lm8;
     float *cs_tab;                 /* disk: cos, sin per angle */
@@ -1773,9 +1792,10 @@ static GLuint compile(GLenum type, const char *const *parts, int nparts)
 static GLuint program_parts(const char *vs, const char *const *fs, int nfs, int sides)
 {
     const char *vp[5] = { glsl_header, glsl_common, glsl_common2, glsl_common3, vs };
-    const char *fp[9] = { glsl_header, glsl_common, glsl_common2, glsl_common3 };
-    for (int i = 0; i < nfs && i < 5; i++) fp[4 + i] = fs[i];
-    GLuint v = compile(GL_VERTEX_SHADER, vp, 5), f = compile(GL_FRAGMENT_SHADER, fp, 4 + (nfs < 5 ? nfs : 5));
+    enum { MAXPARTS = 6 };
+    const char *fp[4 + MAXPARTS] = { glsl_header, glsl_common, glsl_common2, glsl_common3 };
+    for (int i = 0; i < nfs && i < MAXPARTS; i++) fp[4 + i] = fs[i];
+    GLuint v = compile(GL_VERTEX_SHADER, vp, 5), f = compile(GL_FRAGMENT_SHADER, fp, 4 + (nfs < MAXPARTS ? nfs : MAXPARTS));
     if (!v || !f) return 0;
     GLuint p = glCreateProgram();
     glAttachShader(p, v); glAttachShader(p, f);
@@ -2650,8 +2670,8 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
 
     v->p_bg    = program(vs_bg, fs_bg, 0);
     {
-        const char *parts[5] = { fs_surf_head, glsl_water, glsl_steps, glsl_hull, fs_surf };
-        v->p_surf = program_parts(vs_surf, parts, 5, 0);
+        const char *parts[6] = { fs_surf_head, glsl_water, glsl_steps, glsl_hull, glsl_foam, fs_surf };
+        v->p_surf = program_parts(vs_surf, parts, 6, 0);
     }
     v->p_solid = program(vs_solid, fs_solid, 0);
     v->p_sides = program(vs_sides, fs_sides, 1);
@@ -2738,6 +2758,14 @@ view3d *view3d_create(SDL_Window *win, const wave *w, int cpu_caustics)
 
     glGenTextures(1, &v->tex_h);
     glBindTexture(GL_TEXTURE_2D, v->tex_h);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, nx, ny, 0, GL_RED, GL_FLOAT, NULL);
+
+    glGenTextures(1, &v->tex_foam);
+    glBindTexture(GL_TEXTURE_2D, v->tex_foam);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -3832,6 +3860,8 @@ static void set_common(view3d *v, GLuint p, const view3d_params *prm, const floa
     if ((l = U(p, "u_sunny")) >= 0) glUniform1f(l, v->scene_on ? 1.0f : 0.0f);
     if ((l = U(p, "u_fog")) >= 0) glUniform1f(l, 260.0f);
     if ((l = U(p, "u_shadow")) >= 0) glUniform1i(l, 2);
+    if ((l = U(p, "u_foam")) >= 0) glUniform1i(l, 4);
+    if ((l = U(p, "u_foam_on")) >= 0) glUniform1i(l, v->foam_on);
     if ((l = U(p, "u_refl_tex")) >= 0) glUniform1i(l, 3);
     if ((l = U(p, "u_shadow_on")) >= 0) glUniform1f(l, (v->sh_on && v->sh_valid) ? 1.0f : 0.0f);
     if ((l = U(p, "u_lvp")) >= 0) glUniformMatrix4fv(l, 1, GL_FALSE, v->lvp);
@@ -4271,6 +4301,15 @@ void view3d_render(view3d *v, const wave *w, const view3d_params *p)
             glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F, want, wh, 0, GL_RED, GL_HALF_FLOAT, NULL);
             v->lm_w = want; v->lm_h = wh;
         }
+    }
+
+    /* the foam where waves broke: unit 4, only while there is some */
+    v->foam_on = w->foam && w->foam_live;
+    if (v->foam_on) {
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, v->tex_foam);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, v->nx, v->ny, GL_RED, GL_FLOAT, w->foam);
+        glActiveTexture(GL_TEXTURE0);
     }
 
     /* per-frame data */
