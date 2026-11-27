@@ -88,6 +88,7 @@ int app_arrivals(app *a, int stream, double *wait, double expected)
 void app_break_step(app *a, double dts, double dt_real)
 {
     wave_break(a->w, a->breaking ? a->break_slope : 0.0, dts);
+    wave_foam_drift(a->w, (double)a->p3.gain, dts);   /* the display gain, as the floats have it */
     if (a->au) {
         /* how loud: the square root of how much breaks, full from about 1 % of the
          * surface breaking (a mean breaking measure of 5e-4) -- a fleck under the breeze

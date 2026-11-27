@@ -220,7 +220,7 @@ void wave_destroy(wave *w)
     free(w->Rr); free(w->Ri); free(w->eta); free(w->src_d); free(w->src_v); free(w->src_p); free(w->fara); free(w->vtmp); free(w->tmp);
     for (int p = 2; p <= WAVE_MAXPOW; p++) { free(w->Rpr[p]); free(w->Rpi[p]); }
     free(w->bz_idx); free(w->bz_w);
-    free(w->foam); free(w->bk_a); free(w->bk_b); free(w->bk_c);
+    free(w->foam); free(w->bk_a); free(w->bk_b); free(w->bk_c); free(w->fu); free(w->fv);
     free(w->G); free(w->kappa); free(w->sq_rho); free(w->isq_rho);
     free(w->spec_re); free(w->spec_im); free(w->fre); free(w->fim); free(w->tmpm); free(w->ncut);
     if (w->px.n) dct_plan_free(&w->px);
@@ -261,7 +261,7 @@ void wave_clear(wave *w)
     memset(w->src_p, 0, N * sizeof(float));
     w->dirty_d = w->dirty_v = w->dirty_p = 0;
     if (w->foam) memset(w->foam, 0, N * sizeof(float));
-    w->foam_live = 0; w->brk_frac = 0; w->brk_acc = 0; w->brk_amt = 0;
+    w->foam_live = 0; w->brk_frac = 0; w->brk_acc = 0; w->brk_amt = 0; w->fd_acc = 0;
     w->t = 0;
 }
 
@@ -934,23 +934,116 @@ static void box3(const wave *w, const float *in, float *out)
     }
 }
 
+/* the foam's coarse texture, stamped in as it forms so it is carried with it: smooth
+ * value noise on a lattice six cells apart, 0.35 .. 1 */
+static float foam_patch(int i, int j)
+{
+    const int P = 6;
+    const int i0 = i / P, j0 = j / P;
+    float fx = (float)(i - i0 * P) / P, fy = (float)(j - j0 * P) / P;
+    fx = fx * fx * (3.0f - 2.0f * fx); fy = fy * fy * (3.0f - 2.0f * fy);
+    float c[4];
+    for (int k = 0; k < 4; k++) {
+        unsigned h = (unsigned)(i0 + (k & 1)) * 73856093u ^ (unsigned)(j0 + (k >> 1)) * 19349663u;
+        h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+        c[k] = (float)(h & 1023u) / 1023.0f;
+    }
+    const float n = (c[0] + (c[1] - c[0]) * fx) + ((c[2] + (c[3] - c[2]) * fx) - (c[0] + (c[1] - c[0]) * fx)) * fy;
+    return 0.35f + 0.65f * n;
+}
+
+/* the foam fades: thick foam over WAVE_FOAM_LIFE, its thin lace ever more slowly, out
+ * to WAVE_FOAM_RESIDUAL as it thins to nothing; where `dep` is given (the spread
+ * breaking measure), fresh foam is laid down first, patterned as it forms */
+static void foam_fade(wave *w, double dt, const float *dep)
+{
+    const size_t N = (size_t)w->nx * w->ny;
+    const float fresh = (float)exp(-dt / WAVE_FOAM_LIFE);
+    const float r_fresh = (float)(1.0 / WAVE_FOAM_LIFE), r_res = (float)(1.0 / WAVE_FOAM_RESIDUAL);
+    int live = 0;
+    for (size_t i = 0; i < N; i++) {
+        float f = w->foam[i];
+        if (f > 0.0f) {
+            if (f >= (float)WAVE_FOAM_THIN) f *= fresh;
+            else { const float t = f / (float)WAVE_FOAM_THIN; f *= expf(-(r_res + (r_fresh - r_res) * t) * (float)dt); }
+        }
+        if (dep && dep[i] > 0.0f) {
+            float a = 3.0f * dep[i] > 1.0f ? 1.0f : 3.0f * dep[i];
+            a *= foam_patch((int)(i % (size_t)w->nx), (int)(i / (size_t)w->nx));
+            if (a > f) f = a;
+        }
+        w->foam[i] = f < (float)WAVE_FOAM_MIN ? 0.0f : f;
+        live |= f >= (float)WAVE_FOAM_MIN;
+    }
+    w->foam_live = live;
+}
+
+void wave_foam_advect(wave *w, const float *u, const float *v, double scale, double dt)
+{
+    if (!w->foam || !w->foam_live || !w->bk_c) return;
+    const int nx = w->nx, ny = w->ny;
+    float *out = w->bk_c;
+    const float *f = w->foam;
+    for (int j = 0; j < ny; j++)
+        for (int i = 0; i < nx; i++) {
+            const size_t c = (size_t)i + (size_t)nx * j;
+            const double dx = scale * u[c] * dt, dy = scale * v[c] * dt;   /* where this cell's water was dt ago */
+            double fi, fj;
+            if (w->shape == WAVE_DISK) {
+                const double r = (j + 0.5) * w->dr, th = i * w->dth;
+                const double px = r * cos(th) - dx, py = r * sin(th) - dy;
+                double tq = atan2(py, px);
+                if (tq < 0) tq += 2.0 * M_PI;
+                fi = tq / w->dth;
+                fj = sqrt(px * px + py * py) / w->dr - 0.5;
+            } else {
+                fi = ((i + 0.5) * w->dx - dx) / w->dx - 0.5;
+                fj = ((j + 0.5) * w->dy - dy) / w->dy - 0.5;
+            }
+            if (fj < 0) fj = 0;
+            if (fj > ny - 1) fj = ny - 1;
+            int j0 = (int)fj; if (j0 > ny - 2) j0 = ny - 2;
+            const double ty = fj - j0;
+            int i0, i1;
+            double tx;
+            if (w->shape == WAVE_DISK) {
+                i0 = (int)floor(fi); tx = fi - i0;
+                i0 = ((i0 % nx) + nx) % nx; i1 = (i0 + 1) % nx;
+            } else {
+                if (fi < 0) fi = 0;
+                if (fi > nx - 1) fi = nx - 1;
+                i0 = (int)fi; if (i0 > nx - 2) i0 = nx - 2;
+                i1 = i0 + 1; tx = fi - i0;
+            }
+            const float *r0 = f + (size_t)nx * j0, *r1 = r0 + nx;
+            out[c] = (float)((1 - ty) * ((1 - tx) * r0[i0] + tx * r0[i1]) + ty * ((1 - tx) * r1[i0] + tx * r1[i1]));
+        }
+    memcpy(w->foam, out, (size_t)nx * ny * sizeof(float));
+}
+
+void wave_foam_drift(wave *w, double gain, double dt)
+{
+    if (!w->foam || !w->foam_live || !(gain > 0.0) || !(dt > 0.0)) { w->fd_acc = 0.0; return; }
+    w->fd_acc += dt;
+    if (w->fd_acc < WAVE_BREAK_DT) return;
+    const double span = w->fd_acc;
+    w->fd_acc = 0.0;
+    const size_t N = (size_t)w->nx * w->ny;
+    if (!w->fu) w->fu = malloc(N * sizeof(float));
+    if (!w->fv) w->fv = malloc(N * sizeof(float));
+    if (!w->fu || !w->fv) return;
+    wave_velocity(w, w->fu, w->fv);
+    wave_foam_advect(w, w->fu, w->fv, gain, span);
+}
+
 double wave_break(wave *w, double slope, double dt)
 {
     const size_t N = (size_t)w->nx * w->ny, NM = (size_t)w->nmodes;
     w->brk_frac = 0.0; w->brk_amt = 0.0;
     if (!(dt > 0.0)) return 0.0;
-    const float decay = (float)exp(-dt / WAVE_FOAM_LIFE);
     if (!(slope > 0.0)) {
         /* off: what foam there is fades */
-        if (w->foam && w->foam_live) {
-            int live = 0;
-            for (size_t i = 0; i < N; i++) {
-                const float f = w->foam[i] * decay;
-                w->foam[i] = f < 1e-3f ? 0.0f : f;
-                live |= f >= 1e-3f;
-            }
-            w->foam_live = live;
-        }
+        if (w->foam && w->foam_live) foam_fade(w, dt, NULL);
         return 0.0;
     }
     if (!w->foam) w->foam = calloc(N, sizeof(float));
@@ -996,14 +1089,7 @@ double wave_break(wave *w, double slope, double dt)
     if (nb) box3(w, m, d);
     /* the foam: a breaking crest whitens the water round it; elsewhere it fades */
     if (!nb && !w->foam_live) return 0.0;
-    int live = 0;
-    for (size_t i = 0; i < N; i++) {
-        float f = w->foam[i] * decay;
-        if (nb) { const float a = 3.0f * d[i] > 1.0f ? 1.0f : 3.0f * d[i]; if (a > f) f = a; }
-        w->foam[i] = f < 1e-3f ? 0.0f : f;
-        live |= f >= 1e-3f;
-    }
-    w->foam_live = live;
+    foam_fade(w, dt, nb ? d : NULL);
     if (nb == 0) { w->brk_acc = 0.0; return 0.0; }
     w->brk_frac = (double)nb / (double)N;
 

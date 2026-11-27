@@ -570,11 +570,14 @@ static const char *glsl_hull = GLSL(
 /* --- whitecaps: a matt white film where the waves broke (wave_break's foam) --- */
 static const char *glsl_foam = GLSL(
     /* whitecaps: a matt white film where the waves broke, lit by the sun and the sky,
-     * broken into patches and streaks (two octaves of the common vnoise) that thin as it fades */
+     * patchy as it was laid down (the pattern is in wave->foam, so it drifts with it),
+     * its lace thinning as it fades */
     float foam_cover(float f, vec2 q) {
+        /* the patches are in the foam itself (stamped as it forms, carried as it
+         * drifts); here only a fine grain, so thick foam is solid and thin foam a lace */
         float L = max(u_L.x, u_L.y);
-        float n = 0.65 * vnoise(q * (45.0 / L)) + 0.35 * vnoise(q * (140.0 / L) + 17.0);
-        return clamp(1.5 * f - 0.8 * (1.0 - n), 0.0, 0.9);
+        float n = vnoise(q * (140.0 / L) + 17.0);
+        return clamp(1.6 * f - 0.6 * (1.0 - n), 0.0, 0.9);
     }
     vec3 foam_col() { return lit(vec3(0.82, 0.84, 0.86) * (0.30 + 0.70 * max(u_sun.y, 0.0))); }
 );
